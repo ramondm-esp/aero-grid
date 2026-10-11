@@ -1,8 +1,7 @@
 # AeroGrid
 
-A configurable 4 x 4 glass-cockpit dashboard for EdgeTX color radios, with YAML layouts for telemetry, model timers, flight modes, trims, and model images.
-
-![Full AeroGrid dashboard in Modern Dark](docs/assets/dashboard/dashboard.png)
+AeroGrid is a customizable dashboard widget for EdgeTX color-screen radios, arranging flight, telemetry, battery, navigation, model, trim, and switch-state information into configurable panels. It supports multiple model-specific layouts and an on-radio editor, with a consistent visual language throughout so readings, alerts, and controls feel like part of one cohesive dashboard.
+## ![Full AeroGrid dashboard in Modern Dark](docs/assets/dashboard/dashboard.png)
 
 ## Why AeroGrid?
 
@@ -17,7 +16,7 @@ show the potential of focused dashboards, while similarly flexible, modern
 options for fixed-wing pilots remain limited.
 
 AeroGrid aims to fill that gap with **configurable, modern-looking dashboards
-and panels**: choose your information, arrange it in YAML, and get a consistent
+and panels**: choose your information, arrange it using the built-in editor, and get a consistent
 visual language across the whole dashboard.
 
 ## Download
