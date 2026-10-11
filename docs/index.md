@@ -4,6 +4,13 @@ AeroGrid is a configurable 4 x 4 glass-cockpit dashboard for EdgeTX color radios
 YAML layouts combine telemetry, model timers, flight tracking, switch states,
 trim positions, and model images in responsive panels.
 
+![Full AeroGrid Default dashboard in Modern Dark, showing telemetry, flight timer, flight count, switch state, and a model image](assets/dashboard/dashboard.png)
+
+The complete Default layout at native 480 x 272 resolution, captured in the
+EdgeTX TX16S simulator using the production Modern Dark theme. Telemetry,
+transmitter voltage, and switch positions are sample inputs; the timer and
+global variables use isolated firmware model settings.
+
 <div class="ag-photo-gallery">
   <figure>
     <a href="assets/photos/aero-grid.jpg"><img src="assets/photos/aero-grid.jpg" alt="AeroGrid running on a RadioMaster TX16S beside a fixed-wing model aircraft on grass"></a>

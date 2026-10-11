@@ -147,6 +147,28 @@ through a native long-press and automate production editor commands in the
 isolated copy. Check images manually: capture success is not a replacement
 for interactive editor/persistence tests.
 
+### Full dashboard screenshot
+
+```sh
+python3 tools/capture-editor.py --scene dashboard
+```
+
+This opt-in scene captures the entire 480 x 272 display, not a composition of
+panel crops. It uses the shipped **Default** layout and **Modern Dark** theme
+without color or presentation overrides, entering fullscreen through native
+touch input without opening the editor.
+
+The isolated model uses the permitted bundled Crack Yak image, a stopped timer
+at 5:47 of 10:00, GV9 flight count 42, and GV1 expo 30. Capture-only firmware API
+inputs supply telemetry, transmitter voltage, and a disarmed SF switch through
+the real services. Readiness checks verify all nine panels and their primary
+readings before the native runner waits for the full frame to stabilize.
+These are illustrative readings, not live receiver telemetry.
+
+The PNG and diagnostics are in `build/editor-capture/dashboard/`; the root
+`provenance.json` also records the sample inputs, bitmap digest, capture tool
+hashes, and unmodified production source hashes.
+
 ### Publish reviewed images
 
 Panel reference images live in `docs/assets/panels/<panel>/`.
@@ -157,6 +179,9 @@ synthetic inputs, or presentation overrides changed.
 Editor images live in `docs/assets/editor/`. Copy the selected PNGs and the
 corresponding provenance, taking care not to describe images from several
 runs with a provenance file for only one scene.
+
+The reviewed full-dashboard image and its corresponding provenance live in
+`docs/assets/dashboard/`. The README and website home page share this PNG.
 
 Keep SD images, raw framebuffers, logs, and incidental full frames in ignored
 output. Run `make docs` after publishing assets. Website builds use the

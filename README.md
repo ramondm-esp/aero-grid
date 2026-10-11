@@ -2,6 +2,8 @@
 
 A configurable 4 x 4 glass-cockpit dashboard for EdgeTX color radios, with YAML layouts for telemetry, model timers, flight modes, trims, and model images.
 
+![Full AeroGrid dashboard in Modern Dark](docs/assets/dashboard/dashboard.png)
+
 ## Why AeroGrid?
 
 EdgeTX is open source, exceptionally configurable, and a great foundation for
@@ -26,4 +28,3 @@ Download the latest installation ZIP from [GitHub Releases](https://github.com/t
 ## Documentation
 
 You can find the full [**documentation**](https://thomaskistler.github.io/aero-grid/) for the User Guide, panel Reference Guide, and Developer Guide [here](https://thomaskistler.github.io/aero-grid/).
-
