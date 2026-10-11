@@ -10,6 +10,37 @@ spec.loader.exec_module(capture)
 
 
 class ThemeCaptureTests(unittest.TestCase):
+    def test_dashboard_uses_production_layout_and_isolated_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sd = Path(directory) / "sdcard"
+            capture.prepare(sd, "dashboard")
+            widget = sd / "WIDGETS/AeroGrid"
+            self.assertEqual(
+                (widget / "layouts/Default.yaml").read_bytes(),
+                (capture.ROOT / "src/WIDGETS/AeroGrid/layouts/Default.yaml").read_bytes(),
+            )
+            self.assertEqual(
+                (widget / "capture-inputs.lua").read_text(), capture.DASHBOARD_INPUTS,
+            )
+            self.assertEqual(
+                (sd / "IMAGES/crackyak.png").read_bytes(),
+                (capture.ROOT / "tools/capture-assets/crackyak.png").read_bytes(),
+            )
+            source = (widget / "main.lua").read_text()
+            self.assertIn("production Default dashboard and sample readings verified", source)
+            self.assertIn('["flight-clock"] = "5:47"', source)
+            self.assertIn('["flight-count"] = "42"', source)
+            self.assertIn('["mode"] = "DISARMED"', source)
+            self.assertIn("if #context.panels ~= 9 then return end", source)
+            self.assertNotIn('local scene = "', source)
+            loader = (widget / "lib/dashboard_loader.lua").read_text()
+            self.assertIn('loadScript("/WIDGETS/AeroGrid/capture-inputs.lua")', loader)
+            self.assertNotIn("context.theme.rgb.textFaint =", loader)
+            model = (sd / "MODELS/model1.yml").read_text()
+            self.assertIn('name: "Crack Yak"', model)
+            self.assertIn("value: 347", model)
+            self.assertIn("start: 600", model)
+
     def test_theme_scenes_use_production_showcase(self):
         for scene in capture.THEME_SCENES:
             with self.subTest(scene=scene), tempfile.TemporaryDirectory() as directory:

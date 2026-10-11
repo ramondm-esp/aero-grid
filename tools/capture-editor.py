@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Capture the real editor UI in the native macOS EdgeTX TX16S simulator."""
+"""Capture dashboards and editor UI in the native macOS EdgeTX TX16S simulator."""
 import argparse
 import hashlib
 import json
@@ -13,6 +13,53 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/editor-capture"
 SCENES = ("overview", "settings", "state-settings", "metric-entry", "exit", "save-as")
 THEME_SCENES = ("theme-modern-dark", "theme-modern-light", "theme-custom")
+DASHBOARD_SCENES = ("dashboard",)
+DASHBOARD_INPUTS = """model.setGlobalVariable(8, 0, 42)
+model.setGlobalVariable(0, 0, 30)
+assert(model.getGlobalVariable(8, 0) == 42, "capture could not initialize GV9")
+assert(model.getGlobalVariable(0, 0) == 30, "capture could not initialize GV1")
+local sources = {
+    { name = "RxBt", id = 30000, unit = 1, prec = 2, value = 8.12 },
+    { name = "RQly", id = 30001, unit = 13, prec = 0, value = 98 },
+    { name = "1RSS", id = 30002, unit = 29, prec = 0, value = -87 },
+    { name = "RFMD", id = 30003, unit = 0, prec = 0, value = 6 },
+    { name = "Alt", id = 30004, unit = 9, prec = 1, value = 128.4 },
+    { name = "Alt+", id = 30005, unit = 9, prec = 1, value = 176.2 },
+    { name = "VSpd", id = 30006, unit = 5, prec = 1, value = 2.4 },
+    { name = "VSpd+", id = 30007, unit = 5, prec = 1, value = 3.6 },
+}
+local disarmed = assert(getSwitchIndex("SF" .. CHAR_UP))
+local armed = assert(getSwitchIndex("SF" .. CHAR_DOWN))
+return {
+    getFieldInfo = function(name)
+        for _, source in ipairs(sources) do
+            if source.name == name then return source end
+        end
+        return getFieldInfo(name)
+    end,
+    getValue = function(id)
+        if id == "tx-voltage" then return 8.1 end
+        for _, source in ipairs(sources) do
+            if source.id == id or source.name == id then return source.value end
+        end
+        return getValue(id)
+    end,
+    getSwitchValue = function(id)
+        if id == disarmed then return true end
+        if id == armed then return false end
+        return getSwitchValue(id)
+    end,
+    getRSSI = function() return 85 end,
+    model = {
+        getInfo = model.getInfo,
+        getTimer = model.getTimer,
+        getGlobalVariable = model.getGlobalVariable,
+        setGlobalVariable = model.setGlobalVariable,
+        getGlobalVariableDetails = model.getGlobalVariableDetails,
+        getSensor = function(index) return sources[index + 1] end,
+    },
+}
+"""
 SETUP_SCENES = {
     "screen-menu": [(500, 20, 20, 1), (520, 20, 20, 0)],
     "screens": [(500, 20, 20, 1), (520, 20, 20, 0),
@@ -127,6 +174,28 @@ screenData:
                         value:
                            unsignedValue: THEME
 """.replace("THEME", {"theme-modern-light": "2", "theme-custom": "3"}.get(scene, "1")))
+    if scene in DASHBOARD_SCENES:
+        model = sd / "MODELS/model1.yml"
+        model.write_text(model.read_text().replace('name: "AEROGRID SHOT"', 'name: "Crack Yak"')
+                         .replace('bitmap: ""', 'bitmap: "crackyak.png"') + """timers:
+   0:
+      start: 600
+      value: 347
+      mode: OFF
+      persistent: 1
+      name: "Flight"
+""")
+        shutil.copyfile(ROOT / "tools/capture-assets/crackyak.png", sd / "IMAGES/crackyak.png")
+        widget = sd / "WIDGETS/AeroGrid"
+        (widget / "capture-inputs.lua").write_text(DASHBOARD_INPUTS)
+        loader = widget / "lib/dashboard_loader.lua"
+        loader_source = loader.read_text()
+        if loader_source.count("support.environment()") != 1:
+            raise RuntimeError("Service environment setup changed; update capture instrumentation.")
+        loader.write_text(loader_source.replace(
+            "support.environment()",
+            'support.environment(assert(loadScript("/WIDGETS/AeroGrid/capture-inputs.lua"))())',
+        ))
     if scene in SETUP_SCENES:
         # Show only the layouts included in the installation ZIP, not the
         # development fixture's review and diagnostic screens.
@@ -153,6 +222,8 @@ screenData:
             user_themes.mkdir(parents=True, exist_ok=True)
             (user_themes / "custom.yml").write_text(custom)
             (sd / "AEROGRID/theme-registry.txt").write_text("modern-dark\nmodern-light\ncustom\n")
+    elif scene in DASHBOARD_SCENES:
+        layout = (ROOT / "src/WIDGETS/AeroGrid/layouts/Default.yaml").read_text()
     else:
         layout = STATE_LAYOUT if scene == "state-settings" else LAYOUT
     if scene == "settings":
@@ -168,6 +239,37 @@ screenData:
     needle = "    refresh = refresh,"
     if source.count(needle) != 1:
         raise RuntimeError("Widget refresh export changed; update capture instrumentation.")
+    if scene in DASHBOARD_SCENES:
+        source = source.replace(needle, """
+    refresh = function(context, widgetEvent, touchState)
+        refresh(context, widgetEvent, touchState)
+        if #context.errors > 0 then error(table.concat(context.errors, "\\n")) end
+        if not isFullScreen() or context.stage or context.reloadState or context.captureReady then return end
+        if #context.panels ~= 9 then return end
+        local expected = {
+            ["receiver-battery"] = "4.06", ["link"] = "98",
+            ["transmitter-battery"] = "8.1", ["altitude"] = "128.4",
+            ["flight-clock"] = "5:47", ["flight-count"] = "42",
+            ["expo"] = "30", ["mode"] = "DISARMED",
+        }
+        for _, entry in ipairs(context.panels) do
+            local instance = entry.instance
+            if not instance or instance.stateName == "unavailable" or instance.stateName == "stale" then return end
+            local text = expected[entry.placement.id]
+            assert(text or entry.placement.id == "identity", "Default layout changed; update capture checks")
+            if text and instance.text ~= text then return end
+            if entry.placement.id == "identity" then
+                if not instance.image or not instance.feed.available or instance.feed.name ~= "Crack Yak" then return end
+            end
+        end
+        local file = assert(io.open("/capture-ready.txt", "w"))
+        io.write(file, "production Default dashboard and sample readings verified")
+        io.close(file)
+        context.captureReady = true
+    end,
+""")
+        main.write_text(source)
+        return
     if scene in THEME_SCENES:
         source = source.replace(needle, """
     refresh = function(context, widgetEvent, touchState)
@@ -245,7 +347,7 @@ def write_png(path, frame):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--companion", type=Path, default=Path("/Applications/EdgeTX Companion 2.12.app"))
-    parser.add_argument("--scene", choices=SCENES + tuple(SETUP_SCENES) + THEME_SCENES)
+    parser.add_argument("--scene", choices=SCENES + tuple(SETUP_SCENES) + THEME_SCENES + DASHBOARD_SCENES)
     args = parser.parse_args()
     library = args.companion / "Contents/Resources/libedgetx-tx16s-simulator.dylib"
     if not library.is_file():
@@ -298,7 +400,25 @@ def main():
             for path in sorted((ROOT / "src/WIDGETS/AeroGrid").rglob("*"))
             if path.is_file()
         },
-        "method": "Native TX16S framebuffer; isolated sample layouts and editor command automation.",
+        "capture_sha256": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (Path(__file__), ROOT / "tools/capture-native.cpp")
+        },
+        "dashboard_sample": ({
+            "layout": "src/WIDGETS/AeroGrid/layouts/Default.yaml",
+            "inputs": DASHBOARD_INPUTS,
+            "timer_remaining_seconds": 347,
+            "timer_start_seconds": 600,
+            "model": "Crack Yak",
+            "bitmap": "tools/capture-assets/crackyak.png",
+            "bitmap_sha256": hashlib.sha256(
+                (ROOT / "tools/capture-assets/crackyak.png").read_bytes()).hexdigest(),
+            "disclosure": "Synthetic telemetry, TX voltage, and switch inputs through real services; "
+                          "isolated firmware timer and global variables; unmodified production layout and theme.",
+        } if args.scene in DASHBOARD_SCENES else None),
+        "method": ("Native TX16S framebuffer; fullscreen production Default dashboard with isolated sample inputs."
+                   if args.scene in DASHBOARD_SCENES else
+                   "Native TX16S framebuffer; isolated sample layouts and editor command automation."),
         "scenes": (args.scene,) if args.scene else SCENES + tuple(SETUP_SCENES),
     }, indent=2) + "\n")
 
