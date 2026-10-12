@@ -1505,6 +1505,155 @@ equal(context.editorUi, nil, "aircraft layout and service configuration save")
 lvgl.UI_ELEMENT_HEIGHT = nil
 widget.lvglMock.setFullScreen(false)
 
+write(
+    "edit-rx-battery",
+    [[
+version: 2
+grid:
+  columns: 4
+  rows: 4
+panels:
+  - id: rx
+    type: rx-battery
+    col: 0
+    row: 0
+    colSpan: 2
+    rowSpan: 2
+    config:
+      sourceType: cells
+      source: Cels
+      reading: cell
+      visual: bar
+]]
+)
+widget.lvglMock.setFullScreen(true)
+load("edit-rx-battery")
+open()
+rect = context.editorUi.controls[1].rect
+tap(rect.x + rect.w - 12, rect.y + 12)
+settleDrawer()
+state = context.editorUi
+local function drawerRow(key)
+    for _, row in ipairs(state.drawerControls) do
+        if row.field.key == key then
+            return row
+        end
+    end
+    error("RX battery drawer row not found: " .. key)
+end
+for _, key in ipairs({ "showPack", "showCount", "showDelta" }) do
+    for _, value in ipairs({ 0, 1 }) do
+        control(key).properties.set(value)
+        lvgl.close(state.nativeDrawer)
+        widget.lvglMock.settle()
+        settleDrawer()
+        equal(
+            context.editorSession.draft.panels[1].config[key],
+            value == 1,
+            "pending boolean edit survives immediate Return"
+        )
+        equal(state.mode, "menu", "Return completes after accepting pending boolean edit")
+        rect = state.controls[1].rect
+        tap(rect.x + rect.w - 12, rect.y + 12)
+        settleDrawer()
+    end
+end
+equal(drawerRow("showPack").row.hidden, false, "bar visualization offers the alternate reading")
+equal(drawerRow("showCount").row.hidden, false, "bar visualization offers the cell count")
+equal(drawerRow("showDelta").row.hidden, false, "bar visualization offers the cell delta")
+equal(drawerRow("showPack").field.label, "Show alt reading", "secondary toggle renamed without changing visualization")
+local visualValues = control("visual").properties.values
+equal(visualValues[3], "details", "visualization none is presented as details")
+control("visual").properties.set(3)
+settleDrawer()
+equal(context.editorSession.draft.panels[1].config.visual, "none", "alternate reading is stored as none")
+equal(drawerRow("showPack").row.hidden, false, "alternate reading offers the alternate reading")
+equal(drawerRow("showCount").row.hidden, false, "alternate reading offers the cell count")
+equal(drawerRow("cellFull").row.hidden, true, "Full threshold hides when visualization is none")
+equal(drawerRow("cellEmpty").row.hidden, true, "Empty threshold hides when visualization is none")
+equal(
+    drawerRow("cellCritical").row.properties.y - drawerRow("cellWarning").row.properties.y,
+    36,
+    "hidden voltage thresholds reclaim their drawer rows"
+)
+control("visual").properties.set(1)
+settleDrawer()
+equal(drawerRow("cellFull").row.hidden, false, "Full threshold returns with a visualization")
+equal(drawerRow("showPack").row.hidden, true, "the battery glyph never shows the alternate reading")
+equal(drawerRow("showCount").row.hidden, true, "the battery glyph never shows the cell count")
+equal(drawerRow("showDelta").row.hidden, true, "the battery glyph never shows the cell delta")
+equal(context.editorSession.draft.panels[1].config.showCount, true, "hidden preferences keep their values")
+equal(
+    drawerRow("cellCritical").row.properties.y - drawerRow("cellWarning").row.properties.y,
+    36,
+    "visible voltage thresholds keep normal row spacing"
+)
+equal(state.drawerFields[1].key, "label", "Label leads the flat RX drawer")
+equal(state.drawerFields[2].key, "source", "Voltage source follows Label")
+equal(drawerRow("cells").row.hidden, false, "series count is always available, even without telemetry")
+local packSource = control("source")
+local savedSource = packSource.properties.get()
+packSource.properties.set(999)
+settleDrawer()
+local sourceRow, countRow = drawerRow("source"), drawerRow("cells")
+equal(sourceRow.errorShown, true, "invalid pack source shows field feedback")
+equal(countRow.row.properties.y, sourceRow.errorLabel.properties.y + 18, "field feedback shifts the next pack setting")
+packSource.properties.set(savedSource)
+settleDrawer()
+equal(countRow.row.properties.y - sourceRow.row.properties.y, 36, "corrected field feedback restores compact spacing")
+control("cells").properties.set(6)
+settleDrawer()
+equal(context.editorSession.draft.panels[1].config.cells, 6, "series count remains stored for numeric readings")
+equal(context.editorSession.draft.panels[1].config.sourceType, nil, "old schema-2 selector is centrally removed")
+local validRx, rxErrors = context.editorUi.handlers.editor.validate(context.editorSession)
+assert(validRx, table.concat(rxErrors or {}, "; "))
+back()
+exitWith("Save")
+settleSave()
+for _ = 1, 70 do
+    refresh()
+end
+context = widget.createLoaded(nil, { Layout = "edit-rx-battery", Theme = "modern-dark" }, path)
+equal(context.document.panels[1].config.showDelta, true, "cell delta survives save/load")
+equal(context.document.panels[1].config.showPack, true, "secondary preference survives save/load")
+equal(context.document.panels[1].config.cells, 6, "numeric count survives save/load")
+equal(context.document.panels[1].config.sourceType, nil, "save/load omits the retired selector")
+widget.lvglMock.setFullScreen(false)
+
+-- A panel created small must gain its visualization during editor resize,
+-- without leaving fullscreen and rebuilding it from the saved layout.
+for _, mode in ipairs({ "battery", "bar", "none" }) do
+    widget.lvglMock.setFullScreen(true)
+    load("Empty")
+    open()
+    local editor = context.editorUi.handlers.editor
+    assert(editor.add(context.editorSession, "rx-battery"))
+    assert(editor.setValue(context.editorSession, "source", "RxBt"))
+    assert(editor.setValue(context.editorSession, "cells", 2))
+    assert(editor.setValue(context.editorSession, "visual", mode))
+    context.editorDrawerModule.open(context, context.editorUi, "configure")
+    settleDrawer()
+    back()
+    local entry = context.panels[1]
+    assert(entry and entry.instance, "new RX battery preview was not built")
+    assert(editor.resize(context.editorSession, 1, 1))
+    assert(context.editorUi.handlers.preview(context.editorSession.draft))
+    for _ = 1, 40 do
+        refresh()
+    end
+    equal(context.panels[1], entry, "resizing must update the existing preview")
+    local instance = entry.instance
+    if mode == "battery" then
+        assert(instance.glyph and instance.glyphShown, "resized preview must show its battery immediately")
+    elseif mode == "bar" then
+        assert(instance.bar and instance.showVisual, "resized preview must show its bar immediately")
+    else
+        assert(instance.showDetail, "resized preview must show its details immediately")
+    end
+    exitWith("Discard changes")
+    widget.lvglMock.setFullScreen(false)
+end
+
 widget.lvglMock.setAppMode(false)
 for name in pairs(events) do
     rawset(_G, name, previous[name])

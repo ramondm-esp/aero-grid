@@ -350,7 +350,7 @@ local SHIPPED_TYPES = {
     "tx-battery",
     "trim-panel",
     "model-identity",
-    "cell-battery",
+    "rx-battery",
     "link-status",
     "navigation",
 }
@@ -652,7 +652,7 @@ local function testScreensReachEveryShippedLayout()
             filename = "model2.yml",
             name = "AEROGRID PANEL1",
             layouts = {
-                "review-cell-battery",
+                "review-rx-battery",
                 "review-flight-counter",
                 "review-flight-mode",
                 "review-flight-timer",
@@ -1541,17 +1541,17 @@ panels:
       qualitySource: RQly
       reading: auto
   - id: pack
-    type: cell-battery
+    type: rx-battery
     col: 2
     row: 0
     colSpan: 2
     rowSpan: 2
     config:
       source: Cels
-      lowestSource: Cels-
       label: Pack
+      visual: bar
   - id: notcells
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 2
     colSpan: 2
@@ -1559,6 +1559,7 @@ panels:
     config:
       source: Cels-
       label: Wrong
+      visual: bar
 ]]
     )
 
@@ -1605,33 +1606,23 @@ panels:
     assertRow(pack, pack.countText, pack.detailWidth, "4S", "the cell count")
     assertRow(pack, pack.packText, pack.detailWidth, "16.4V", "the pack sum")
 
-    -- **A cells source answering with a plain number and one answering with
-    -- nonsense print the same row, deliberately.** Both mean something is
-    -- arriving and is wrong, and both are fixed on the ground -- so the row
-    -- says `CELLS ERR` for each, and spends no word on a difference the pilot
-    -- cannot act on. The shapes are still separated inside the panel for
-    -- the diagnostics view, which is asserted below.
-    --
-    -- The number case is configured rather than mutated into: the telemetry
-    -- service keeps the last good reading, so a source that has already produced
-    -- a cells table and then produces a number reads as stale data, which is a
-    -- third situation again and not the one being tested here.
+    -- Numeric telemetry is automatically a pack source, even if an old
+    -- configuration called it a cells monitor.
     local wrong = entryById(context, "notcells").instance
-    assertEqual(wrong.summary.shape, "number")
-    assertEqual(wrong.badge.properties.text, "N/A")
-    assertRow(wrong, wrong.countText, wrong.detailWidth, "CELLS ERR", "a plain number from a cells source")
+    assertEqual(wrong.summary.shape, "pack")
+    assertEqual(wrong.summary.estimated, true)
+    assertEqual(wrong.badge.properties.text, "")
+    assertRow(wrong, wrong.countText, wrong.detailWidth, "1S EST", "a numeric source's estimated pack count")
 
     radio.values[130] = { 0, -1, 99 }
     pump(context, 40)
     assertEqual(pack.summary.shape, "invalid")
-    -- The explicit lowest-cell source keeps a reading alive, so the panel is not
-    -- unavailable; the row is what reports that the table itself is gone.
-    assertEqual(pack.text, "4.09")
+    -- The cells table is the sole source for both the displayed lowest cell
+    -- and the alarm judgement, so an unusable table has no headline.
+    assertEqual(pack.text, "--")
+    assertEqual(pack.badge.properties.text, "N/A")
     assertRow(pack, pack.countText, pack.detailWidth, "CELLS ERR", "nonsense from a cells source")
-    -- **The two shapes stay separated where they can be acted on.** The row is
-    -- the same because the action is the same; `summary.shape` is not, because
-    -- someone at a desk reading the diagnostics view can use the difference.
-    assertEqual(pack.countText, wrong.countText, "two failures with one fix print different rows")
+    assert(pack.countText ~= wrong.countText, "invalid cells must remain distinct from usable numeric voltage")
     assert(
         pack.summary.shape ~= wrong.summary.shape,
         "the panel stopped telling a wrong sensor from a nonsense table, so"
@@ -1722,7 +1713,7 @@ local function testReadingsAgreeAcrossPanels()
                 "    precision: 0",
             },
         },
-        { "cell-battery", { "source: Cels", "label: Pack" } },
+        { "rx-battery", { "source: Cels", "label: Pack" } },
         { "link-status", { "rssiSource: RSSI", "qualitySource: RQly", "label: Link" } },
         { "tx-battery", { "label: TX", "packEmpty: 6.6", "packFull: 8.4" } },
     }
@@ -2747,7 +2738,7 @@ local function testSupportingWordingsStayDistinct()
             type = "navigation",
             -- How to ask this panel for one state's wordings. Declared,
             -- because a panel's own signature is its own business: this one
-            -- takes a view table and `cell-battery` takes a summary and settings.
+            -- takes a view table and `rx-battery` takes a summary and settings.
             variantsFor = function(module, state)
                 return module.originVariants(state)
             end,
@@ -2762,26 +2753,13 @@ local function testSupportingWordingsStayDistinct()
             },
         },
         {
-            -- **Two displayed states, where there are five shapes.** `number` and
-            -- `invalid` both print `CELLS ERR`, deliberately: something is
-            -- arriving and it is wrong, and the pilot does the same thing about
-            -- either. They are one state *here* because this check is about what
-            -- the panel says, and two states that print the same thing and imply
-            -- the same action are one state.
-            --
-            -- **This check fired when they were collapsed, and that was it
-            -- working.** It is declared down to two rather than taught to tolerate
-            -- a duplicate, because a check relaxed to fit the code stops being a
-            -- check. `summarize` still separates the five shapes and the
-            -- diagnostics view still reports which arrived; what is asserted here
-            -- is only that the *row* can still say whether to wait or to go and
-            -- fix something.
-            type = "cell-battery",
+            -- Invalid cells and no detected cells imply different actions.
+            type = "rx-battery",
             variantsFor = function(module, state)
                 return module.countVariants({ shape = state }, { showCount = true })
             end,
             states = {
-                { "a source answering with something wrong", "number" },
+                { "a source answering with something wrong", "invalid" },
                 { "a source answering with no cells at all", "empty" },
             },
         },
@@ -3368,12 +3346,12 @@ local function testTertiaryQuarterHoldsItsFurniture()
             bar = true,
         },
         {
-            name = "cell-battery bar and row",
-            type = "cell-battery",
+            name = "rx-battery bar and row",
+            type = "rx-battery",
             config = {
                 "source: Cels",
                 "label: PACK",
-                "reading: lowest",
+                "reading: cell",
                 "visual: bar",
                 "showPack: true",
                 "showCount: true",
@@ -3640,13 +3618,13 @@ local function testSupportingRowsFitTheirBox()
         },
         { name = "flight-mode, mode number", type = "flight-mode", config = { "label: MODE", "showIndex: true" } },
         {
-            name = "cell-battery, pack and count",
-            type = "cell-battery",
+            name = "rx-battery, pack and count",
+            type = "rx-battery",
             config = { "source: Cels", "label: PACK", "showPack: true", "showCount: true" },
         },
         {
-            name = "cell-battery, nonsense cells",
-            type = "cell-battery",
+            name = "rx-battery, nonsense cells",
+            type = "rx-battery",
             config = { "source: Cels", "label: PACK", "showPack: true", "showCount: true" },
             drive = function()
                 radio.values[130] = { 0, -1, 99 }
@@ -4349,7 +4327,7 @@ local function testReadingsAreCentredOnTheirPanel()
         ["tx-battery"] = { "      label: TX" },
         ["trim-panel"] = { "      label: TRIM", "      trim1: trim-ail" },
         ["model-identity"] = { "      label: MODEL" },
-        ["cell-battery"] = { "      label: PACK", "      source: Cels" },
+        ["rx-battery"] = { "      label: PACK", "      source: Cels" },
         ["link-status"] = { "      label: LINK", "      rssiSource: RSSI", "      qualitySource: RQly" },
         ["navigation"] = { "      label: HOME", "      source: GPS" },
         ["host-diagnostics"] = { "      label: HOST" },
@@ -4826,7 +4804,7 @@ panels:
         ["tx-battery"] = { "      label: Probe" },
         ["trim-panel"] = { "      label: Probe", "      trim1: trim-ail" },
         ["model-identity"] = { "      label: Probe" },
-        ["cell-battery"] = { "      label: Probe", "      source: Cels" },
+        ["rx-battery"] = { "      label: Probe", "      source: Cels" },
         ["link-status"] = { "      label: Probe", "      rssiSource: RSSI", "      qualitySource: RQly" },
         ["navigation"] = { "      label: Probe", "      source: GPS" },
         ["heartbeat"] = { "      label: Probe" },
@@ -5409,7 +5387,7 @@ local function testPackageCompatibility()
         {
             name = "future-layout-contract",
             file = "lib/package.lua",
-            text = 'return {version="next",runtimeApi=1,panelApi=1,layoutVersion=2}',
+            text = 'return {version="next",runtimeApi=1,panelApi=1,layoutVersion=3}',
             error = "incompatible package contract",
         },
         { name = "missing-core", file = "lib/yaml.lua", error = "lib/yaml.lua:" },
@@ -5446,6 +5424,63 @@ local function testPackageCompatibility()
         string.find(diagnostics.identity(context)[1], "v" .. context.packageInfo.version, 1, true),
         "diagnostics did not report the loaded package version"
     )
+end
+
+local function testVersionOneBatteryLoadsWithoutWriting()
+    local source = [[
+version: 1
+grid:
+  columns: 4
+  rows: 4
+panels:
+  - id: legacy-pack
+    type: cell-battery
+    col: 0
+    row: 0
+    colSpan: 2
+    rowSpan: 2
+    config:
+      sourceType: cells
+      source: Cels
+      lowestSource: Cels-
+      cells: 4
+      reading: lowest
+      cellFull: 4.15
+]]
+    local widgetPath = makeWidget("legacy-battery-migration", source)
+    local context = definition.create(
+        { x = 0, y = 0, w = 480, h = 272 },
+        { Layout = "Default", Theme = "modern-dark" },
+        widgetPath
+    )
+    local stageCounts, steps = {}, 0
+    while context.stage do
+        stageCounts[context.stage] = (stageCounts[context.stage] or 0) + 1
+        definition.refresh(context)
+        steps = steps + 1
+        assert(steps < 200, "legacy migration load did not finish")
+    end
+    assertEqual(#context.errors, 0, table.concat(context.errors, "\n"))
+    assertEqual(stageCounts["header-migrate"], 1, "one adjacent header step runs in its own loader callback")
+    assertEqual(stageCounts["panel-migrate"], 1, "one adjacent panel step runs in its own loader callback")
+    assertEqual(context.document.version, 2)
+    local placement = context.document.panels[1]
+    assertEqual(placement.type, "rx-battery")
+    assertEqual(placement.config.reading, "cell")
+    assertEqual(placement.config.lowestSource, nil)
+    assertEqual(placement.config.cells, nil)
+    assertEqual(placement.config.cellFull, 4.15)
+    assertEqual(placement.config.warning, nil)
+    local noticed = false
+    for _, notice in ipairs(context.notices) do
+        noticed = noticed or string.find(notice.text, "migrated in memory", 1, true) ~= nil
+    end
+    assert(noticed, "the version-1 upgrade notice was not surfaced")
+
+    local handle = assert(hostIo.open(widgetPath .. "layouts/Default.yaml", "r"))
+    local unchanged = handle:read("*a")
+    handle:close()
+    assertEqual(unchanged, source, "loading a migrated layout rewrote its source file")
 end
 
 local function testRejectedLayouts()
@@ -5714,13 +5749,11 @@ local function testInstructionBudget()
         {
             -- Every panel walks a cells table on every refresh, so sixteen of them
             -- is the worst case for the one panel that does per-entry work.
-            type = "cell-battery",
+            type = "rx-battery",
             services = { "telemetry" },
             config = function(index)
                 return {
                     "source: Cels",
-                    "lowestSource: Cels-",
-                    "cells: 4",
                     "warning: 3.5",
                     "critical: " .. (index % 2 == 0 and "3.3" or "3.4"),
                 }
@@ -6879,7 +6912,7 @@ local function testReadingsSitInTheirSlots()
             end,
         },
         {
-            type = "cell-battery",
+            type = "rx-battery",
             config = { "label: PACK", "source: Cels" },
             variants = { { "visual: bar" }, { "visual: none" } },
             visual = function()
@@ -8358,7 +8391,7 @@ local function testUnitsRideBesideEveryReading()
                 type = "metric",
                 config = "      metrics:\n        - source: Alt\n          unit: m\n          precision: 0\n",
             },
-            { id = "cells", type = "cell-battery", config = "      source: Cels\n      reading: lowest\n" },
+            { id = "cells", type = "rx-battery", config = "      source: Cels\n      reading: cell\n" },
             {
                 id = "link",
                 type = "link-status",
@@ -9304,13 +9337,14 @@ grid:
   rows: 4
 panels:
   - id: cells
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 0
     colSpan: 2
     rowSpan: 2
     config:
       source: Cels
+      visual: bar
       showCount: true
       showPack: true
   - id: link
@@ -10017,7 +10051,7 @@ local function testUnitsAreNotDrawnBesideAnAbsentReading()
     -- a sentinel before the fix; naming them is what stops the test passing
     -- because a panel stopped learning its unit rather than because it stopped
     -- drawing it.
-    for _, stem in ipairs({ "tx-battery", "cell-battery", "link-status", "metric" }) do
+    for _, stem in ipairs({ "tx-battery", "rx-battery", "link-status", "metric" }) do
         assert(
             constructed[stem],
             stem
@@ -10041,7 +10075,7 @@ end
 local function testAReflowDoesNotRestoreAnOrphanedUnit()
     resetRadio()
     -- A cells sensor the radio knows and has never delivered, which is the
-    -- state that pairs a unit with no value: `cell-battery`'s unit is a
+    -- state that pairs a unit with no value: `rx-battery`'s unit is a
     -- constant -- a cell is measured in volts whatever the sensor says -- so
     -- the panel knows it is drawing volts before it has any.
     radio.values[130] = nil
@@ -10054,7 +10088,7 @@ grid:
   rows: 4
 panels:
   - id: pack
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 0
     colSpan: 2
@@ -10083,7 +10117,7 @@ panels:
     assertEqual(instance.text, "--", "this test needs a panel with no reading")
     assertEqual(instance.unit.hidden, true, "a unit was drawn beside `--`")
 
-    -- Keep unit permission through a resize, including the cell-battery's
+    -- Keep unit permission through a resize, including the rx-battery's
     -- 30% whitespace requirement, to exercise the reflow short-circuit.
     zone.w = 400
     zone.h = 200
@@ -10328,16 +10362,15 @@ grid:
   rows: 4
 panels:
   - id: pack
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 0
     colSpan: 2
     rowSpan: 2
     config:
       source: Cels
-      lowestSource: Cels-
       label: Pack
-      cells: 4
+      visual: bar
       warning: 3.5
       critical: 3.3
   - id: link
@@ -10422,11 +10455,10 @@ local function testTelemetryPanels()
     assertEqual(pack.stateName, "critical")
     assertEqual(pack.badge.properties.text, "CRIT")
 
-    -- A cell that stops reporting is called out against the configured count.
+    -- The cells-monitor row always reports its measured count.
     radio.values[130] = { 4.11, 4.13, 4.09 }
-    radio.values[131] = 4.09
     settle(context, 12)
-    assertEqual(pack.countText, "3S OF 4", "a lost cell was not reported")
+    assertEqual(pack.countText, "3S", "the panel did not use the measured cell count")
     assertEqual(pack.stateName, "normal")
 
     -- Link quality leads under `auto`, because a percentage means the same
@@ -10727,16 +10759,17 @@ local function testTelemetryDegrades()
     -- screen shows.
     assertEqual(nav.showCoordinates, true)
 
-    -- A table whose entries cannot be cell voltages. The explicit lowest-cell
-    -- source keeps the reading alive, and the count row says the table is
-    -- gone. **A pack not yet detected and a source answering wrongly still
+    -- A table whose entries cannot be cell voltages. The count row says the
+    -- table is gone, and the cells table remains the sole headline source.
+    -- **A pack not yet detected and a source answering wrongly still
     -- read differently**, because one means wait and the other means go and
     -- fix something; which *kind* of wrong is not a difference the row spends
     -- a word on.
     radio.values[130] = { 0, -1, 99 }
     pump(context, 40)
     assertEqual(pack.summary.shape, "invalid")
-    assertEqual(pack.text, "4.09")
+    assertEqual(pack.text, "--")
+    assertEqual(pack.badge.properties.text, "N/A")
     assertEqual(pack.countText, "CELLS ERR")
     assert(
         themeModule.measureText(pack.fonts.label, pack.countText) <= pack.detailWidth,
@@ -10756,6 +10789,7 @@ end
 --- link, and it reads differently: the detail row says which fix is needed.
 local function testCellSourceShapes()
     resetRadio()
+    radio.values[100] = 16.4
     local widgetPath = makeWidget(
         "cell-shapes",
         [[
@@ -10765,7 +10799,7 @@ grid:
   rows: 4
 panels:
   - id: extreme
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 0
     colSpan: 2
@@ -10773,8 +10807,9 @@ panels:
     config:
       source: Cels-
       label: Wrong
+      visual: bar
   - id: voltage
-    type: cell-battery
+    type: rx-battery
     col: 2
     row: 0
     colSpan: 2
@@ -10782,8 +10817,9 @@ panels:
     config:
       source: RxBt
       label: Pack voltage
+      visual: bar
   - id: absent
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 2
     colSpan: 2
@@ -10791,6 +10827,7 @@ panels:
     config:
       source: NoSuchSensor
       label: Missing
+      visual: bar
 ]]
     )
 
@@ -10799,14 +10836,15 @@ panels:
 
     for _, id in ipairs({ "extreme", "voltage" }) do
         local instance = entryById(context, id).instance
-        assertEqual(instance.summary.shape, "number", id .. " read a plain number as a cells table")
-        assertEqual(instance.stateName, "unavailable")
-        -- One wording, which fits every row this panel draws, so it is
-        -- pinned rather than matched on a prefix. `CELLS ERR` says something is
-        -- arriving and is wrong; a source the radio has never heard of says
-        -- nothing at all, and that difference is asserted below.
-        assertEqual(instance.countText, "CELLS ERR", id .. " reported a shape problem as a missing source")
-        assertEqual(instance.text, "--", "a number was shown as a cell voltage")
+        assertEqual(instance.summary.shape, "pack", id .. " must interpret numeric telemetry as pack voltage")
+        assertEqual(instance.stateName, "normal")
+        assertEqual(instance.countText, id == "extreme" and "1S EST" or "4S EST")
+        assertEqual(
+            instance.text,
+            id == "extreme" and "4.09" or "4.10",
+            "numeric pack voltage uses average cell voltage"
+        )
+        assertEqual(instance.summary.lowest, nil, "numeric sources must not imply measured individual cells")
     end
 
     -- A sensor the radio has never heard of is a different problem again, and
@@ -11166,6 +11204,7 @@ testMultipleScreens()
 testEventConsumption()
 testContractRejections()
 testPackageCompatibility()
+testVersionOneBatteryLoadsWithoutWriting()
 testRejectedLayouts()
 testModelFilenames()
 testMetricReconcilesOnResize()

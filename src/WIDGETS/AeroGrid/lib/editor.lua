@@ -5,19 +5,19 @@
 local editor = { RUNTIME_API = 1 }
 
 editor.CATALOG = {
-    { type = "cell-battery", label = "Cell battery" },
     { type = "flight-counter", label = "Flight counter" },
     { type = "flight-mode", label = "Flight mode" },
     { type = "flight-timer", label = "Flight timer" },
+    { type = "host-diagnostics", label = "Host diagnostics" },
     { type = "link-status", label = "Link status" },
     { type = "metric", label = "Metric" },
     { type = "model-identity", label = "Model identity" },
     { type = "navigation", label = "Navigation" },
-    { type = "state", label = "State" },
-    { type = "trim-panel", label = "Trim panel" },
-    { type = "tx-battery", label = "Transmitter battery" },
-    { type = "host-diagnostics", label = "Host diagnostics" },
+    { type = "rx-battery", label = "RX battery" },
     { type = "service-probe", label = "Service probe" },
+    { type = "state", label = "State" },
+    { type = "tx-battery", label = "Transmitter battery" },
+    { type = "trim-panel", label = "Trim panel" },
 }
 
 local function copy(value, seen)
@@ -82,7 +82,10 @@ local function validateSetting(setting, value)
         end
         if type(setting.step) == "number" and setting.step > 0 and type(setting.min) == "number" then
             local steps = (value - setting.min) / setting.step
-            if math.abs(steps - math.floor(steps + 0.5)) > 0.000001 then
+            -- Radio Lua uses single-precision numbers; decimal steps accumulate
+            -- rounding error proportional to the number of steps.
+            local tolerance = 0.000001 * math.max(1, math.abs(steps))
+            if math.abs(steps - math.floor(steps + 0.5)) > tolerance then
                 return false, setting.key .. " must use steps of " .. tostring(setting.step)
             end
         end
@@ -316,7 +319,12 @@ function editor.add(session, typeName)
 
     local config = {}
     for _, setting in ipairs(module.settings or {}) do
-        if type(setting) == "table" and type(setting.key) == "string" and setting.default ~= nil then
+        if
+            type(setting) == "table"
+            and type(setting.key) == "string"
+            and setting.default ~= nil
+            and not setting.drawerField
+        then
             config[setting.key] = copy(setting.default)
         end
     end
@@ -814,14 +822,20 @@ end
 
 function editor.formFields(session)
     local settings, config, module = editor.settings(session)
-    if not settings or type(config) ~= "table" then
+    if not settings or type(config) ~= "table" or not module then
         return nil, config
     end
     local fields = {}
     for _, setting in ipairs(settings) do
         if type(setting) == "table" and type(setting.key) == "string" then
             local value = config[setting.key]
-            if setting.type == "table" and type(value) == "table" then
+            if setting.section then
+                fields[#fields + 1] = { label = setting.section, type = "section" }
+            end
+            if setting.drawerField then
+                -- These values remain flat in YAML, but are edited in the
+                -- source-specific subdrawer declared by the panel.
+            elseif setting.type == "table" and type(value) == "table" then
                 fields[#fields + 1] = {
                     key = setting.key,
                     label = (setting.label or setting.key) .. " entries",
@@ -829,6 +843,7 @@ function editor.formFields(session)
                     type = "table-list",
                     minItems = setting.minItems,
                     maxItems = setting.maxItems,
+                    visibleWhen = setting.visibleWhen,
                 }
                 if type(setting.fields) == "table" then
                     entryFields(setting, value, fields)
@@ -842,17 +857,92 @@ function editor.formFields(session)
                     value = value,
                     type = setting.type or type(value),
                     choices = setting.choices,
+                    choiceLabels = setting.choiceLabels,
                     step = setting.step,
                     min = setting.min,
                     max = setting.max,
                     tableSetting = setting.type == "table",
                     minItems = setting.minItems,
                     maxItems = setting.maxItems,
+                    visibleWhen = setting.visibleWhen,
                 }
+            end
+            if setting.key == "sourceType" then
+                for _, group in ipairs(module.drawerGroups or {}) do
+                    fields[#fields + 1] = {
+                        key = group.key,
+                        label = group.label,
+                        type = "drawer",
+                        action = "group",
+                        drawerGroup = group.key,
+                        text = editor.drawerSummary(session, group.key),
+                        visibleWhen = { key = "sourceType", value = group.sourceType },
+                    }
+                end
             end
         end
     end
     return fields, config, module
+end
+
+--- Build flat-setting controls for one metadata-defined source drawer.
+function editor.drawerFields(session, groupKey)
+    local settings, config, module = editor.settings(session)
+    if not settings or type(config) ~= "table" or not module then
+        return nil, config
+    end
+    local group
+    for _, candidate in ipairs(module.drawerGroups or {}) do
+        if candidate.key == groupKey then
+            group = candidate
+            break
+        end
+    end
+    if not group then
+        return nil, "unknown settings drawer " .. tostring(groupKey)
+    end
+    local byKey = {}
+    for _, setting in ipairs(settings) do
+        byKey[setting.key] = setting
+    end
+    local fields = {}
+    for _, key in ipairs(group.fields or {}) do
+        local setting = byKey[key]
+        if setting then
+            fields[#fields + 1] = {
+                key = key,
+                label = setting.label or key,
+                value = config[key],
+                type = setting.type or type(config[key]),
+                choices = setting.choices,
+                choiceLabels = setting.choiceLabels,
+                step = setting.step,
+                min = setting.min,
+                max = setting.max,
+                visibleWhen = setting.visibleWhen,
+            }
+        end
+    end
+    return fields, config, group
+end
+
+--- Short live summary shown on the source-specific drawer row.
+function editor.drawerSummary(session, groupKey)
+    local settings, config, module = editor.settings(session)
+    if not settings or type(config) ~= "table" or not module then
+        return "--"
+    end
+    for _, group in ipairs(module.drawerGroups or {}) do
+        if group.key == groupKey then
+            local source = tostring(config.source or "--")
+            if group.sourceType == "pack" then
+                local count = config.cells == 0 and "Auto" or (tostring(config.cells) .. "S")
+                return source .. "  " .. count
+            end
+            return source
+        end
+    end
+    return "--"
 end
 
 function editor.settings(session)
@@ -894,7 +984,7 @@ end
 --- Validate the entire working copy without dropping bad panels or keys.
 function editor.validate(session)
     local document = copy(session.draft)
-    local normalized, errors = session.layout.validateDocument(document)
+    local normalized, errors = session.layout.validateCurrentHeader(document)
     if not normalized then
         session.errors = errors
         return false, copy(errors)

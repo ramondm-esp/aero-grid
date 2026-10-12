@@ -1,5 +1,5 @@
 version: 1
-panel: cell-battery
+panel: rx-battery
 theme: modern-dark
 brighten_supporting_text: true
 border:
@@ -11,9 +11,7 @@ panels:
   2x2: {col: 2, row: 2, colSpan: 2, rowSpan: 2}
 config:
   source: Cels
-  sourceType: cells
-  reading: lowest
-  cells: 4
+  reading: cell
   label: RX BATTERY
   accent: cyan
   visual: battery

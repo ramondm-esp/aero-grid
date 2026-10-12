@@ -1,99 +1,99 @@
-# Cell-battery review, screen 1 on AEROGRID PANEL1.
+# RX battery review, screen 1 on AEROGRID PANEL1.
 # RxBt must measure the flight pack, not a regulated receiver supply.
-# Set cells to the actual pack count (4 here); it is never guessed.
-# The upper pair compares pack and average-cell headlines with the opposite
-# voltage underneath. The lower panels show narrow and single-row shedding,
-# and a cells-monitor source for comparison. Cels is absent on the ELRS fixture.
-version: 1
+# The upper pair compares a pack headline drawn with the battery glyph, which
+# never carries supporting details, against an estimated average-cell headline
+# in alternate-reading mode (stored as `visual: none`). The lower panels show
+# narrow and single-row shedding in bar and alternate-reading modes, and a
+# cells-monitor source for comparison. Cels is absent on the ELRS fixture.
+version: 2
 grid:
   columns: 4
   rows: 4
 panels:
   - id: pack
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 0
     colSpan: 2
     rowSpan: 2
     config:
       source: RxBt
-      sourceType: pack
       label: PACK VOLTAGE
       reading: pack
       cells: 4
 
   - id: average
-    type: cell-battery
+    type: rx-battery
     col: 2
     row: 0
     colSpan: 2
     rowSpan: 2
     config:
       source: RxBt
-      sourceType: pack
       label: AVERAGE CELL
-      reading: average
-      cells: 4
+      visual: none
+      reading: cell
+      cells: 0
 
   - id: narrow-pack
-    type: cell-battery
+    type: rx-battery
     col: 0
     row: 2
     colSpan: 1
     rowSpan: 2
     config:
       source: RxBt
-      sourceType: pack
       label: PACK 1x2
+      visual: bar
       reading: pack
       cells: 4
 
   - id: narrow-average
-    type: cell-battery
+    type: rx-battery
     col: 1
     row: 2
     colSpan: 1
     rowSpan: 2
     config:
       source: RxBt
-      sourceType: pack
       label: AVG 1x2
-      reading: average
+      visual: none
+      reading: cell
       cells: 4
 
   - id: smallest
-    type: cell-battery
+    type: rx-battery
     col: 2
     row: 2
     colSpan: 1
     rowSpan: 1
     config:
       source: RxBt
-      sourceType: pack
       label: 1x1
-      reading: average
+      reading: cell
       cells: 4
 
   - id: monitor
-    type: cell-battery
+    type: rx-battery
     col: 3
     row: 2
     colSpan: 1
     rowSpan: 2
     config:
       source: Cels
+      showDelta: true
       label: MONITOR
-      reading: lowest
+      visual: bar
+      reading: cell
 
   - id: smallest-pack
-    type: cell-battery
+    type: rx-battery
     col: 2
     row: 3
     colSpan: 1
     rowSpan: 1
     config:
       source: RxBt
-      sourceType: pack
       label: PACK 1x1
       reading: pack
       cells: 4

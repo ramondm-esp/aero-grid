@@ -46,7 +46,7 @@
 ---@field errorLabel? any
 ---@field page any Container holding one generation of the dashboard.
 ---@field reloadState? "clear"|"rebuild"
----@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"services"|"panels" Staged loader position.
+---@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"header-migrate"|"header-finalize"|"services"|"panels"|"panel-migrate"|"panel-validate" Staged loader position.
 ---@field servicesModule? table Loaded lib/services.lua registry module.
 ---@field packageInfo? table Package identity and compatibility versions.
 ---@field serviceRuntime? table Registry holding every constructed service.
@@ -573,7 +573,7 @@ local function create(zone, widgetOptions, path)
             or package.version == ""
             or package.runtimeApi ~= 1
             or package.panelApi ~= 1
-            or package.layoutVersion ~= 1
+            or package.layoutVersion ~= 2
         )
     then
         package = nil

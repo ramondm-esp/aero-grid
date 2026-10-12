@@ -99,6 +99,16 @@ class CaptureRecipeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing sample"):
             self.load(recipe)
 
+    def test_rx_numeric_voltage_needs_no_shape_selector(self):
+        recipe = load_recipe(RECIPE_DIR / "rx-battery.yaml")
+        self.assertNotIn("sourceType", recipe["config"])
+        recipe["config"].update(source="RxBt", cells=0, showDelta=True)
+        recipe["sample"]["sources"] = {"RxBt": {"value": 16.8, "unit": 1, "precision": 2}}
+        self.assertEqual(self.load(recipe)["sample"]["sources"]["RxBt"]["value"], 16.8)
+        recipe["sample"]["sources"]["RxBt"]["unit"] = 0
+        with self.assertRaisesRegex(ValueError, "numeric volts"):
+            self.load(recipe)
+
     def test_state_switch_samples(self):
         recipe = load_recipe(RECIPE_DIR / "state.yaml")
         self.assertEqual(yaml.safe_load(config_yaml(recipe["config"])), recipe["config"])
@@ -155,7 +165,7 @@ class CaptureRecipeTests(unittest.TestCase):
                 self.load(invalid)
 
     def test_synthetic_samples_propagate(self):
-        for panel in ("metric", "cell-battery", "link-status", "navigation"):
+        for panel in ("metric", "rx-battery", "link-status", "navigation"):
             recipe = load_recipe(RECIPE_DIR / f"{panel}.yaml")
             inputs = fixture_inputs(recipe)
             for name in recipe["sample"]["sources"]:
@@ -187,8 +197,8 @@ class CaptureRecipeTests(unittest.TestCase):
             ("metric", lambda r: r["sample"]["sources"]["GAlt"].update(value=True)),
             ("metric", lambda r: r["sample"]["sources"]["GAlt"].update(precision=4)),
             ("metric", lambda r: r["sample"].update(rssi=0)),
-            ("cell-battery", lambda r: r["sample"]["sources"]["Cels"].update(value=[])),
-            ("cell-battery", lambda r: r["sample"]["sources"]["Cels"].update(unit=1)),
+            ("rx-battery", lambda r: r["sample"]["sources"]["Cels"].update(value=[])),
+            ("rx-battery", lambda r: r["sample"]["sources"]["Cels"].update(unit=1)),
             ("navigation", lambda r: r["sample"]["sources"]["GPS"]["value"].update(lat=91)),
             ("navigation", lambda r: r["sample"]["sources"]["GPS"]["value"].update(
                 **{"pilot-lat": 0, "pilot-lon": 0})),
