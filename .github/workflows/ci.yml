@@ -33,9 +33,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      # EdgeTX runs Lua 5.3. The behaviour tests execute under whichever Lua
-      # lupa provides, so this compiler is what actually validates the sources
-      # against the language version the radio uses.
+      # EdgeTX and the behaviour tests use Lua 5.3. Also validate every source
+      # and test file with the matching compiler.
       - name: Install Lua 5.3
         run: |
           sudo apt-get update
@@ -58,10 +57,12 @@ jobs:
           luac5.3 -v
           lua-language-server --version
 
-      # `check` depends on `test`, so this runs the firmware-like behaviour
-      # suites and then parses every Lua file with the 5.3 compiler.
-      - name: Test and syntax check
-        run: make check LUA_COMPILER=luac5.3
+      # Run both public targets explicitly. `check` includes the tests too, so
+      # the second invocation also verifies that the combined target works.
+      - name: Run tests and checks
+        run: |
+          make test
+          make check LUA_COMPILER=luac5.3
 
       - name: Test release packaging
         run: python3 -m unittest discover -s tools -p 'test_release_*.py'
