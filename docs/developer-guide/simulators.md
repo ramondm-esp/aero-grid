@@ -13,6 +13,17 @@ reporting a result.
 Neither proves receiver behavior, native radio memory stability, or support
 for every color radio.
 
+## Mock memory regression tests
+
+`python3 tests/run.py` includes repeated layout reload/resize checks for retired
+page and service-runtime collection, stable LVGL object counts, retained Lua
+memory, and font callback references. The `review-output` layout participates.
+A dedicated output-panel test warms all 32 channel rows, then measures 100 cycles
+of changing outputs/trims, loss/recovery, name and trim ambiguity, channel-range
+changes, display toggles, and narrow/wide reflows. It requires retained growth
+below 1 KiB and second-half growth below 0.25 KiB, with no live-object growth.
+These mock checks catch regressions; they do not replace native-radio soak tests.
+
 ## Prepare a disposable SD image
 
 ```sh
@@ -124,7 +135,7 @@ radio's model-selection UI, just as on a radio.
 | --- | --- |
 | **AEROGRID STD** (`model1.yml`) | Six screens: Default, Empty, Diagnostics, services, services2, and Palette. All four shipped layouts, plus both diagnostic panel types. |
 | **AEROGRID PANEL1** (`model2.yml`) | Six screens: RX battery, flight counter, flight mode, flight timer, link status, and metric. |
-| **AEROGRID PANEL2** (`model3.yml`) | Five screens: model identity, navigation, state, trim panel, and TX battery. |
+| **AEROGRID PANEL2** (`model3.yml`) | Six screens: model identity, navigation, state, trim panel, TX battery, and channel output. |
 
 Review and simulator-only layouts live in
 `tests/fixtures/layouts/development/`; `make build` adds them to the disposable
