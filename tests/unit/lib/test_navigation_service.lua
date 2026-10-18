@@ -180,12 +180,229 @@ local function testArmObservationAndFreshness()
     assertions.assertEqual(view.homeStatus, "captured", "one-second boundary is inclusive")
 end
 
+local function testCaptureDiagnostics()
+    local cases = {
+        { "captured", function() end },
+        {
+            "available=false",
+            function(reading)
+                reading.available = false
+            end,
+        },
+        {
+            "available=true fresh=false",
+            function(reading)
+                reading.fresh = false
+            end,
+        },
+        {
+            "stale=true",
+            function(reading)
+                reading.stale = true
+            end,
+        },
+        {
+            "validPosition=false",
+            function(reading)
+                reading.raw.lat = 91
+            end,
+        },
+        {
+            "validPosition=false",
+            function(reading)
+                reading.raw = nil
+            end,
+        },
+        {
+            "updatedAt=nil",
+            function(reading)
+                reading.updatedAt = nil
+            end,
+        },
+        {
+            "updatedAt=21",
+            function(reading)
+                reading.updatedAt = 21
+            end,
+        },
+        {
+            "updatedAt=" .. tostring(0 / 0),
+            function(reading)
+                reading.updatedAt = 0 / 0
+            end,
+        },
+        {
+            "delay=-1s",
+            function(reading)
+                reading.raw.delay = -1
+            end,
+        },
+        {
+            "delay=bads",
+            function(reading)
+                reading.raw.delay = "bad"
+            end,
+        },
+        {
+            "updatedAt=0 delay=1s",
+            function(reading)
+                reading.updatedAt, reading.raw.delay = 0, 1
+            end,
+        },
+        {
+            "updatedAt=-81 delay=0s",
+            function(reading)
+                reading.updatedAt = -81
+            end,
+        },
+    }
+    for _, case in ipairs(cases) do
+        local service, view, reading, arm, update = captureFixture()
+        local events = {}
+        service.runtime.host = {
+            panels = {
+                { placement = { id = "navigation", type = "navigation" }, instance = { feed = view } },
+                { placement = { id = "nav-panel", type = "navigation" }, instance = { feed = view } },
+                { placement = { id = "preview", type = "navigation" }, instance = { feed = view, preview = true } },
+                { placement = { id = "failed", type = "navigation" }, instance = { feed = view }, failed = true },
+            },
+            diagnosticsLog = {
+                limit = function()
+                    return 64
+                end,
+                append = function(_, _, panel, text, time)
+                    events[#events + 1] = { panel = panel, text = text, time = time }
+                end,
+            },
+        }
+        update(0, false)
+        arm.value, arm.updatedAt, reading.updatedAt = true, 20, 20
+        case[2](reading)
+        service:update(20)
+        assert(#events == 2, "each panel sharing a subscription must be identified")
+        for _, event in ipairs(events) do
+            local outcome = case[1] == "captured" and "captured" or "missed"
+            assert(string.find(event.text, "Home capture GPS=GPS: " .. outcome, 1, true), event.text)
+            assert(string.find(event.text, case[1], 1, true), event.text)
+            assert(string.find(event.text, "now=20", 1, true))
+            assertions.assertEqual(event.time, 20)
+            assert(not string.find(event.text, "47", 1, true), "GPS coordinates must not enter the log")
+        end
+        assert(events[1].panel == "nav-panel" or events[2].panel == "nav-panel")
+        assertions.assertEqual(view.homeStatus, case[1] == "captured" and "captured" or "missed")
+        update(40, false)
+        update(60, true)
+        assert(#events == 2, "capture outcome is event-based and never retries")
+    end
+    local service, view, _, arm, update = captureFixture()
+    local count = 0
+    service.runtime.host = {
+        panels = { { placement = { id = "nav", type = "navigation" }, instance = { feed = view } } },
+        diagnosticsLog = {
+            limit = function()
+                return 64
+            end,
+            append = function(_, _, _, text)
+                assert(string.find(text, "Home capture GPS=GPS: switch unavailable; now=", 1, true))
+                assert(string.find(text, "available=false fresh=true stale=nil value=", 1, true))
+                count = count + 1
+            end,
+        },
+    }
+    arm.available = false
+    update(0, false)
+    update(20, false)
+    assert(count == 1, "unavailable switch must not log every poll")
+    arm.available = true
+    update(40, false)
+    arm.available = false
+    update(60, true)
+    assert(count == 2, "a new switch outage is a distinct event")
+    service.entries[1].reading = nil
+    arm.available = true
+    update(80, false)
+    arm.value, arm.updatedAt = true, 100
+    service.runtime.host.diagnosticsLog.append = function(_, _, _, text)
+        assert(string.find(text, "missed", 1, true))
+        assert(
+            string.find(
+                text,
+                "available=nil fresh=nil stale=nil value=nil updatedAt=nil delay=nils validPosition=false",
+                1,
+                true
+            )
+        )
+    end
+    service:update(100)
+    service.runtime.host.diagnosticsLog.limit = function()
+        return 0
+    end
+    service.runtime.host.diagnosticsLog.append = function()
+        error("logging must be disabled")
+    end
+    service:logCapture(service.entries[1], "missed", 120)
+end
+
+local function testCapturePolicyUnchanged()
+    local function originalAccepts(reading, now)
+        local position = reading and reading.raw
+        local delay = type(position) == "table" and position.delay or nil
+        return reading
+            and reading.available
+            and reading.fresh
+            and not reading.stale
+            and type(reading.updatedAt) == "number"
+            and now >= reading.updatedAt
+            and now - reading.updatedAt <= 100
+            and (delay == nil or (type(delay) == "number" and delay >= 0 and delay * 100 + now - reading.updatedAt <= 100))
+            and type(position) == "table"
+            and navigationService.hasPosition(position.lat, position.lon)
+    end
+    for _, now in ipairs({ 0, 20, 100, 1000000000 }) do
+        for _, pollAge in ipairs({ -1, 0, 1, 20, 100, 101 }) do
+            for _, delay in ipairs({
+                {},
+                { false },
+                { -1 },
+                { 0 },
+                { 0.8 },
+                { 1 },
+                { 1.00000000001 },
+                { 2 },
+                { 0 / 0 },
+                { math.huge },
+                { "bad" },
+            }) do
+                local reading = {
+                    available = true,
+                    fresh = true,
+                    stale = false,
+                    updatedAt = now - pollAge,
+                    raw = { lat = 47, lon = 8, delay = delay[1] },
+                }
+                local service, view, _, arm = captureFixture()
+                service.entries[1].reading = reading
+                service.entries[1].wasArmed = false
+                arm.value, arm.updatedAt = true, now
+                service:update(now)
+                assertions.assertEqual(
+                    view.homeStatus == "captured",
+                    originalAccepts(reading, now) == true,
+                    "instrumentation must preserve the original predicate, including arithmetic order"
+                )
+            end
+        end
+    end
+end
+
 local function run()
     testPositionChecksAndDistance()
     testServiceCreatesRuntime()
     testFirstArmHome()
     testInvalidFirstArmDoesNotRetry()
     testArmObservationAndFreshness()
+    testCaptureDiagnostics()
+    testCapturePolicyUnchanged()
 end
 
 run()

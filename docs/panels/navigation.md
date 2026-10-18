@@ -61,6 +61,20 @@ capture. Home is not saved to disk: restarting the radio, reloading the model,
 or removing and recreating the widget starts a new session. Separate widget
 instances have independent homes.
 
+To investigate `HOME NOT SET`, first add a **Host diagnostics** panel and
+select its **log** section on any AeroGrid screen. The shared in-memory log
+records captured/missed or switch unavailable, together with the inputs used
+for the decision: current time, availability, freshness, stale state, value,
+update time, reported delay, and coordinate validity. These are GPS inputs
+for capture attempts, or switch inputs for switch-unavailable events.
+Times are 10 ms ticks; GPS delay is seconds. Poll age is
+`now - updatedAt`; combined age is `delay * 100 + now - updatedAt`.
+Missing values appear as `nil`. No coordinates are logged.
+The capture gates and first-transition-only timing are unchanged. The log
+cannot recover an attempt made before logging was enabled; reproduce it in a
+new widget session. See [Host diagnostics](host-diagnostics.md#shared-log) for
+retention settings and the fullscreen history viewer.
+
 ### Bearing display
 
 **Show tape** places the tape below distance in square and tall panels, and

@@ -68,6 +68,38 @@ function navigationService.new(env, support, runtime)
     }, navigationService)
 end
 
+function navigationService:logCapture(entry, outcome, now)
+    local host = self.runtime.host
+    local log = host and host.diagnosticsLog
+    if log and log:limit() > 0 then
+        local reading = (outcome == "switch unavailable" and entry.arm or entry.reading) or {}
+        local position = type(reading.raw) == "table" and reading.raw or {}
+        local text = string.format(
+            "Home capture GPS=%s: %s; now=%s available=%s fresh=%s stale=%s value=%s updatedAt=%s delay=%ss validPosition=%s",
+            entry.state.source,
+            outcome,
+            tostring(now),
+            tostring(reading.available),
+            tostring(reading.fresh),
+            tostring(reading.stale),
+            tostring(reading.value),
+            tostring(reading.updatedAt),
+            tostring(position.delay),
+            tostring(navigationService.hasPosition(position.lat, position.lon))
+        )
+        for _, panel in ipairs(host.panels) do
+            if
+                not panel.failed
+                and panel.placement.type == "navigation"
+                and panel.instance.feed == entry.view
+                and not panel.instance.preview
+            then
+                log:append(host, panel.placement.id, text, now)
+            end
+        end
+    end
+end
+
 --- Consume only the first observed disarmed-to-armed transition, even without GPS.
 function navigationService:captureHome(entry, now)
     local capture = entry.capture
@@ -83,10 +115,15 @@ function navigationService:captureHome(entry, now)
             and now >= arm.updatedAt
             and now - arm.updatedAt <= MAX_CAPTURE_AGE
         if not live then
+            if not entry.switchUnavailable then
+                self:logCapture(entry, "switch unavailable", now)
+            end
+            entry.switchUnavailable = true
             entry.wasArmed = nil
             state.homeStatus = "switch-unavailable"
             return
         end
+        entry.switchUnavailable = nil
         local armed = arm.value
         if entry.wasArmed == false and armed then
             capture.attempted = true
@@ -107,6 +144,7 @@ function navigationService:captureHome(entry, now)
             then
                 capture.latitude, capture.longitude = position.lat, position.lon
             end
+            self:logCapture(entry, capture.latitude and "captured" or "missed", now)
         end
         entry.wasArmed = armed
     end
