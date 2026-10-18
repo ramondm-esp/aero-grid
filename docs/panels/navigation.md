@@ -52,11 +52,9 @@ changing EdgeTX home or the flight controller's return-home position.
 AeroGrid must observe disarmed, then armed; opening the widget already armed
 does not capture home.
 
-Only the first observed disarmed-to-armed transition attempts capture. GPS
-must have valid, fresh coordinates no more than one second old, including
-the source's reported delay when present. If GPS is not ready, home stays
-unset. Later GPS updates and disarm/rearm cycles never retry or move home,
-and there is no automatic fallback to EdgeTX home.
+With a configured **Home arm switch**, AeroGrid captures the home position when
+the model is first armed. If that capture fails, each later disarm and re-arm
+tries again until home is set.
 
 A captured home or failed attempt survives telemetry loss, panel recreation,
 and layout or theme reloads in this widget instance. Panels using the same
