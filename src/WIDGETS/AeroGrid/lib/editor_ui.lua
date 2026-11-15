@@ -430,6 +430,15 @@ local function coordinates(context, touch)
     return x, y
 end
 
+local function gearIndex(state, x, y)
+    for index, controls in ipairs(state.controls) do
+        local rect = index <= #state.session.draft.panels and controls.rect
+        if rect and hit({ x = rect.x + rect.w - 32, y = rect.y, w = 32, h = 32 }, x, y) then
+            return index
+        end
+    end
+end
+
 local function drag(context, state, event, touch)
     if matches(event, "EVT_TOUCH_BREAK") then
         state.drag = nil
@@ -531,6 +540,25 @@ function uiModule.handle(context, event, touch)
     if state.mode ~= "menu" then
         return true
     end
+    if matches(event, "EVT_TOUCH_BREAK") and state.gearPress then
+        -- EdgeTX sends no TAP when the press outlasts its 250 ms tap time, and
+        -- BREAK coordinates are (0, 0), so act on the gear captured at FIRST.
+        local index = state.gearPress
+        state.gearPress = nil
+        if index == "add" then
+            openDrawer(context, state, "add")
+        elseif index <= #state.session.draft.panels then
+            state.handlers.editor.select(state.session, index)
+            openDrawer(context, state, "configure")
+        end
+        return true
+    end
+    if matches(event, "EVT_TOUCH_FIRST") then
+        local x, y = coordinates(context, touch)
+        state.gearPress = x and (gearIndex(state, x, y) or state.addRect and hit(state.addRect, x, y) and "add") or nil
+    elseif matches(event, "EVT_TOUCH_SLIDE") then
+        state.gearPress = nil
+    end
     if drag(context, state, event, touch) then
         return true
     end
@@ -539,15 +567,15 @@ function uiModule.handle(context, event, touch)
         if not x then
             return false
         end
-        for index, controls in ipairs(state.controls) do
-            local rect = index <= #state.session.draft.panels and controls.rect
-            if rect and hit({ x = rect.x + rect.w - 32, y = rect.y, w = 32, h = 32 }, x, y) then
-                state.handlers.editor.select(state.session, index)
-                openDrawer(context, state, "configure")
-                return true
-            end
+        local gear = gearIndex(state, x, y)
+        if gear then
+            state.gearPress = nil
+            state.handlers.editor.select(state.session, gear)
+            openDrawer(context, state, "configure")
+            return true
         end
         if state.addRect and hit(state.addRect, x, y) then
+            state.gearPress = nil
             openDrawer(context, state, "add")
             return true
         end

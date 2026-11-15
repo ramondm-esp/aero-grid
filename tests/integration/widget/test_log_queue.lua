@@ -154,3 +154,13 @@ untilState(function()
 end)
 context.page = oldPage
 assert(not context.logViewer, "deferred entry cannot construct under a replaced page")
+
+-- A press longer than the tap time sends no TAP, and BREAK reports (0, 0).
+EVT_TOUCH_BREAK = 9204
+fixture.lvglMock.setFullScreen(true)
+fixture.pump(context, 30)
+definition.event(context, EVT_TOUCH_FIRST, point)
+definition.event(context, EVT_TOUCH_BREAK, { x = 0, y = 0 })
+untilState(function()
+    return context.logOpenRequest ~= nil
+end)

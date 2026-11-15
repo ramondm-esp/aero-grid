@@ -186,6 +186,7 @@ local function applyInput(host, event, touch)
         return true
     elseif matches(event, "EVT_TOUCH_FIRST") and touch then
         state.dragY, state.slid = touch.y, false
+        state.pressX, state.dragStartY, state.tapDone = touch.x, touch.y, false
     elseif matches(event, "EVT_TOUCH_SLIDE") and touch and state.dragY then
         local delta = state.dragY - touch.y
         local steps = math.floor(math.abs(delta) / state.lineHeight)
@@ -196,12 +197,22 @@ local function applyInput(host, event, touch)
             state.dragY = touch.y
             render(state)
         end
-    elseif matches(event, "EVT_TOUCH_TAP") and touch and not state.slid then
+    elseif matches(event, "EVT_TOUCH_TAP") and touch and not state.slid and not state.tapDone then
+        state.tapDone = true
         if touch.x >= host.zone.w - 80 and touch.y < 32 then
             viewer.close(host)
         end
     elseif matches(event, "EVT_TOUCH_BREAK") then
-        state.dragY = nil
+        -- No TAP arrives for a press longer than the tap time, and BREAK reports
+        -- (0, 0), so the release closes from the press captured at FIRST.
+        local pressX, pressY = state.pressX, state.dragStartY
+        state.dragY, state.pressX, state.dragStartY = nil, nil, nil
+        if pressX and pressY and not state.slid and not state.tapDone then
+            state.tapDone = true
+            if pressX >= host.zone.w - 80 and pressY < 32 then
+                viewer.close(host)
+            end
+        end
     elseif matches(event, "EVT_ROT_LEFT") or matches(event, "EVT_VIRTUAL_PREV") then
         move(state, -1)
         render(state)

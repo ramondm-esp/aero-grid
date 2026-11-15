@@ -1018,11 +1018,26 @@ local function handleEvent(context, widgetEvent, touchState)
         return true
     end
 
+    -- EdgeTX sends no TAP when a press outlasts its 250 ms tap time, and BREAK
+    -- coordinates are (0, 0), so the release acts on the press captured at FIRST.
+    local tap
     if widgetEvent == _G.EVT_TOUCH_FIRST then
-        context.panelTouchSlid = false
+        context.panelTouchSlid, context.panelTapDone = false, false
+        context.panelPress = touchState and { x = touchState.x, y = touchState.y } or nil
     elseif widgetEvent == _G.EVT_TOUCH_SLIDE then
         context.panelTouchSlid = true
-    elseif widgetEvent == _G.EVT_TOUCH_TAP and touchState and not context.panelTouchSlid and isFullScreen() then
+    elseif widgetEvent == _G.EVT_TOUCH_TAP and touchState then
+        tap = touchState
+    elseif widgetEvent == _G.EVT_TOUCH_BREAK then
+        tap = context.panelPress
+    end
+    if tap and not context.panelTapDone then
+        context.panelTapDone, context.panelPress = true, nil
+    else
+        tap = nil
+    end
+    if tap and not context.panelTouchSlid and isFullScreen() then
+        local touchState = tap
         for _, entry in ipairs(context.panels) do
             local logPanel = entry.placement.type == "host-diagnostics" and entry.settings.section == "log"
             if not entry.failed and (entry.placement.type == "navigation" or logPanel) then

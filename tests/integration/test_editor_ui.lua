@@ -184,7 +184,11 @@ end
 local function tap(x, y)
     refresh(EVT_TOUCH_FIRST, { x = x, y = y })
     refresh(EVT_TOUCH_BREAK, { x = x, y = y })
-    refresh(EVT_TOUCH_TAP, { x = x, y = y })
+    -- A release that already opened a drawer leaves its tap queued behind the build.
+    local editor = context.editorUi
+    if not (editor and (editor.drawerPending or editor.drawerBuild ~= nil)) then
+        refresh(EVT_TOUCH_TAP, { x = x, y = y })
+    end
 end
 local function settleDrawer()
     for _ = 1, 150 do
@@ -453,7 +457,14 @@ equal(state.controls[1].gear.parent, state.controls[1].gearBackground, "gear mov
 tap(rect.x + 12, rect.y + 12)
 equal(#context.editorSession.draft.panels, 1, "old top-left X target does not remove panel")
 equal(state.mode, "menu", "top-left panel tap does not configure")
-tap(rect.x + rect.w - 12, rect.y + 12)
+local gearX, gearY = rect.x + rect.w - 12, rect.y + 12
+refresh(EVT_TOUCH_FIRST, { x = gearX, y = gearY })
+refresh(EVT_TOUCH_SLIDE, { x = gearX + 4, y = gearY })
+refresh(EVT_TOUCH_BREAK, { x = 0, y = 0 })
+equal(state.mode, "menu", "a slide off the gear does not open settings")
+-- A press longer than the tap time sends no TAP, and BREAK reports (0, 0).
+refresh(EVT_TOUCH_FIRST, { x = gearX, y = gearY })
+refresh(EVT_TOUCH_BREAK, { x = 0, y = 0 })
 settleDrawer()
 equal(state.mode, "configure", "gear opens settings")
 equal(state.drag, nil, "gear press must not start drag")
