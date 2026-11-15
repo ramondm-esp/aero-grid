@@ -4,7 +4,7 @@ local root = assert(...)
 local fixture = assert(loadfile(root .. "/tests/support/widget_fixture.lua"))(root).new()
 local noGrant = assert(loadfile(root .. "/tests/support/no_grant.lua"))()
 fixture.reset()
-EVT_TOUCH_FIRST, EVT_TOUCH_TAP, EVT_VIRTUAL_EXIT = 9501, 9502, 9503
+EVT_TOUCH_FIRST, EVT_TOUCH_TAP, EVT_VIRTUAL_EXIT, EVT_TOUCH_BREAK = 9501, 9502, 9503, 9504
 fixture.lvglMock.setFullScreen(true)
 local definition = fixture.module("main.lua")
 local context = fixture.createLoaded(nil, { Layout = "review-navigation", Theme = "modern-dark" })
@@ -68,6 +68,13 @@ assert(flights == before + 1 and state.latitude == 47 and state.longitude == 8)
 assert(context.locationTask.cost == context.scheduler.capacity and not context.locationTask.pending)
 assert(state.url == "https://www.google.com/maps/search/?api=1&query=47.000000,8.000000")
 
+-- A release without a preceding press on the overlay is not a tap; a long press closes it.
+context.locationDetailsModule.handle(context, EVT_TOUCH_BREAK)
+assert(not context.locationRequest, "the release of the opening press must not close the overlay")
+context.locationDetailsModule.handle(context, EVT_TOUCH_FIRST)
+context.locationDetailsModule.handle(context, EVT_TOUCH_BREAK)
+assert(context.locationRequest and context.locationRequest.kind == "close", "a long press closes the overlay")
+context.locationRequest = nil
 context.locationDetailsModule.handle(context, EVT_VIRTUAL_EXIT)
 assert(
     context.locationDetails == state and context.locationRequest.kind == "close" and not context.locationOverlay.hidden
