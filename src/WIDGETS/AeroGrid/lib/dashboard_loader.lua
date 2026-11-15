@@ -59,14 +59,15 @@ function module.new(dependencies)
     --- intersection is computed rather than assumed.
     ---@param context AeroGridContext
     ---@param placement table
+    ---@param rect? AeroGridRect The placement's rectangle, when already known.
     ---@return table? reserved
-    local function reservedFor(context, placement)
+    local function reservedFor(context, placement, rect)
         local reserved = context.reserved
         if not reserved then
             return nil
         end
 
-        local rect = panelRect(context, placement)
+        rect = rect or panelRect(context, placement)
         if not rect then
             return nil
         end
@@ -242,6 +243,9 @@ function module.new(dependencies)
                 instance = instance,
                 settings = settings,
                 container = container,
+                -- What the panel was last laid out for; reflow skips an unchanged frame.
+                rect = rect,
+                reserved = reservedFor(context, placement, rect),
                 -- Boxes built in fullscreen stay touchable in App mode.
                 builtFullscreen = isFullScreen() or nil,
                 interval = interval,

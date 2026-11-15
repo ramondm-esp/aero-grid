@@ -873,7 +873,7 @@ initialize = function(context)
                 loadModule = loadModule,
                 isFullScreen = isFullScreen,
                 readThemeDefinition = readThemeDefinition,
-            }, { "beginLoad", "advanceLoad", "panelRect", "buildPanel" })
+            }, { "beginLoad", "advanceLoad", "panelRect", "reservedFor", "buildPanel" })
         end
         if context.dashboardLoader then
             context.dashboardLifecycle = bindHost(lifecycle, "lib/dashboard_lifecycle.lua", {
@@ -884,6 +884,7 @@ initialize = function(context)
                 reservedCorner = reservedCorner,
                 errorTop = errorTop,
                 panelRect = context.dashboardLoader.panelRect,
+                reservedFor = context.dashboardLoader.reservedFor,
                 buildPanel = context.dashboardLoader.buildPanel,
             }, {
                 "updateEmptyHint",

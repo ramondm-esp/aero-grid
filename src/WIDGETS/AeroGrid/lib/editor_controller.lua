@@ -51,6 +51,7 @@ function module.new(dependencies)
                     if not ok then
                         return false, entry.placement.id .. ": preview: " .. tostring(updateError)
                     end
+                    entry.rect = nil
                     entry.editorPlacement = {
                         col = placement.col,
                         row = placement.row,
