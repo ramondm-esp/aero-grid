@@ -348,7 +348,6 @@ first.module.refresh = function()
     return 37, false, 1
 end
 first.nextRefresh = 0
-context.refreshOwner = nil
 for _ = 1, 4 do
     measure(definition.refresh, context)
     if first.interval == 37 then

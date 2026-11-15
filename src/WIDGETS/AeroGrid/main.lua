@@ -577,9 +577,6 @@ local function panelError(task, message)
     if not entry.failed then
         entry.failed, entry.error = true, message
     end
-    if context.refreshOwner == entry then
-        context.refreshOwner = nil
-    end
 end
 
 local function newScheduler(context, schedulerModule)
@@ -1167,9 +1164,6 @@ local function finishPending(context, entry)
     local ok, message, result = context.panelHost.dispatch(entry, "finishPending")
     if not ok then
         addError(context, entry.placement.id .. ": finishPending: " .. tostring(message))
-        if context.refreshOwner == entry then
-            context.refreshOwner = nil
-        end
         context.schedulerFailed = true
         return false
     end
@@ -1183,15 +1177,10 @@ local function instanceField(entry, key)
 end
 
 local function refreshReady(task, _, hidden)
-    local entry, owner = task.owner, task.host.refreshOwner
+    local entry = task.owner
     task.cost = instanceField(entry, "refreshCost") or rawget(entry.module, "refreshCost") or 1
     task.minCost = instanceField(entry, "refreshMinCost") or rawget(entry.module, "refreshMinCost")
-    if
-        not task.host.scheduledPanels
-        or hidden
-        or entry.failed
-        or owner and not owner.failed and entry ~= owner and entry.module.id == owner.module.id
-    then
+    if not task.host.scheduledPanels or hidden or entry.failed then
         return false
     end
     local pending = finishPending(task.host, entry)
@@ -1233,11 +1222,6 @@ local function panelStep(task, now, granted)
         end
     elseif eventName == "refresh" then
         entry.nextRefresh = now + entry.interval
-        if ok and unfinished == true and not rawget(entry.module, "independentRefresh") then
-            context.refreshOwner = entry
-        elseif context.refreshOwner == entry then
-            context.refreshOwner = nil
-        end
     end
     if not ok then
         error(message or "panel failed", 0)
@@ -1751,7 +1735,6 @@ local function pumpSessionReset(context)
     if not job then
         job = { service = 1, item = 1, panel = 1, now = getTime() }
         context.sessionResetJob = job
-        context.refreshOwner = nil
     end
     local runtime = context.serviceRuntime
     local service = runtime and runtime.order[job.service]

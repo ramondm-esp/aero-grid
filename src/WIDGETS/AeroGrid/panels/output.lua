@@ -6,7 +6,6 @@ local output = {
     refreshContinuation = true,
     supportedSpans = { "any" },
     refreshInterval = 10,
-    independentRefresh = true,
     settings = {
         { key = "label", label = "Label", type = "string", default = "CHANNEL OUTPUT" },
         { key = "firstChannel", label = "First channel", type = "number", default = 1, min = 1, max = 32, step = 1 },

@@ -648,11 +648,8 @@ end
 scheduler.panels = { scheduled("first", "chart"), scheduled("second", "chart"), scheduled("reading", "metric") }
 fixture.pump(scheduler, 2)
 equal(turns.first, 2)
-equal(turns.second, nil, "another chart must wait for the current chart's complete frame")
+equal(turns.second, 2, "an unfinished chart frame must not block another chart")
 equal(turns.reading, 2, "staged charts must not starve ordinary panels")
-fixture.pump(scheduler, 1)
-equal(turns.first, 3)
-equal(turns.second, 1, "the next chart starts once the preceding frame is complete")
 
 local fair = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(fair, 10)
@@ -660,7 +657,6 @@ fair.document.panels, fair.emptyHint = { {} }, nil
 local progressing = {}
 for index = 1, 2 do
     local entry = scheduled("independent-" .. index, "chart")
-    entry.module.independentRefresh = chart.independentRefresh
     entry.module.refreshCost = "variable"
     entry.module.refreshMinCost = 1
     entry.module.refresh = function(_, _, grant)
@@ -673,4 +669,3 @@ fixture.pump(fair, 12)
 assert(progressing[1] and progressing[1] >= 3, "the first unfinished chart must keep receiving grants")
 assert(progressing[2] and progressing[2] >= 3, "the second chart must not wait for the first frame to finish")
 assert(math.abs(progressing[1] - progressing[2]) <= 1, "unfinished charts must share dispatch turns fairly")
-equal(fair.refreshOwner, nil, "independent chart transactions must not take an exclusive refresh lease")

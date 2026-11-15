@@ -22,7 +22,6 @@
 --- run when due even without remaining slots.
 ---@field refreshMinCost? integer Minimum grant for a variable-cost refresh, 1 to 8.
 ---@field refreshContinuation? boolean Permit a refresh to request another turn in the same callback. An instance may set it for a single turn.
----@field independentRefresh? boolean Refreshes do not block other instances of this panel type.
 ---@field settings? AeroGridPanelSetting[]
 ---@field create fun(parent: any, rect: table, settings: table, services: table): any
 ---@field update? fun(instance: any, rect: table, settings: table)
@@ -178,10 +177,6 @@ function panelHost.validateModule(module, typeName)
     local continuation = field(module, "refreshContinuation")
     if continuation ~= nil and type(continuation) ~= "boolean" then
         return false, "refreshContinuation must be a boolean"
-    end
-    local independent = field(module, "independentRefresh")
-    if independent ~= nil and type(independent) ~= "boolean" then
-        return false, "independentRefresh must be a boolean"
     end
 
     return true

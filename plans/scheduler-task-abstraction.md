@@ -170,7 +170,7 @@ conversion; the design needs only that recording is O(1) and unbudgeted.
 | Today | Task |
 | --- | --- |
 | Service update | One per service. `cost` = `updateCost`, `ready` = has subscribers and not failed. |
-| Panel `refresh` | One per panel. `cost` = instance or module `refreshCost`; `ready` = dashboard live and the same-type rule; interval is the panel's `due`. |
+| Panel `refresh` | One per panel. `cost` = instance or module `refreshCost`; `ready` = dashboard live; interval is the panel's `due`. |
 | Panel `background` | A second per-panel task for hidden callbacks, cost 1, always due. |
 | Flight pump, reset, loader, reflow, rebuild, menu, settings, log viewer, editor, input | Host tasks, `cost = capacity` at first, lowered once measured. |
 

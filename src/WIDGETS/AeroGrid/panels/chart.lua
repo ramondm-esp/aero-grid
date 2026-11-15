@@ -11,7 +11,6 @@ local chart = {
     refreshMinCost = 1,
     finishMinCost = 1,
     backgroundMinCost = 1,
-    independentRefresh = true,
     settings = {
         { key = "label", label = "Label", type = "string", default = "" },
         { key = "armSwitch", label = "Arm switch position", type = "string", default = "", legacyArm = true },

@@ -20,8 +20,8 @@ local pending = false
 local function entry(module, instance)
     return { placement = { id = "demo" }, module = module, instance = instance or {}, interval = 0, nextRefresh = 0 }
 end
-local function run(panels, refreshOwner)
-    context.panels, context.refreshOwner = panels, refreshOwner
+local function run(panels)
+    context.panels = panels
     context.scheduler.cursor = 1
     calls = {}
     fixture.tick(10)
@@ -222,13 +222,13 @@ run({ invalid })
 assert(invalid.failed, "a non-boolean finishPending result must disable its panel")
 assert(#context.errors == 1 and string.find(context.errors[1], "must return a boolean", 1, true))
 
--- Failed readiness must release a same-type refresh lease immediately.
+-- Failed readiness disables only that panel; a same-type neighbor keeps refreshing.
 local neighborRefreshes = 0
-local leaseOwner = entry({
+local failing = entry({
     id = "demo",
     refresh = function() end,
     finishPending = function()
-        error("lease owner failed readiness")
+        error("panel failed readiness")
     end,
 })
 local neighbor = entry({
@@ -238,9 +238,9 @@ local neighbor = entry({
     end,
 })
 context.errors = {}
-run({ leaseOwner, neighbor }, leaseOwner)
-assert(leaseOwner.failed and context.refreshOwner == nil)
-assert(neighborRefreshes == 1, "a failed lease owner must not block a healthy same-type panel")
+run({ failing, neighbor })
+assert(failing.failed)
+assert(neighborRefreshes == 1, "a failed panel must not block a healthy same-type panel")
 
 -- The create contract permits opaque panel state, including non-tables.
 local scalarRefreshes = 0
