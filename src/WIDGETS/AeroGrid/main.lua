@@ -595,7 +595,7 @@ local function newScheduler(context, schedulerModule)
         addError(context, "lib/scheduler.lua: " .. tostring(ok and "constructor did not return a table" or scheduler))
         return nil
     end
-    for _, operation in ipairs({ "add", "clear", "run", "resume", "more", "cross" }) do
+    for _, operation in ipairs({ "add", "clear", "run", "resume", "more" }) do
         if type(rawget(scheduler, operation)) ~= "function" then
             addError(context, "lib/scheduler.lua: missing operation " .. operation)
             return nil
@@ -805,6 +805,7 @@ initialize = function(context)
         context.layoutValidator = runtimeModule("lib/layout.lua")
         context.layoutStore = runtimeModule("lib/layout_store.lua")
         context.flightConfig = runtimeModule("lib/flight_config.lua")
+        context.nativeBudget = runtimeModule("lib/native_budget.lua")
         context.aeroMenuModule = runtimeModule("lib/aerogrid_menu.lua")
         local flightRegistration = runtimeModule("lib/flight_registration.lua")
         if flightRegistration then
@@ -1347,7 +1348,7 @@ end
 local EXTENDED_SEGMENTS = 4
 
 local function liveDangerously(context)
-    if context.liveDangerouslyFailed then
+    if context.liveDangerouslyFailed or not context.nativeBudget then
         return false
     end
     local factory = context.flightFactory
@@ -1390,7 +1391,7 @@ local function runTasks(context, hidden, flightTask, hostTask)
     if extended and scheduler.more(now, hidden or false) then
         -- Extra segments run past EdgeTX's per-callback limit in the same
         -- callback; only pending and deferred work continues.
-        local ok, failure = scheduler.cross(function()
+        local ok, failure = context.nativeBudget.cross(function()
             for _ = 1, EXTENDED_SEGMENTS do
                 if not scheduler.more(now, hidden or false) then
                     break
