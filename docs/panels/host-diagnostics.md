@@ -67,8 +67,10 @@ For raw-field interpretation, see
 ![Host diagnostics scheduler view at 2x2](../assets/panels/host-diagnostics/scheduler-2x2.png)
 
 Select **scheduler** to see two lines, with one point added each second at most:
-the cyan line is the percentage of scheduler slots used, and the orange line is
-the percentage of due requests deferred because no slots were available.
+the cyan line is the percentage of scheduler slots used out of the slots a
+callback may run (40 when Live dangerously is active, otherwise 8), and the
+orange line is the percentage of due requests still deferred when the callback
+ends because no slots were left.
 
 The cursor marks the newest point and wraps to the left when full.
 Resizing clears the graph. The view measures this widget's accounted work,

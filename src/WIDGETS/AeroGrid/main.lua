@@ -699,6 +699,64 @@ local function create(zone, widgetOptions, path)
     return context
 end
 
+--- Whether the model's settings are already known, so the layout can load
+--- under the right callback budget.
+local function modelSettingsKnown(context)
+    local factory = context.flightFactory
+    local member = factory.members[context]
+    if not member or not member.modelFilename then
+        return true
+    end
+    local owner, preload = factory.broker, factory.preload
+    return (owner and owner.documentLoaded) or (preload and preload.modelFilename == member.modelFilename) or false
+end
+
+--- Read the model's settings document ahead of the layout: one callback builds
+--- the store and the next parses the file. Failures are ignored here because the
+--- flight broker reports them when it loads the document itself.
+local function advanceModelSettings(context)
+    local factory, path = context.flightFactory, context.path
+    local filename = factory.members[context].modelFilename
+    local store = context.modelSettingsPreload
+    if not store then
+        local ok, created = pcall(function()
+            local storeModule = assert(loadModule(path, "lib/model_settings_store.lua", 1))
+            return storeModule.new(path, context.yaml, {
+                modelFilename = function()
+                    return filename
+                end,
+                flightConfig = context.flightConfig,
+            })
+        end)
+        if ok and created then
+            context.modelSettingsPreload = created
+            return
+        end
+    else
+        local ok, document, info = pcall(store.load, store, filename)
+        if ok and document then
+            local flight = document.flight
+            factory.preload = {
+                modelFilename = filename,
+                document = document,
+                info = info,
+                liveDangerously = type(flight) == "table" and flight.liveDangerously == true,
+            }
+        end
+    end
+    context.modelSettingsPreload = nil
+    context.stage = "theme-read"
+end
+
+--- Begin a staged load, first reading the model's settings if they are unknown.
+local function startLoad(context)
+    context.dashboardLoader.beginLoad(context)
+    context.modelSettingsPreload = nil
+    if not modelSettingsKnown(context) then
+        context.stage = "model-settings"
+    end
+end
+
 initialize = function(context)
     local path, flightFactory = context.path, context.flightFactory
     context.stage = nil
@@ -876,7 +934,7 @@ initialize = function(context)
         addError(context, "AeroGrid runtime module failed to load")
         showErrors(context)
     else
-        context.dashboardLoader.beginLoad(context)
+        startLoad(context)
     end
 end
 
@@ -1251,13 +1309,18 @@ local function liveDangerously(context)
     if context.liveDangerouslyFailed then
         return false
     end
-    local owner = context.flightFactory and context.flightFactory.broker
-    -- Until the model's own setting is known, loading runs with the extended budget.
-    if not owner or not owner.documentLoaded then
-        return true
+    local factory = context.flightFactory
+    local owner = factory and factory.broker
+    if owner and owner.documentLoaded then
+        local flight = owner.document and owner.document.flight
+        return type(flight) == "table" and flight.liveDangerously == true
     end
-    local flight = owner.document and owner.document.flight
-    return type(flight) == "table" and flight.liveDangerously == true
+    -- Before the flight broker has its document, use the copy read ahead of the layout.
+    local preload, member = factory and factory.preload, factory and factory.members[context]
+    return preload ~= nil
+        and member ~= nil
+        and preload.modelFilename == member.modelFilename
+        and preload.liveDangerously == true
 end
 
 --- Run flight, host work, services and panels in one fair queue.
@@ -1278,9 +1341,12 @@ local function runTasks(context, hidden, flightTask, hostTask)
     local now = getTime()
     local stats = context.schedulerStats
     local used, requested, denied = scheduler.run(now, scheduler.capacity, hidden or false)
-    local available = scheduler.capacity
+    -- Slots are measured against everything the callback may run: the extended
+    -- budget whenever it is enabled, whether or not this callback needed it.
+    local extended = liveDangerously(context)
+    local available = scheduler.capacity * (extended and 1 + EXTENDED_SEGMENTS or 1)
     context.remainingSlots = scheduler.capacity - used
-    if liveDangerously(context) and scheduler.more(now, hidden or false) then
+    if extended and scheduler.more(now, hidden or false) then
         -- Extra segments run past EdgeTX's per-callback limit in the same
         -- callback; only pending and deferred work continues.
         local ok, failure = scheduler.cross(function()
@@ -1290,8 +1356,9 @@ local function runTasks(context, hidden, flightTask, hostTask)
                 end
                 local segmentUsed, segmentRequested, segmentDenied =
                     scheduler.resume(now, scheduler.capacity, hidden or false)
-                used, requested, denied = used + segmentUsed, requested + segmentRequested, denied + segmentDenied
-                available = available + scheduler.capacity
+                -- A request denied earlier and retried here is still one request,
+                -- and only what remains denied after the last segment is deferred.
+                used, requested, denied = used + segmentUsed, requested + segmentRequested - denied, segmentDenied
                 context.remainingSlots = scheduler.capacity - segmentUsed
             end
         end)
@@ -1369,7 +1436,15 @@ local function pumpFlight(task, now, granted)
             end
             owner.store = store
         end
-        local document, info = owner.store:load(filename)
+        local preload = context.flightFactory.preload
+        local document, info
+        if preload and preload.document and preload.modelFilename == filename then
+            -- Already parsed ahead of the layout; reuse it once.
+            document, info = preload.document, preload.info
+            preload.document, preload.info = nil, nil
+        else
+            document, info = owner.store:load(filename)
+        end
         if document then
             owner:setDocument(document)
             if type(info) == "table" and info.recovered then
@@ -2295,10 +2370,14 @@ local function lifecycleStep(task)
         context.lifecycleRequest = "rebuild"
     elseif kind == "rebuild" then
         context.dashboardLifecycle.rebuildPage(context)
-        context.dashboardLoader.beginLoad(context)
+        startLoad(context)
         context.lifecycleRequest = "load"
     elseif kind == "load" then
-        context.dashboardLoader.advanceLoad(context)
+        if context.stage == "model-settings" then
+            advanceModelSettings(context)
+        else
+            context.dashboardLoader.advanceLoad(context)
+        end
         if context.stage then
             task.cost = loadCost(context)
             context.lifecycleRequest = "load"
