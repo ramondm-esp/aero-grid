@@ -375,6 +375,11 @@ function menu.handle(context, event, touch)
         if matches(event, "EVT_TOUCH_SLIDE") or matches(event, "EVT_TOUCH_LONG") then
             state.slid = true
         end
+        if matches(event, "EVT_TOUCH_BREAK") and not state.tapConsumed then
+            -- EdgeTX sends no TAP when the press outlasts its 250 ms tap time, and
+            -- BREAK coordinates are (0, 0), so act on the press captured at FIRST.
+            state.pending, state.tapConsumed = not state.slid or nil, true
+        end
         if matches(event, "EVT_TOUCH_TAP") and not state.tapConsumed then
             state.pending, state.tapConsumed = not state.slid and hit or nil, true
         end

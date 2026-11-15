@@ -229,6 +229,21 @@ do
 end
 
 do
+    -- EdgeTX sends no TAP when a press outlasts its tap time; the release alone opens the menu.
+    local c, state = fixture()
+    assert(menu.handle(c, EVT_TOUCH_FIRST, { x = 5, y = 5 }))
+    assert(menu.handle(c, EVT_TOUCH_BREAK, { x = 0, y = 0 }))
+    assert(state.pending, "a release without a tap opens the menu")
+    state.pending = nil
+    assert(menu.handle(c, EVT_TOUCH_TAP, { x = 5, y = 5 }))
+    assert(not state.pending, "the tap after a release must not open it twice")
+    assert(menu.handle(c, EVT_TOUCH_FIRST, { x = 5, y = 5 }))
+    assert(menu.handle(c, EVT_TOUCH_SLIDE, { x = 9, y = 5 }))
+    assert(menu.handle(c, EVT_TOUCH_BREAK, { x = 0, y = 0 }))
+    assert(not state.pending, "a slide is not a tap")
+end
+
+do
     for _, change in ipairs({
         "filename",
         "fullscreen",

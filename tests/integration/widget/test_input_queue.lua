@@ -59,11 +59,11 @@ drain()
 assert(calls == 4 and seen[3].owner == first and seen[4].owner == second)
 
 local start = getTime()
-local touch = { x = 20, y = 30, startX = 1, startY = 2, slideX = 3, slideY = 4, tapCount = 2, swipeLeft = true }
+local touch = { x = 120, y = 100, startX = 1, startY = 2, slideX = 3, slideY = 4, tapCount = 2, swipeLeft = true }
 assert(definition.event(context, EVT_TOUCH_FIRST, touch))
 touch.x, touch.slideX = 200, 300
 local input = context.inputQueue[1]
-assert(input.now == start and input.touch.x == 20 and input.touch.slideX == 3 and input.touch.tapCount == 2)
+assert(input.now == start and input.touch.x == 120 and input.touch.slideX == 3 and input.touch.tapCount == 2)
 assert(input.touch.swipeLeft, "firmware swipe flags must survive deferral")
 fixture.tick(100)
 assert(definition.event(context, EVT_TOUCH_BREAK))
