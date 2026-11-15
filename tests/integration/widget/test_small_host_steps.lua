@@ -34,7 +34,10 @@ context.locationDetailsModule = {
 context.locationRequest = { kind = "close", state = state }
 tick()
 assert(flights == 1 and closes == 1 and context.remainingSlots == context.scheduler.budget.capacity - 2)
-assert(context.locationTask.spent == 1 and not context.locationTask.pending)
+assert(
+    context.scheduler.state(context.locationTask).spent == 1
+        and not context.scheduler.state(context.locationTask).pending
+)
 
 context.locationDetails = state
 context.locationRequest = { kind = "close", state = {} }
@@ -55,7 +58,7 @@ context.aeroMenuModal = true
 local before = flights
 tick()
 assert(closes == 2 and flights == before + 1)
-assert(context.uiTasks["log viewer"].spent == 1)
+assert(context.scheduler.state(context.uiTasks["log viewer"]).spent == 1)
 assert(context.remainingSlots == context.scheduler.budget.capacity - 2)
 context.aeroMenuModal = false
 
@@ -79,10 +82,13 @@ context.reloadState = "clear"
 tick()
 assert(not retired and context.lifecycleRequest == "retire", "flight defers full-budget retirement")
 definition.refresh(context)
-assert(retired and rebuilds == 0 and not context.lifecycleTasks.retire.pending)
+assert(retired and rebuilds == 0 and not context.scheduler.state(context.lifecycleTasks.retire).pending)
 before = flights
 tick()
 assert(rebuilds == 1 and flights == before + 1 and context.stage == "probe")
-assert(context.lifecycleTasks.rebuild.spent == 1 and not context.lifecycleTasks.rebuild.pending)
+assert(
+    context.scheduler.state(context.lifecycleTasks.rebuild).spent == 1
+        and not context.scheduler.state(context.lifecycleTasks.rebuild).pending
+)
 assert(context.remainingSlots == context.scheduler.budget.capacity - 2)
 assert(#context.errors == 0, table.concat(context.errors, "\n"))

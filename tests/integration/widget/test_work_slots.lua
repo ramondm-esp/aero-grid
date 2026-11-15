@@ -312,4 +312,4 @@ context.panels = {
 fixture.tick(10)
 definition.background(context)
 assert(backgroundTurns == 2, "background continuation must resume in the same callback")
-assert(context.panels[1].backgroundTask.spent == 0)
+assert(context.scheduler.state(context.panels[1].backgroundTask).spent == 0)

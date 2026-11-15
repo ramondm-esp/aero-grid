@@ -65,7 +65,10 @@ untilState(function()
 end)
 local state = assert(context.locationDetails)
 assert(flights == before + 1 and state.latitude == 47 and state.longitude == 8)
-assert(context.locationTask.cost == context.scheduler.budget.capacity and not context.locationTask.pending)
+assert(
+    context.locationTask.cost == context.scheduler.budget.capacity
+        and not context.scheduler.state(context.locationTask).pending
+)
 assert(state.url == "https://www.google.com/maps/search/?api=1&query=47.000000,8.000000")
 
 -- A release without a preceding press on the overlay is not a tap; a long press closes it.
@@ -88,7 +91,11 @@ end)
 untilState(function()
     return not context.locationDetails
 end)
-assert(context.locationOverlay.hidden and not context.locationRequest and not context.locationTask.pending)
+assert(
+    context.locationOverlay.hidden
+        and not context.locationRequest
+        and not context.scheduler.state(context.locationTask).pending
+)
 assert(context.locationTask.cost == 1, "location close only reserves one slot")
 
 requestOpen()

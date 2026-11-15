@@ -1977,13 +1977,13 @@ end
 local function hostTurn(context)
     for _ = 1, 20 do
         definition.refresh(context)
-        if context.hostTask and context.hostTask.ran == context.scheduler.callbacks then
+        if context.hostTask and context.scheduler.state(context.hostTask).ran == context.scheduler.callbacks then
             if not context.lifecycleRequest then
                 return
             end
         end
         for _, task in pairs(context.lifecycleTasks or {}) do
-            if task.ran == context.scheduler.callbacks then
+            if context.scheduler.state(task).ran == context.scheduler.callbacks then
                 return
             end
         end

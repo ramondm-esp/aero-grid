@@ -63,11 +63,17 @@ local function measured(callback, context, draining)
         for _ = 1, 20 do
             local uiTask = context.uiTasks and context.uiTasks[context.uiRequest]
             if
-                not (context.hostTask and context.hostTask.refused == context.scheduler.callbacks)
+                not (
+                    context.hostTask
+                    and context.scheduler.state(context.hostTask).refused == context.scheduler.callbacks
+                )
                 and not context.optionsRequest
                 and not context.editorTransitionRequest
                 and not (context.modelSettingsUi and (context.modelSettingsUi.pending or context.modelSettingsUi.closing))
-                and not (context.uiRequest and (not uiTask or uiTask.ran ~= context.scheduler.callbacks))
+                and not (
+                    context.uiRequest
+                    and (not uiTask or context.scheduler.state(uiTask).ran ~= context.scheduler.callbacks)
+                )
             then
                 break
             end

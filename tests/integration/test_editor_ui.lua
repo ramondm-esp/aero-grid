@@ -125,11 +125,16 @@ local function refresh(event, touch, draining)
             if
                 not context.inputQueue
                 and not context.editorTransitionRequest
-                and not (context.inputTask and context.inputTask.refused == context.scheduler.callbacks)
-                and not (context.hostTask and context.hostTask.refused == context.scheduler.callbacks)
-                and not (context.menuTask and (context.menuTask.ran == context.scheduler.callbacks or context.menuTask.refused == context.scheduler.callbacks))
-                and not (context.lifecycleRequest and (not lifecycleTask or lifecycleTask.ran ~= context.scheduler.callbacks))
-                and not (context.uiRequest and (not uiTask or uiTask.ran ~= context.scheduler.callbacks))
+                and not (context.inputTask and context.scheduler.state(context.inputTask).refused == context.scheduler.callbacks)
+                and not (context.hostTask and context.scheduler.state(context.hostTask).refused == context.scheduler.callbacks)
+                and not (context.menuTask and (context.scheduler.state(context.menuTask).ran == context.scheduler.callbacks or context.scheduler.state(
+                    context.menuTask
+                ).refused == context.scheduler.callbacks))
+                and not (context.lifecycleRequest and (not lifecycleTask or context.scheduler.state(lifecycleTask).ran ~= context.scheduler.callbacks))
+                and not (
+                    context.uiRequest
+                    and (not uiTask or context.scheduler.state(uiTask).ran ~= context.scheduler.callbacks)
+                )
             then
                 break
             end

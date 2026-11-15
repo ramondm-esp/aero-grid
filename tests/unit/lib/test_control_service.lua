@@ -107,10 +107,10 @@ local function testPollingContinuationIsFair()
             return slots, false
         end,
     })
-    assert(queue.run(0, 2) == 2 and control.pending)
+    assert(queue.run(0, 2) == 2 and queue.state(control).pending)
     assert(table.concat(turns, ",") == "control,other")
-    assert(queue.run(1, 2) == 2 and control.pending)
-    assert(queue.run(2, 2) == 1 and not control.pending)
+    assert(queue.run(1, 2) == 2 and queue.state(control).pending)
+    assert(queue.run(2, 2) == 1 and not queue.state(control).pending)
     assert(table.concat(turns, ",") == "control,other,control,control,control")
 end
 

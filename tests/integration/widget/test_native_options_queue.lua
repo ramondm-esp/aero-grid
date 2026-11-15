@@ -59,7 +59,10 @@ assert(member.pending and factory.revision == revision + 1)
 assert(not context.editorSession and not context.editorStash and not context.editorTransitionRequest)
 assert(not context.modelSettingsRequest and not context.optionsRequest)
 assert(context.reloadState == "clear" and context.page and not context.page.cleared)
-assert(not context.optionsTask.pending, "option application must not retire/rebuild the page in the same callback")
+assert(
+    not context.scheduler.state(context.optionsTask).pending,
+    "option application must not retire/rebuild the page in the same callback"
+)
 
 context.flightTask = nil
 fixture.pump(context, 150)

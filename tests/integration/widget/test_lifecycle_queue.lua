@@ -43,7 +43,10 @@ noGrant(context, fixture.lvglMock.objects, function()
 end)
 definition.refresh(context)
 assert(#calls == 1 and calls[1].kind == "retire" and context.lifecycleRequest == "rebuild")
-assert(not context.lifecycleTasks.retire.pending, "retirement must not ask for a same-callback rebuild")
+assert(
+    not context.scheduler.state(context.lifecycleTasks.retire).pending,
+    "retirement must not ask for a same-callback rebuild"
+)
 noGrant(context, fixture.lvglMock.objects, function()
     definition.background(context)
     assert(#calls == 1 and context.reloadState == "rebuild")
@@ -55,15 +58,17 @@ noGrant(context, fixture.lvglMock.objects, function()
     definition.background(context)
     assert(loadSteps == 0 and context.stage == "probe")
 end)
-local spentBefore = context.lifecycleTasks.load and context.lifecycleTasks.load.spent or 0
+local spentBefore = context.lifecycleTasks.load and context.scheduler.state(context.lifecycleTasks.load).spent or 0
 for index = 1, 3 do
     definition.background(context)
     assert(loadSteps == index, "one full-capacity stage runs per callback")
     assert(context.remainingSlots == 0)
-    assert(context.lifecycleTasks.load.pending == (index < 3))
+    assert(context.scheduler.state(context.lifecycleTasks.load).pending == (index < 3))
 end
 assert(not context.stage and not context.lifecycleRequest)
-assert(context.lifecycleTasks.load.spent - spentBefore == 3 * context.scheduler.budget.capacity)
+assert(
+    context.scheduler.state(context.lifecycleTasks.load).spent - spentBefore == 3 * context.scheduler.budget.capacity
+)
 context.stage = "probe"
 local loadTask = context.lifecycleTasks.load
 context.inputPending = true
@@ -98,9 +103,9 @@ assert(reflowSteps == 0, "hidden callbacks must not advance reflow")
 definition.refresh(context)
 assert(context.lifecycleRequest == "reflow" and reflowSteps == 0)
 definition.refresh(context)
-assert(reflowSteps == 1 and context.lifecycleTasks.reflow.pending)
+assert(reflowSteps == 1 and context.scheduler.state(context.lifecycleTasks.reflow).pending)
 definition.refresh(context)
-assert(reflowSteps == 2 and not context.lifecycleTasks.reflow.pending)
+assert(reflowSteps == 2 and not context.scheduler.state(context.lifecycleTasks.reflow).pending)
 
 local retiredAt
 context.appRebuild = { retired = false }
@@ -116,7 +121,7 @@ context.dashboardLifecycle.advanceAppRebuild = function()
 end
 context.lifecycleRequest = "app rebuild"
 definition.refresh(context)
-assert(context.appRebuild.retired and not context.lifecycleTasks["app rebuild"].pending)
+assert(context.appRebuild.retired and not context.scheduler.state(context.lifecycleTasks["app rebuild"]).pending)
 definition.background(context)
 assert(context.appRebuild, "hidden callbacks must not advance App-mode reconstruction")
 definition.refresh(context)

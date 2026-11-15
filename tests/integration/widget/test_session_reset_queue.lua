@@ -55,24 +55,28 @@ end)
 context.scheduler.cursor = 1
 definition.refresh(context)
 assert(items == 8 and panelTurns == 0 and liveTurns == 0)
-assert(context.sessionResetTask.pending and context.remainingSlots == 0)
-assert(context.sessionResetTask.spent == context.scheduler.budget.capacity)
+assert(context.scheduler.state(context.sessionResetTask).pending and context.remainingSlots == 0)
+assert(context.scheduler.state(context.sessionResetTask).spent == context.scheduler.budget.capacity)
 fixture.tick(10)
 definition.background(context)
 assert(items == 10 and service.revision == 1 and service.due == now)
-assert(context.sessionResetTask.pending and panelTurns == 0)
+assert(context.scheduler.state(context.sessionResetTask).pending and panelTurns == 0)
 definition.refresh(context)
-assert(panelTurns == 1 and context.sessionResetTask.pending)
+assert(panelTurns == 1 and context.scheduler.state(context.sessionResetTask).pending)
 definition.background(context)
 assert(panelTurns == 2 and context.sessionResetPending)
 definition.refresh(context)
-assert(not context.sessionResetPending and not context.sessionResetJob and not context.sessionResetTask.pending)
+assert(
+    not context.sessionResetPending
+        and not context.sessionResetJob
+        and not context.scheduler.state(context.sessionResetTask).pending
+)
 assert(liveTurns == 0, "reset completion still owns its whole callback")
-assert(context.sessionResetTask.spent == 5 * context.scheduler.budget.capacity)
+assert(context.scheduler.state(context.sessionResetTask).spent == 5 * context.scheduler.budget.capacity)
 definition.refresh(context)
 assert(liveTurns == 2, "normal queued work resumes after reset completion")
 
-local runs = context.sessionResetTask.ran
+local runs = context.scheduler.state(context.sessionResetTask).ran
 context.sessionResetPending = true
 context.stage = "probe"
 context.lifecycleRequest = "load"
@@ -80,7 +84,7 @@ context.dashboardLoader.advanceLoad = function()
     context.stage = nil
 end
 definition.refresh(context)
-assert(context.sessionResetTask.ran == runs, "loading must block reset")
+assert(context.scheduler.state(context.sessionResetTask).ran == runs, "loading must block reset")
 assert(context.sessionResetPending and not context.stage)
 
 local flightTurns = 0

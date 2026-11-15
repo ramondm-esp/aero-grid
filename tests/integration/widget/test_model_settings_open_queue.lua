@@ -73,7 +73,10 @@ assert(flightSteps == flights + 1 and opened == 0, "settings opening must wait f
 definition.refresh(context)
 assert(flightSteps == flights + 1 and loads == 1 and opened == 1 and closed == 1 and restored == 1)
 assert(context.editorStash == draft and not context.editorSession and not context.modelSettingsRequest)
-assert(not context.modelSettingsOpenTask.pending, "modal construction waits for a separate advancement grant")
+assert(
+    not context.scheduler.state(context.modelSettingsOpenTask).pending,
+    "modal construction waits for a separate advancement grant"
+)
 
 context.modelSettingsUi, context.editorStash = nil, nil
 context.aeroMenuHandlers.modelSettings()

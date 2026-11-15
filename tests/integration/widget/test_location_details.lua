@@ -19,12 +19,12 @@ local function input(event, touch)
         if
             not context.inputQueue
             and not context.locationRequest
-            and not (context.hostTask and context.hostTask.refused == context.scheduler.callbacks)
+            and not (context.hostTask and context.scheduler.state(context.hostTask).refused == context.scheduler.callbacks)
             and not (
                 context.menuTask
                 and (
-                    context.menuTask.ran == context.scheduler.callbacks
-                    or context.menuTask.refused == context.scheduler.callbacks
+                    context.scheduler.state(context.menuTask).ran == context.scheduler.callbacks
+                    or context.scheduler.state(context.menuTask).refused == context.scheduler.callbacks
                 )
             )
         then

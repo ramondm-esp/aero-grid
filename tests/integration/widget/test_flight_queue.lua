@@ -71,7 +71,7 @@ owner.reset = function(_, filename)
 end
 context.scheduler.cursor = 1
 definition.refresh(context)
-assert(reset and not owner.documentLoaded and context.flightTask.pending)
+assert(reset and not owner.documentLoaded and context.scheduler.state(context.flightTask).pending)
 assert(context.remainingSlots == 7, "identity reset must defer document work until a full grant fits")
 definition.refresh(context)
 assert(owner.documentLoaded and context.remainingSlots == 0)

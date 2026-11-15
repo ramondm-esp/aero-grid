@@ -13,11 +13,13 @@
 ---@field minCost? integer Minimum grant for a variable-cost step, 1 to 8.
 ---@field due? integer Tick from which the task is eligible. Ignored while pending.
 ---@field ready? fun(task: AeroGridTask, now: integer, context: any): boolean Extra gate.
----@field verb? string Names the work in the consumption error message.
 ---@field failed? boolean Set by the host before a run, or by the scheduler after a failure.
----@field error? string
----@field pending? boolean Set by the scheduler while a step asked for another.
----@field spent? integer Slots charged so far.
+---@field error? string Set by the scheduler with `failed`.
+---
+--- The scheduler keeps its bookkeeping off the task; `state(task)` reads it.
+---@class AeroGridTaskState
+---@field pending? boolean The last step asked for another.
+---@field spent integer Slots charged so far.
 ---@field refused? integer Callback in which the task was denied slots or spun on free turns.
 ---@field denied? integer Segment in which the task did not fit its grant.
 ---@field spun? integer Callback in which the task was stopped after repeated free turns.
@@ -73,6 +75,24 @@ function scheduler.new(dependencies)
         callbacks = 0,
         segments = 0,
     }
+    -- Weak keys: a retired task is collectable once its owner drops it.
+    local records = setmetatable({}, { __mode = "k" })
+
+    local function record(task)
+        local state = records[task]
+        if not state then
+            state = { spent = 0 }
+            records[task] = state
+        end
+        return state
+    end
+
+    --- The scheduler's bookkeeping for a task, for diagnostics and tests. Read only.
+    ---@param task AeroGridTask
+    ---@return AeroGridTaskState
+    function self.state(task)
+        return record(task)
+    end
 
     --- Enrol one task for the coming run.
     function self.add(task)
@@ -92,8 +112,8 @@ function scheduler.new(dependencies)
         self.count = 0
     end
 
-    local function failTask(task, message)
-        task.failed, task.error, task.pending = true, message, false
+    local function failTask(task, state, message)
+        task.failed, task.error, state.pending = true, message, false
         if fail then
             fail(task, message)
         end
@@ -123,9 +143,9 @@ function scheduler.new(dependencies)
             -- Tasks that did not fit the last segment continue with the new
             -- allowance; tasks that spun on free turns wait for the next callback.
             for index = 1, count do
-                local task = tasks[index]
-                if task.denied == previous and task.spun ~= callback then
-                    task.refused, task.pending = nil, true
+                local state = record(tasks[index])
+                if state.denied == previous and state.spun ~= callback then
+                    state.refused, state.pending = nil, true
                 end
             end
         end
@@ -142,11 +162,12 @@ function scheduler.new(dependencies)
             for _ = 1, count do
                 local position = index
                 local task = tasks[position]
+                local state = record(task)
                 index = index % count + 1
                 if
                     not task.failed
-                    and task.refused ~= callback
-                    and (task.pending or (task.ran ~= callback and now >= (task.due or 0)))
+                    and state.refused ~= callback
+                    and (state.pending or (state.ran ~= callback and now >= (task.due or 0)))
                     and (not task.ready or task.ready(task, now, context))
                 then
                     local cost = task.cost
@@ -155,14 +176,14 @@ function scheduler.new(dependencies)
                     end
                     local granted = grant(cost, task.minCost, deferred and 0 or remaining)
                     if granted == nil then
-                        failTask(task, cost == "variable" and "invalid minimum slot cost" or "invalid slot cost")
+                        failTask(task, state, cost == "variable" and "invalid minimum slot cost" or "invalid slot cost")
                     else
                         if cost ~= 0 then
                             requested = requested + 1
                         end
                         if granted == 0 and cost ~= 0 then
                             denied = denied + 1
-                            task.refused, task.denied = callback, segment
+                            state.refused, state.denied = callback, segment
                             deferred = deferred or position
                         else
                             local ok, used, again = pcall(task.step, task, now, granted, context)
@@ -174,37 +195,34 @@ function scheduler.new(dependencies)
                                 again = false
                             end
                             if not ok then
-                                failTask(task, tostring(used))
+                                failTask(task, state, tostring(used))
                             elseif type(used) == "number" and used >= 0 and used <= granted and used % 1 == 0 then
                                 if type(again) ~= "boolean" then
                                     ok = false
-                                    failTask(task, (task.verb or "step") .. " continuation must be boolean")
+                                    failTask(task, state, "continuation must be boolean")
                                 else
                                     spent = used
                                 end
                             else
                                 ok = false
-                                failTask(
-                                    task,
-                                    (task.verb or "step") .. " consumption must be whole slots within the grant"
-                                )
+                                failTask(task, state, "consumption must be whole slots within the grant")
                             end
                             if spent == 0 then
-                                task.zeroTurns = task.ran == callback and (task.zeroTurns or 0) + 1 or 1
+                                state.zeroTurns = state.ran == callback and (state.zeroTurns or 0) + 1 or 1
                             else
-                                task.zeroTurns = 0
+                                state.zeroTurns = 0
                             end
-                            task.ran = callback
-                            task.spent = (task.spent or 0) + spent
+                            state.ran = callback
+                            state.spent = state.spent + spent
                             remaining = remaining - spent
                             if ok and again then
-                                task.pending = true
+                                state.pending = true
                                 progressed = true
-                                if task.zeroTurns >= turnSlots then
-                                    task.refused, task.spun = callback, callback
+                                if state.zeroTurns >= turnSlots then
+                                    state.refused, state.spun = callback, callback
                                 end
                             else
-                                task.pending = false
+                                state.pending = false
                             end
                             if charge and spent > 0 then
                                 charge(task, spent)
@@ -251,10 +269,11 @@ function scheduler.new(dependencies)
         local callback, segment, tasks = self.callbacks, self.segments, self.tasks
         for index = 1, self.count do
             local task = tasks[index]
+            local state = record(task)
             if
                 not task.failed
-                and task.spun ~= callback
-                and (task.pending and task.refused ~= callback or task.denied == segment)
+                and state.spun ~= callback
+                and (state.pending and state.refused ~= callback or state.denied == segment)
                 and (not task.ready or task.ready(task, now, context))
             then
                 return true

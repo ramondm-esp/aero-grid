@@ -167,7 +167,7 @@ calls = {}
 fixture.tick(10)
 definition.background(context)
 assert(#calls == 1 and calls[1].slots >= 3, "background must receive its declared minimum")
-assert(context.panels[1].backgroundTask.spent == 3, "background is charged what it reports")
+assert(context.scheduler.state(context.panels[1].backgroundTask).spent == 3, "background is charged what it reports")
 
 local dynamicBackgroundTurns, dynamicBackgroundGrants = 0, {}
 local dynamicBackground = {

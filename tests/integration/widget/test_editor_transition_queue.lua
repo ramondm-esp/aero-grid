@@ -51,7 +51,7 @@ assert(opened == 0 and flightSteps == 2, "editor entry must wait for full capaci
 definition.refresh(context)
 assert(opened == 1 and flightSteps == 2 and not context.editorTransitionRequest)
 local task = context.editorTransitionTask
-assert(not task.pending, "opening cannot advance editor construction in the same callback")
+assert(not context.scheduler.state(task).pending, "opening cannot advance editor construction in the same callback")
 context.flightFactory = nil
 
 local draft = { dirty = true }
@@ -65,7 +65,7 @@ for _ = 1, 10 do
     end
 end
 assert(closed == 1 and restored == 1 and context.editorStash == draft)
-assert(not context.editorSession and not task.pending)
+assert(not context.editorSession and not context.scheduler.state(task).pending)
 context.editorTransitionRequest = "open"
 fixture.lvglMock.setFullScreen(true)
 for _ = 1, 10 do

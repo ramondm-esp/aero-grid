@@ -33,11 +33,21 @@ assert(flights == 1 and #steps == 4, "small loading stages can share flight's ca
 assert(grants[1] == 1 and grants[2] == 2 and grants[3] == 1 and grants[4] == 1)
 assert(context.remainingSlots == 2 and context.stage == "panel-build")
 local task = context.lifecycleTasks.load
-assert(task.spent == 5 and task.cost == context.scheduler.budget.capacity and task.pending)
-assert(task.refused == context.scheduler.callbacks, "expensive construction cannot use a leftover small grant")
+assert(
+    context.scheduler.state(task).spent == 5
+        and task.cost == context.scheduler.budget.capacity
+        and context.scheduler.state(task).pending
+)
+assert(
+    context.scheduler.state(task).refused == context.scheduler.callbacks,
+    "expensive construction cannot use a leftover small grant"
+)
 definition.refresh(context)
 assert(#steps == 5 and not context.stage and grants[5] == context.scheduler.budget.capacity)
-assert(task.spent == 5 + context.scheduler.budget.capacity and not task.pending)
+assert(
+    context.scheduler.state(task).spent == 5 + context.scheduler.budget.capacity
+        and not context.scheduler.state(task).pending
+)
 context.stage = "services"
 broker.documentLoaded = false
 assert(not task.ready(task, getTime(), false), "service construction must wait for the model document")
@@ -95,7 +105,12 @@ for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagn
                     name = name .. "/" .. tostring(task.ui.build or task.ui.buildStage)
                 end
                 local count = 0
-                if slots > 0 and slots < host.scheduler.budget.capacity and task.hostWork then
+                if
+                    slots > 0
+                    and slots < host.scheduler.budget.capacity
+                    and type(task.owner) == "string"
+                    and not task.broker
+                then
                     debug.sethook(function()
                         count = count + 100
                     end, "", 100)

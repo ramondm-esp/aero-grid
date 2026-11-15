@@ -549,31 +549,43 @@ end
 local sharedDiagnosticsLog
 local flightFactories = {}
 
+--- Failure handlers: each task's `onError` records a failure on its owner.
+local function hostError(task)
+    task.host.runtimeFailed = true
+end
+
+local function initializeError(task, message)
+    local context = task.host
+    context.runtimeFailed = true
+    local member = context.flightFactory.members[context]
+    if member then
+        member.pending, member.error = false, message
+        context.flightFactory.revision = (context.flightFactory.revision or 0) + 1
+    end
+end
+
+local function flightError(task, message)
+    task.broker:error("detection", message)
+end
+
+local function serviceError(task)
+    task.owner.failed = true
+end
+
+local function panelError(task, message)
+    local context, entry = task.host, task.owner
+    if not entry.failed then
+        entry.failed, entry.error = true, message
+    end
+    if context.refreshOwner == entry then
+        context.refreshOwner = nil
+    end
+end
+
 local function newScheduler(context, schedulerModule)
     local ok, scheduler = pcall(schedulerModule.new, {
         fail = function(task, message)
-            local owner = task.owner
-            if task.flightWork then
-                task.broker:error("detection", message)
-            elseif task.hostWork then
-                context.runtimeFailed = true
-                if task.name == "initialize" then
-                    local member = context.flightFactory.members[context]
-                    if member then
-                        member.pending, member.error = false, message
-                        context.flightFactory.revision = (context.flightFactory.revision or 0) + 1
-                    end
-                end
-            elseif task.service then
-                owner.failed = true
-            else
-                if not owner.failed then
-                    owner.failed, owner.error = true, message
-                end
-                if context.refreshOwner == owner then
-                    context.refreshOwner = nil
-                end
-            end
+            task.onError(task, message)
             addError(context, task.name .. ": " .. message)
             context.schedulerFailed = true
         end,
@@ -641,7 +653,8 @@ local function create(zone, widgetOptions, path)
         context.scheduler.add({
             name = "startup background",
             owner = "startup background",
-            hostWork = true,
+            host = context,
+            onError = hostError,
             cost = 1,
             step = function()
                 context.root = lvgl.box({ x = 0, y = 0, w = zone.w, h = zone.h })
@@ -681,7 +694,7 @@ local function create(zone, widgetOptions, path)
         name = "initialize",
         owner = "initialize",
         host = context,
-        hostWork = true,
+        onError = initializeError,
         cost = context.scheduler.budget.slots,
         step = function()
             context.initializing = nil
@@ -1228,9 +1241,8 @@ local function enrolTasks(context, registry)
         if not task or task.registry ~= registry then
             task = {
                 name = instance.id,
-                verb = "update",
                 owner = instance,
-                service = true,
+                onError = serviceError,
                 registry = registry,
                 host = context,
                 step = serviceStep,
@@ -1250,8 +1262,8 @@ local function enrolTasks(context, registry)
             if not task then
                 task = {
                     name = entry.placement.id .. ": refresh",
-                    verb = "refresh",
                     owner = entry,
+                    onError = panelError,
                     host = context,
                     event = "refresh",
                     step = panelStep,
@@ -1267,8 +1279,8 @@ local function enrolTasks(context, registry)
             if not task then
                 task = {
                     name = entry.placement.id .. ": finish",
-                    verb = "finish",
                     owner = entry,
+                    onError = panelError,
                     host = context,
                     event = "finish",
                     cost = "variable",
@@ -1285,8 +1297,8 @@ local function enrolTasks(context, registry)
             if not task then
                 task = {
                     name = entry.placement.id .. ": background",
-                    verb = "background",
                     owner = entry,
+                    onError = panelError,
                     host = context,
                     event = "background",
                     step = panelStep,
@@ -2652,7 +2664,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
             flightTask = {
                 name = "flight",
                 owner = "flight",
-                flightWork = true,
+                onError = flightError,
                 broker = owner,
                 host = context,
                 step = pumpFlight,
@@ -2670,7 +2682,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                     name = "native options",
                     owner = "native options",
                     host = context,
-                    hostWork = true,
+                    onError = hostError,
                     cost = scheduler.budget.slots,
                     step = optionsStep,
                 }
@@ -2683,7 +2695,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                     name = "session reset",
                     owner = "session reset",
                     host = context,
-                    hostWork = true,
+                    onError = hostError,
                     cost = scheduler.budget.slots,
                     step = sessionResetStep,
                     ready = sessionResetReady,
@@ -2698,7 +2710,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         name = "menu",
                         owner = "menu",
                         host = context,
-                        hostWork = true,
+                        onError = hostError,
                         cost = scheduler.budget.slots,
                         step = menuStep,
                         ready = menuReady,
@@ -2713,7 +2725,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         name = "input",
                         owner = "input",
                         host = context,
-                        hostWork = true,
+                        onError = hostError,
                         step = inputStep,
                         ready = inputReady,
                     }
@@ -2731,7 +2743,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         name = "model settings open",
                         owner = "model settings open",
                         host = context,
-                        hostWork = true,
+                        onError = hostError,
                         cost = scheduler.budget.slots,
                         step = modelSettingsOpenStep,
                         ready = modelSettingsOpenReady,
@@ -2753,7 +2765,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         name = "editor transition",
                         owner = "editor transition",
                         host = context,
-                        hostWork = true,
+                        onError = hostError,
                         cost = scheduler.budget.slots,
                         step = editorTransitionStep,
                         ready = editorTransitionReady,
@@ -2786,7 +2798,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                             name = "log open",
                             owner = "log open",
                             host = context,
-                            hostWork = true,
+                            onError = hostError,
                             cost = scheduler.budget.slots,
                             step = logOpenStep,
                         }
@@ -2809,7 +2821,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                             name = "location details",
                             owner = "location details",
                             host = context,
-                            hostWork = true,
+                            onError = hostError,
                             step = locationStep,
                             ready = locationReady,
                         }
@@ -2831,7 +2843,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         owner = kind,
                         kind = kind,
                         host = context,
-                        hostWork = true,
+                        onError = hostError,
                         step = lifecycleStep,
                         ready = lifecycleReady,
                     }
@@ -2859,7 +2871,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         kind = kind,
                         ui = ui,
                         host = context,
-                        hostWork = true,
+                        onError = hostError,
                         step = uiStep,
                         ready = uiReady,
                     }
@@ -2879,7 +2891,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                     name = "host",
                     owner = "host",
                     host = context,
-                    hostWork = true,
+                    onError = hostError,
                     cost = scheduler.budget.slots,
                     step = advanceHost,
                 }

@@ -50,7 +50,7 @@ local chargedFlights = flights
 definition.refresh(context)
 assert(calls == 1 and flights == chargedFlights and #context.inputQueue == 1)
 assert(seen[1].event == 9401 and seen[1].owner == first, "consumed events cannot reach a later panel")
-assert(not context.inputTask.pending, "one grant processes one event, not the whole backlog")
+assert(not context.scheduler.state(context.inputTask).pending, "one grant processes one event, not the whole backlog")
 drain()
 assert(calls == 2 and seen[2].event == 9402, "refresh and exported input share FIFO ordering")
 first.consume = false

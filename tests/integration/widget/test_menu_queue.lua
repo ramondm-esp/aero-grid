@@ -11,7 +11,10 @@ local menu = context.aerogridMenu
 local advances, flightSteps = 0, 0
 local advance = context.aeroMenuModule.advance
 context.aeroMenuModule.advance = function(host)
-    assert(host.menuTask.ran ~= host.scheduler.callbacks, "advance is called before grant attribution")
+    assert(
+        host.scheduler.state(host.menuTask).ran ~= host.scheduler.callbacks,
+        "advance is called before grant attribution"
+    )
     assert(host.menuTask.cost == host.scheduler.budget.capacity)
     advances = advances + 1
     return advance(host)
@@ -31,7 +34,7 @@ definition.refresh(context)
 assert(flightSteps == 1 and advances == 0 and menu.pending, "menu must wait for a full-capacity pre-grant")
 definition.refresh(context)
 assert(flightSteps == 1 and advances == 1 and menu.open and not menu.pending)
-assert(not context.menuTask.pending, "menu transitions retain callback separation")
+assert(not context.scheduler.state(context.menuTask).pending, "menu transitions retain callback separation")
 context.flightFactory = nil
 definition.refresh(context)
 assert(advances == 1, "idle menu state must not enroll preparation work")
@@ -68,6 +71,6 @@ end
 fixture.lvglMock.setFullScreen(false)
 definition.refresh(context)
 assert(context.chromeRoot.hidden and context.stage == "probe", "chrome hiding stays queued even during loading")
-assert(context.menuTask.ran == context.scheduler.callbacks)
+assert(context.scheduler.state(context.menuTask).ran == context.scheduler.callbacks)
 definition.background(context)
 assert(not context.menuTask.ready(context.menuTask, getTime(), true))

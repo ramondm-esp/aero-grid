@@ -56,7 +56,7 @@ assert(flights == before + 1 and not context.logViewer, "opening must wait for i
 definition.refresh(context)
 local state = assert(context.logViewer)
 assert(flights == before + 1 and context.logOpenTask.cost == context.scheduler.budget.capacity)
-assert(not context.logOpenTask.pending and not context.logOpenRequest and state.prepareIndex)
+assert(not context.scheduler.state(context.logOpenTask).pending and not context.logOpenRequest and state.prepareIndex)
 untilState(function()
     return not state.prepareIndex
 end)
@@ -74,9 +74,11 @@ assert(state.inputs and state.index == position and state.offset == offset, "vie
 local task = context.uiTasks["log viewer"]
 context.scheduler.cursor = 1
 definition.refresh(context)
-assert(state.inputs and task.refused == context.scheduler.callbacks)
+assert(state.inputs and context.scheduler.state(task).refused == context.scheduler.callbacks)
 definition.refresh(context)
-assert(not state.inputs and task.cost == context.scheduler.budget.capacity and not task.pending)
+assert(
+    not state.inputs and task.cost == context.scheduler.budget.capacity and not context.scheduler.state(task).pending
+)
 
 state.closeButton.properties.press()
 assert(context.logViewer == state and state.closing and not context.logOverlay.hidden)
@@ -89,7 +91,7 @@ assert(context.logViewer == state, "hidden callbacks cannot mutate the log overl
 untilState(function()
     return not context.logViewer
 end)
-assert(context.logOverlay.hidden and not task.ui and not task.pending)
+assert(context.logOverlay.hidden and not task.ui and not context.scheduler.state(task).pending)
 assert(task.cost == 1, "closing must not retain the viewer's full-budget reservation")
 
 -- Retired buttons cannot close a later viewer that reused the overlay.

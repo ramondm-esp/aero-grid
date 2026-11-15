@@ -34,7 +34,10 @@ do
     local used, requested, denied = queue.run(12, 8, context)
     assert(table.concat(calls, ",") == "A,B,C,A,A")
     assert(used == 8 and requested == 5 and denied == 0)
-    assert(a.spent == 6 and not a.pending)
+    assert(queue.state(a).spent == 6 and not queue.state(a).pending)
+    for _, key in ipairs({ "spent", "pending", "refused", "denied", "spun", "ran", "zeroTurns" }) do
+        assert(rawget(a, key) == nil, "scheduler bookkeeping stays off the task: " .. key)
+    end
     assert(a.now == 12 and a.context == context and a.slots == 2)
 end
 
@@ -53,14 +56,14 @@ do
     local b = task("B", 1)
     local used, requested, denied = queue.run(0, 4)
     assert(table.concat(calls, ",") == "A,B")
-    assert(used == 3 and requested == 3 and denied == 1 and a.pending)
+    assert(used == 3 and requested == 3 and denied == 1 and queue.state(a).pending)
     assert(queue.cursor == 1)
     a.due, b.due = 100, 100
     queue.clear()
     queue.add(a)
     queue.add(b)
     assert(queue.run(1, 4) == 4)
-    assert(table.concat(calls, ",") == "A,B,A,A" and not a.pending)
+    assert(table.concat(calls, ",") == "A,B,A,A" and not queue.state(a).pending)
 end
 
 do
@@ -72,7 +75,7 @@ do
     local used, requested, denied = queue.run(0, 8)
     assert(table.concat(calls, ",") == "A,free,free")
     assert(used == 1 and requested == 4 and denied == 3)
-    assert(queue.cursor == 2 and a.pending)
+    assert(queue.cursor == 2 and queue.state(a).pending)
     queue.run(1, 8)
     assert(calls[4] == "large", "a deferred whole-budget task gets the first turn")
     queue.run(2, 8)
@@ -86,7 +89,7 @@ do
     local used, requested, denied = queue.run(0, 8)
     assert(table.concat(calls, ",") == "free,paid,free,free")
     assert(used == 8 and requested == 1 and denied == 0)
-    assert(free.spent == 0 and not free.pending)
+    assert(queue.state(free).spent == 0 and not queue.state(free).pending)
 end
 
 do
@@ -102,7 +105,7 @@ do
     local used, requested, denied = queue.run(0, 8)
     assert(table.concat(calls, ",") == "variable,fixed,variable")
     assert(used == 1 and requested == 3 and denied == 0)
-    assert(variable.spent == 0 and not variable.pending)
+    assert(queue.state(variable).spent == 0 and not queue.state(variable).pending)
 end
 
 do
@@ -115,7 +118,7 @@ do
     task("other", 3)
     local used, requested, denied = queue.run(0, 4)
     assert(table.concat(calls, ",") == "reserved,other")
-    assert(used == 4 and requested == 2 and denied == 0 and reserved.spent == 1)
+    assert(used == 4 and requested == 2 and denied == 0 and queue.state(reserved).spent == 1)
 end
 
 do
@@ -127,7 +130,7 @@ do
     end
     task("other", 2)
     assert(queue.run(0, 2) == 2)
-    assert(table.concat(calls, ",") == "reserved,other" and reserved.spent == 0)
+    assert(table.concat(calls, ",") == "reserved,other" and queue.state(reserved).spent == 0)
 end
 
 do
@@ -141,8 +144,8 @@ do
         end,
     }
     queue.add(reserved)
-    assert(queue.run(0, 2) == 0 and turns == 2 and reserved.pending)
-    assert(queue.run(1, 2) == 0 and turns == 4 and reserved.pending)
+    assert(queue.run(0, 2) == 0 and turns == 2 and queue.state(reserved).pending)
+    assert(queue.run(1, 2) == 0 and turns == 4 and queue.state(reserved).pending)
 end
 
 do
@@ -155,7 +158,7 @@ do
         return slots, self.turns == 1
     end
     assert(queue.run(0, 5) == 5)
-    assert(table.concat(calls, ",") == "A,A" and a.spent == 5)
+    assert(table.concat(calls, ",") == "A,A" and queue.state(a).spent == 5)
 end
 
 do
@@ -176,7 +179,7 @@ do
     assert(queue.run(0, 8) == 5)
     assert(table.concat(calls, ",") == "variable:8,fixed,variable:5")
     assert(table.concat(charges, ",") == "variable:2,fixed:1,variable:2")
-    assert(variable.spent == 4)
+    assert(queue.state(variable).spent == 4)
 end
 
 do
@@ -192,7 +195,7 @@ do
     end
     task("healthy", 1)
     assert(queue.run(0, 8) == 3)
-    assert(broken.failed and broken.error == "deliberate failure" and broken.spent == 2)
+    assert(broken.failed and broken.error == "deliberate failure" and queue.state(broken).spent == 2)
     assert(table.concat(calls, ",") == "healthy")
     queue.run(1, 8)
     assert(#failures == 1 and #calls == 2)
@@ -206,8 +209,8 @@ for _, invalid in ipairs({ false, -1, 1.5, 9, math.huge, 0 / 0, "1" }) do
         return invalid, true
     end
     assert(queue.run(0, 8) == 8)
-    assert(variable.failed and not variable.pending and variable.spent == 8)
-    assert(variable.error == "step consumption must be whole slots within the grant")
+    assert(variable.failed and not queue.state(variable).pending and queue.state(variable).spent == 8)
+    assert(variable.error == "consumption must be whole slots within the grant")
 end
 
 for _, invalid in ipairs({ false, -1, 1.5, 3, math.huge, 0 / 0, "1" }) do
@@ -217,8 +220,8 @@ for _, invalid in ipairs({ false, -1, 1.5, 3, math.huge, 0 / 0, "1" }) do
         return invalid, true
     end
     assert(queue.run(0, 8) == 2)
-    assert(fixed.failed and not fixed.pending and fixed.spent == 2)
-    assert(fixed.error == "step consumption must be whole slots within the grant")
+    assert(fixed.failed and not queue.state(fixed).pending and queue.state(fixed).spent == 2)
+    assert(fixed.error == "consumption must be whole slots within the grant")
 end
 
 do
@@ -264,10 +267,10 @@ do
     a.ready = function(self)
         return self.turns == 0
     end
-    assert(queue.run(0, 8) == 1 and a.pending)
+    assert(queue.run(0, 8) == 1 and queue.state(a).pending)
     assert(#calls == 1, "a pending task must still obey its readiness gate")
     a.ready = nil
-    assert(queue.run(1, 8) == 1 and not a.pending)
+    assert(queue.run(1, 8) == 1 and not queue.state(a).pending)
 end
 
 do
@@ -334,8 +337,8 @@ do
     local queue, _, task = fixture()
     local fixed = task("missing usage", 2)
     fixed.step = function() end
-    assert(queue.run(0, 8) == 2 and not fixed.failed and not fixed.pending)
-    assert(fixed.spent == 2, "a fixed step without consumption used its grant")
+    assert(queue.run(0, 8) == 2 and not fixed.failed and not queue.state(fixed).pending)
+    assert(queue.state(fixed).spent == 2, "a fixed step without consumption used its grant")
 end
 
 do
@@ -344,18 +347,17 @@ do
     variable.minCost = 1
     variable.step = function() end
     assert(queue.run(0, 8) == 8 and variable.failed)
-    assert(variable.error == "step consumption must be whole slots within the grant")
+    assert(variable.error == "consumption must be whole slots within the grant")
 end
 
 do
     local queue, _, task = fixture()
-    local fixed = task("named", 2)
-    fixed.verb = "finish"
+    local fixed = task("over grant", 2)
     fixed.step = function()
         return 3
     end
     queue.run(0, 8)
-    assert(fixed.error == "finish consumption must be whole slots within the grant")
+    assert(fixed.error == "consumption must be whole slots within the grant")
 end
 
 for _, continuation in ipairs({ 1, "yes" }) do
@@ -365,7 +367,7 @@ for _, continuation in ipairs({ 1, "yes" }) do
         return slots, continuation
     end
     assert(queue.run(0, 8) == 2 and fixed.failed)
-    assert(fixed.error == "step continuation must be boolean")
+    assert(fixed.error == "continuation must be boolean")
 end
 
 do
@@ -375,7 +377,7 @@ do
         return 0, "bad"
     end
     assert(queue.run(0, 8) == 2 and fixed.failed)
-    assert(fixed.spent == 2, "an invalid continuation must not refund its grant")
+    assert(queue.state(fixed).spent == 2, "an invalid continuation must not refund its grant")
 end
 
 do
@@ -418,7 +420,7 @@ do
     queue.clear()
     queue.add(free)
     queue.run(1, 8)
-    assert(free.pending and free.refused == queue.callbacks)
+    assert(queue.state(free).pending and queue.state(free).refused == queue.callbacks)
     assert(not queue.more(1), "a task stopped after repeated free turns waits for the next callback")
 end
 

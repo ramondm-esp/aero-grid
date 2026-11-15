@@ -36,7 +36,10 @@ context.modelSettingsUiModule = {
     end,
 }
 definition.refresh(context)
-assert(steps == 0 and context.menuTask.ran == context.scheduler.callbacks, "menu transition gets its own grant")
+assert(
+    steps == 0 and context.scheduler.state(context.menuTask).ran == context.scheduler.callbacks,
+    "menu transition gets its own grant"
+)
 noGrant(context, fixture.lvglMock.objects, function()
     definition.refresh(context)
     definition.background(context)
@@ -45,13 +48,16 @@ end)
 definition.background(context)
 assert(steps == 1 and inputs == 0, "hidden modal work must not handle foreground input")
 local modelTask = context.uiTasks["model settings"]
-assert(modelTask.pending, "settings fields continue when the grant is used up")
+assert(context.scheduler.state(modelTask).pending, "settings fields continue when the grant is used up")
 definition.refresh(context)
 definition.refresh(context)
 assert(steps == 3 and not context.uiRequest and not context.modelSettingsUi.build)
 definition.refresh(context, 991)
 assert(not context.inputQueue and steps == 3 and context.modelSettingsUi.closing)
-assert(context.inputTask.ran == context.scheduler.callbacks, "modal input gets a separate input grant")
+assert(
+    context.scheduler.state(context.inputTask).ran == context.scheduler.callbacks,
+    "modal input gets a separate input grant"
+)
 definition.refresh(context)
 assert(not context.modelSettingsUi and not context.inputQueue and steps == 4)
 assert(not modelTask.ui, "closed modal objects must not stay reachable through a cached task")
@@ -123,14 +129,14 @@ assert(flightSteps == 1 and steps == 4, "flight's charged turn must defer the fu
 definition.refresh(context)
 assert(flightSteps == 1 and steps == 5, "the deferred viewer gets first turn next callback")
 local viewerTask = context.uiTasks["log viewer"]
-assert(viewerTask.pending)
+assert(context.scheduler.state(viewerTask).pending)
 context.inputPending = true
 assert(not viewerTask.ready(viewerTask, getTime(), false), "input must preempt log preparation")
 context.inputPending = false
 context.flightFactory = nil
 definition.refresh(context)
 definition.refresh(context)
-assert(steps == 7 and not context.uiRequest and not viewerTask.pending)
+assert(steps == 7 and not context.uiRequest and not context.scheduler.state(viewerTask).pending)
 
 -- A native close can invalidate a retained request before its next grant.
 context.uiRequest = "log viewer"
