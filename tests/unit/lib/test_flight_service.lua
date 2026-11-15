@@ -11,6 +11,30 @@ local modules = {
     smart = load("lib/smart_flight.lua"),
 }
 
+--- Run one tick the way a widget callback does: setup, then each ready
+--- broker task with a full grant, continuing a task that asks for more.
+--- The second pass checks that nothing runs twice in a tick.
+local function pump(owner, now)
+    local filename = owner:identity()
+    if filename ~= owner.filename then
+        owner:reset(filename)
+    end
+    for _ = 1, 2 do
+        owner:setup(now, true)
+        local tasks = owner:tasks()
+        for index = 1, #tasks do
+            local task = tasks[index]
+            if now >= (task.due or 0) and task.ready(task, now) then
+                local turns, _, again = 0, nil, true
+                while again and turns < 8 do
+                    turns = turns + 1
+                    _, again = task.step(task, now, 8)
+                end
+            end
+        end
+    end
+end
+
 local function fixture(cadence)
     local radio = {
         now = 0,
@@ -145,8 +169,7 @@ local function fixture(cadence)
     local function step(count)
         for _ = 1, count or 1 do
             radio.now = radio.now + (cadence or 20)
-            owner:tick(radio.now)
-            owner:tick(radio.now)
+            pump(owner, radio.now)
         end
     end
     return owner, radio, step, first, second, participant
@@ -219,8 +242,6 @@ do
     local function pump(count)
         for _ = 1, count do
             step()
-            owner:pollReset(radio.now)
-            owner:pollReset(radio.now)
         end
     end
     local epoch = owner.epoch
@@ -353,7 +374,7 @@ owner, radio, step = fixture()
 radio.arms[1] = true
 step(3)
 radio.now = radio.now + 101
-owner:tick(radio.now)
+pump(owner, radio.now)
 step(2)
 equal(radio.writes, 0)
 step(15)
@@ -361,7 +382,7 @@ equal(radio.writes, 1)
 radio.arms[1] = false
 step(2)
 radio.now = radio.now + 200
-owner:tick(radio.now)
+pump(owner, radio.now)
 equal(owner.view.active, true, "unobserved disarm grace cannot complete")
 step(15)
 equal(owner.view.active, false)
@@ -444,7 +465,7 @@ owner, radio, step = fixture()
 step(3)
 assert(owner.session.groundAt)
 radio.now = radio.now + 200
-owner:tick(radio.now)
+pump(owner, radio.now)
 equal(#radio.commands, 0, "an observation gap must restart idle-output disarm confirmation")
 step(15)
 equal(#radio.commands, 1, "continuous reliable disarm can initialize the idle output")
@@ -684,7 +705,7 @@ step(4)
 radio.samples[113].value = 4
 step(6)
 radio.now = radio.now + 101
-owner:tick(radio.now)
+pump(owner, radio.now)
 equal(owner.session.altitudeSince, nil, "scheduling gaps reset the Smart hold")
 equal(owner.session.altitudeReference, nil, "unobserved arm cycles cannot inherit an old reference")
 step(20)
@@ -692,3 +713,30 @@ equal(radio.writes, 0)
 step(150)
 equal(radio.writes, 1)
 equal(owner.view.reason, "standard")
+
+-- Broker tasks need no same-callback setup to poll, and decide once per setup.
+owner, radio, step = fixture()
+owner:setDocument({ revision = 2, flight = settings })
+step(45)
+local decision, poll
+for _, task in ipairs(owner:tasks()) do
+    if task.name == "flight.decide" then
+        decision = task
+    elseif task.name == "flight.control" then
+        poll = poll or task
+    end
+end
+assert(decision and poll)
+radio.now = radio.now + 100
+assert(poll.ready(poll, radio.now), "a due poll runs without this callback's setup")
+poll.step(poll, radio.now, 8)
+assert(not decision.ready(decision, radio.now), "decide waits for a setup after its last decision")
+owner:setup(radio.now, true)
+for _, task in ipairs(owner:tasks()) do
+    if task ~= decision and radio.now >= task.due and task.ready(task, radio.now) then
+        task.step(task, radio.now, 8)
+    end
+end
+assert(decision.ready(decision, radio.now), "a fresh setup with polled readings lets detection decide")
+decision.step(decision, radio.now, 8)
+assert(not decision.ready(decision, radio.now + 1))

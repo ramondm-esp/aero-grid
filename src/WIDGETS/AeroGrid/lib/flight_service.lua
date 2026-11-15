@@ -227,7 +227,7 @@ function broker:reset(filename)
     self.readyAfterDisarmAt = nil
     self.resetCondition, self.resetRuntime, self.resetFeed, self.resetValue, self.resetPolledAt =
         nil, nil, nil, nil, nil
-    self.nextPumpAt = nil
+    self.setupAt, self.detecting, self.decidedAt, self.taskList = nil, nil, nil, nil
     for key in pairs(self.state) do
         self.state[key] = nil
     end
@@ -437,12 +437,13 @@ function broker:resetSession(now)
     end
 end
 
---- The reset input has its own poller, including when flight detection is dormant.
-function broker:pollReset(now)
+--- The reset input has its own poller, including when flight detection is
+--- dormant. Setup keeps the poller in step with the configured condition.
+function broker:syncReset(now)
     local condition = self.document and self.document.sessionReset or ""
     if condition ~= self.resetCondition then
         self.resetCondition, self.resetRuntime, self.resetFeed, self.resetValue = condition, nil, nil, nil
-        self.resetPolledAt = nil
+        self.taskList = nil
     end
     if condition == "" then
         if self.errors.reset then
@@ -451,26 +452,25 @@ function broker:pollReset(now)
         end
         return
     end
-    if self.resetPolledAt == now then
-        return
-    end
-    self.resetPolledAt = now
     if not self.resetRuntime then
         local runtime = self.support.runtime(self.env)
         local control = self.modules.control.new(self.env, self.support, runtime)
         self.support.register(runtime, control, now)
         self.resetFeed = control:switch(condition)
-        self.resetRuntime = runtime
-    end
-    local id, message = self.support.update(self.resetRuntime, now)
-    if message then
-        self.resetValue = nil
-        error(tostring(id) .. ": " .. message)
-    end
-    local feed = self.resetFeed
-    if self.resetRuntime.byId.control.failed or not reliable(feed, now) then
+        self.resetRuntime, self.taskList = runtime, nil
+    elseif self.resetRuntime.byId.control.failed then
         self.resetValue = nil
         self:error("reset", "Session reset switch unavailable: " .. condition)
+    end
+end
+
+--- Read the reset switch right after its poll, so a press is never decided
+--- on a stale sample.
+function broker:readReset(now)
+    local feed = self.resetFeed
+    if not reliable(feed, now) then
+        self.resetValue = nil
+        self:error("reset", "Session reset switch unavailable: " .. self.resetCondition)
         return
     end
     if self.errors.reset then
@@ -557,6 +557,7 @@ function broker:attach(proposal, signature, now)
         self.readyAfterDisarm = true
     end
     self.runtime, self.smartRuntime, self.session, self.signature = runtime, smartRuntime, session, signature
+    self.taskList = nil
     if self.errors.detection then
         self.errors.detection, self.state.detectionError = nil, nil
         self.state.diagnosticRevision = (self.state.diagnosticRevision or 0) + 1
@@ -607,15 +608,8 @@ function broker:flushOutput(now)
     end
 end
 
-function broker:tick(now, filename)
-    filename = filename or self:identity()
-    if filename ~= self.filename then
-        self:reset(filename)
-    end
-    if self.pumpedAt == now then
-        return
-    end
-    self.pumpedAt = now
+--- Resolve the configuration and attach detection before this tick's polls.
+function broker:prepare(now)
     local proposal, signature, status = self:proposals(now)
     self.state.status = self.loadError and "error" or status
     self.state.persistenceError = self.loadError
@@ -639,23 +633,15 @@ function broker:tick(now, filename)
             return
         end
     end
+    if not self.session and self.factory and status == "unconfigured" then
+        self.dormantRevision = self.factory.revision
+    end
+end
+
+--- Advance detection from the readings this tick's polls took.
+function broker:decide(now)
+    local proposal, signature = self:proposals(now)
     local session = self.session
-    if not session then
-        if self.factory and status == "unconfigured" then
-            self.dormantRevision = self.factory.revision
-        end
-        return
-    end
-    local id, message = self.support.update(self.runtime, now)
-    if message then
-        self:error("detection", tostring(id) .. ": " .. message)
-    end
-    if self.smartRuntime then
-        id, message = self.support.update(self.smartRuntime, now)
-        if message then
-            self:error("detection", tostring(id) .. ": " .. message)
-        end
-    end
     session.controlAvailable = not self.runtime.byId.control.failed
     session.smartAvailable = not (self.smartRuntime and self.smartRuntime.byId.smart.failed)
     session.detectionAvailable = session.controlAvailable and not self.runtime.byId.telemetry.failed
@@ -674,7 +660,7 @@ function broker:tick(now, filename)
         end
     end
     self.lastTick = now
-    active = session.phase == "active" or session.phase == "ending"
+    local active = session.phase == "active" or session.phase == "ending"
     if
         self.readyAfterDisarm
         and reliable(session.arm, now)
@@ -736,6 +722,142 @@ function broker:tick(now, filename)
     end
     self.state.flightId, self.state.count = session.flightId, session.feed.raw
     self.state.revision = self.state.revision + 1
+end
+
+--- Prepare this tick's flight work once, whichever widget reaches it first.
+--- `detect` is false while detection is dormant; the reset poller still runs.
+function broker:setup(now, detect)
+    if self.setupAt == now then
+        return
+    end
+    self.setupAt, self.detecting = now, detect
+    local ok, message = pcall(self.syncReset, self, now)
+    if not ok then
+        self:error("reset", message)
+    end
+    if detect then
+        ok, message = pcall(self.prepare, self, now)
+        if not ok then
+            self:error("detection", message)
+        end
+    end
+end
+
+local NONE = {}
+
+-- Runtimes polled by the broker's tasks, in ring order.
+local RUNTIMES = { "resetRuntime", "runtime", "smartRuntime" }
+
+--- A poll runs while its runtime is current; detection polls also need
+--- detection to be active. Setup need not share the callback.
+local function pollReady(task, now)
+    local owner, instance = task.broker, task.owner
+    task.cost, task.minCost = instance.updateCost, instance.updateMinCost
+    return owner[task.field] == task.registry
+        and (owner.detecting or task.field == "resetRuntime")
+        and not instance.failed
+        and instance.count ~= 0
+end
+
+local function pollUpdate(task, now, slots)
+    local used, again = task.broker.support.step(task, now, slots)
+    if task.field == "resetRuntime" then
+        task.broker:readReset(now)
+    end
+    return used, again
+end
+
+local function pollError(task, message)
+    local owner = task.broker
+    task.owner.failed = true
+    if task.field == "resetRuntime" then
+        owner.resetValue = nil
+    end
+    owner:error(task.kind, task.owner.id .. ": " .. tostring(message))
+end
+
+--- A failed poll retires its service and reports a flight error; it never
+--- fails the shared task, which other widgets' schedulers also run.
+local function pollStep(task, now, slots)
+    local ok, used, again = pcall(pollUpdate, task, now, slots)
+    if not ok then
+        pollError(task, used)
+        return slots, false
+    end
+    return used, again
+end
+
+--- Detection decides at most once per setup, after any due poll has taken
+--- its reading.
+local function decideReady(task, now)
+    local owner = task.broker
+    if not owner.detecting or not owner.session or owner.decidedAt == owner.setupAt then
+        return false
+    end
+    for field = 2, #RUNTIMES do
+        local runtime = owner[RUNTIMES[field]]
+        local order = runtime and runtime.order or NONE
+        for index = 1, #order do
+            local instance = order[index]
+            if not instance.failed and instance.count ~= 0 and now >= instance.due then
+                return false
+            end
+        end
+    end
+    -- Between decisions a turn only flushes queued output; without any it is free.
+    local last = owner.lastTick
+    task.cost = (owner.output or not last or now < last or now - last >= 20) and 1 or 0
+    return true
+end
+
+local function decideStep(task, now)
+    local owner = task.broker
+    task.due, owner.decidedAt = now + 1, owner.setupAt
+    local ok, message = pcall(owner.decide, owner, now)
+    if not ok then
+        owner:error("detection", message)
+    end
+end
+
+--- The broker's scheduler tasks: one per polled service, then the decision.
+--- They are shared by every member widget's scheduler; each poll's `due`
+--- keeps a tick from running it twice.
+function broker:tasks()
+    local list = self.taskList
+    if list then
+        return list
+    end
+    list = {}
+    for _, field in ipairs(RUNTIMES) do
+        local runtime = self[field]
+        if runtime then
+            for _, instance in ipairs(runtime.order) do
+                list[#list + 1] = {
+                    name = "flight." .. instance.id,
+                    owner = instance,
+                    registry = runtime,
+                    field = field,
+                    kind = field == "resetRuntime" and "reset" or "detection",
+                    broker = self,
+                    due = instance.due,
+                    ready = pollReady,
+                    step = pollStep,
+                    onError = pollError,
+                }
+            end
+        end
+    end
+    -- Only a session has anything to decide; attach and reset rebuild the list.
+    if self.session then
+        local decision = self.decision
+        if not decision then
+            decision = { name = "flight.decide", owner = self, broker = self, ready = decideReady, step = decideStep }
+            self.decision = decision
+        end
+        list[#list + 1] = decision
+    end
+    self.taskList = list
+    return list
 end
 
 function flight.new(env, support, runtime)

@@ -19,7 +19,13 @@ context.aeroMenuModule.advance = function(host)
     advances = advances + 1
     return advance(host)
 end
-local broker = { documentLoaded = true, filename = menu.modelFilename }
+local broker = {
+    documentLoaded = true,
+    filename = menu.modelFilename,
+    tasks = function()
+        return {}
+    end,
+}
 context.flightFactory = { broker = broker }
 context.flightTask = {
     broker = broker,

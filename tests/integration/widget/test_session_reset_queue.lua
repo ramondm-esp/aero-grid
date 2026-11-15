@@ -99,8 +99,11 @@ context.flightFactory = {
         identity = function()
             return "model"
         end,
-        tick = function()
+        setup = function()
             flightTurns = flightTurns + 1
+        end,
+        tasks = function()
+            return {}
         end,
     },
 }

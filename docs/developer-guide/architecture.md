@@ -233,7 +233,10 @@ incompatible subscriptions require a rebuild.
 ## Shared flight tracking
 
 The factory-scoped broker in `flight_service.lua` owns a separate non-UI
-Control/Telemetry runtime and optional Smart sensor poller. Any live widget callback can pump it. Dashboard
+Control/Telemetry runtime and optional Smart sensor poller. Each live widget
+enrols the broker's setup, one task per polled service and a decision task in
+its ring. These tasks are shared, so each runs at most once per tick, whichever
+widget reaches it first. Dashboard
 registrations are weakly held; rebuilds mark proposals pending before replacing
 them. Unanimous effective arm/configuration proposals are required, not the
 first caller's settings. Saved model Armed overrides every declaration. A qualified session

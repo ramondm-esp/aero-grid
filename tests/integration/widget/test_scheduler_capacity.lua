@@ -21,10 +21,8 @@ fixture.pump(context, 6)
 loadScript = originalLoadScript
 local definition = fixture.module("main.lua")
 assert(context.scheduler.budget.capacity == 12)
-assert(context.servicesModule.SLOTS == 8 and context.scheduler.budget.slots == 8)
+assert(context.scheduler.budget.slots == 8)
 assert(context.panelHost.SLOTS == 8)
-assert(context.servicesModule.grant(8, 12) == 8)
-assert(not pcall(context.servicesModule.grant, 9, 12))
 local panel = { id = "test", apiVersion = 1, create = function() end, refreshCost = 12 }
 assert(not context.panelHost.validateModule(panel, "test"))
 panel.refreshCost = 13

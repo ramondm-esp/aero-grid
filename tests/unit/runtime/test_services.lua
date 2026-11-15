@@ -35,9 +35,9 @@ local function testSnapshotsAreImmutable()
     assertEqual(getmetatable(view), false, "the snapshot exposed its metatable")
 end
 
---- A service update is charged to the same instruction budget as everything
---- else, so the registry must serve exactly one due service per cycle, skip
---- services nothing subscribed to, and retire one that raises.
+--- Registration staggers services, and one scheduler step updates one
+--- service: it moves the due tick, counts the update, and publishes a
+--- revision only when the update completes.
 local function testServiceScheduling()
     local function fake(id, interval, behavior)
         return {
@@ -67,32 +67,20 @@ local function testServiceScheduling()
     assertEqual(second.due, 1)
     assertEqual(third.due, 2)
 
-    assertEqual(services.update(runtime, 0), "a")
-    assertEqual(services.update(runtime, 0), nil, "two services ran in one cycle")
-    assertEqual(services.update(runtime, 1), "b")
-    assertEqual(services.update(runtime, 2), "c")
+    local task = { owner = first, registry = runtime }
+    services.step(task, 0, 1)
     assertEqual(first.updates, 1)
     assertEqual(first.revision, 1)
+    assertEqual(first.due, 10)
+    assertEqual(task.due, 10, "the task did not follow the service's due tick")
+    assertEqual(runtime.updates, 1)
 
-    -- Nothing subscribed means nothing is read.
-    local idle = fake("idle", 10)
-    idle.count = 0
-    services.register(runtime, idle, 0)
-    for step = 3, 40 do
-        services.update(runtime, step)
-    end
-    assertEqual(idle.updates, 0, "an unsubscribed service was polled")
-
-    -- A service that raises is reported once and then retired.
-    local broken = services.runtime(services.environment({}))
+    -- A raising update propagates to the scheduler without a revision.
     local bad = fake("bad", 10, "raise")
-    services.register(broken, bad, 0)
-    local id, updateError = services.update(broken, 0)
-    assertEqual(id, "bad")
-    assert(string.match(tostring(updateError), "bad failed"), tostring(updateError))
+    services.register(runtime, bad, 0)
+    local ok, updateError = pcall(services.step, { owner = bad, registry = runtime }, 0, 1)
+    assert(not ok and string.match(tostring(updateError), "bad failed"), tostring(updateError))
     assertEqual(bad.revision, 0, "a failed update counted as a revision")
-    assertEqual(services.update(broken, 100), nil, "a failed service ran again")
-    assertEqual(bad.updates, 1)
 end
 
 --- A text sensor is a reading whose value is a string.

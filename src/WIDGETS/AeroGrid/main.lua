@@ -1233,15 +1233,6 @@ local function serviceReady(task, _, hidden)
     return not task.host.servicesHold and not instance.failed and instance.count ~= 0
 end
 
-local function serviceStep(task, now, slots)
-    local instance, registry = task.owner, task.registry
-    instance.due = now + instance.interval
-    registry.updates = registry.updates + 1
-    local used, again = instance:update(now, slots)
-    instance.revision = instance.revision + 1
-    return used, again
-end
-
 --- Whether a panel's finishing work is ready now; it then runs before refreshes resume.
 local function finishPending(context, entry)
     local module = entry.module
@@ -1335,7 +1326,7 @@ local NONE = {}
 --- Held owners wait for the next callback; a hold that starts later in the
 --- callback is seen by the ready checks.
 ---@param context AeroGridContext
-local function enrolTasks(context, registry)
+local function enrolTasks(context, registry, support)
     local scheduler = context.scheduler
     local order = context.servicesHold and NONE or registry.order
     for index = 1, #order do
@@ -1349,7 +1340,7 @@ local function enrolTasks(context, registry)
                     onError = serviceError,
                     registry = registry,
                     host = context,
-                    step = serviceStep,
+                    step = support.step,
                     ready = serviceReady,
                 }
                 instance.task = task
@@ -1466,7 +1457,7 @@ end
 local function runTasks(context, hidden)
     local registry, support = context.serviceRuntime, context.servicesModule
     if registry and support then
-        enrolTasks(context, registry)
+        enrolTasks(context, registry, support)
     end
 
     -- Extra segments run past EdgeTX's per-callback limit in the same
@@ -1480,7 +1471,7 @@ local function flightReady(task)
 end
 
 local function pumpFlight(task, now, granted)
-    local context, inputPending = task.host, task.host.inputPending
+    local context = task.host
     local owner = context.flightFactory and context.flightFactory.broker
     if not owner then
         return
@@ -1549,49 +1540,8 @@ local function pumpFlight(task, now, granted)
     if (context.stage or context.reloadState) and not owner.session and not resetConfigured then
         return
     end
-    if resetConfigured or owner.resetRuntime or owner.errors.reset then
-        local resetOk, resetError = pcall(owner.pollReset, owner, now)
-        if not resetOk then
-            owner:error("reset", resetError)
-        end
-    end
-    if not owner.session and owner.dormantRevision == context.flightFactory.revision then
-        if not owner.state.resetError and not context.flightErrorText then
-            return
-        end
-    end
-    if owner.smartRuntime then
-        if inputPending or context.flightDashboardDue then
-            context.flightDashboardDue = nil
-            return
-        end
-        if owner.lastTick and now >= owner.lastTick and now < (owner.nextPumpAt or 0) then
-            return
-        end
-    end
-    local ok, message = pcall(owner.tick, owner, now, filename)
-    if not ok then
-        owner:error("detection", message)
-    end
-    -- Share ordinary polling capacity, not whole chart callbacks. Construction
-    -- still needs its own slice, with a fair turn for each widget's UI work.
-    local reserved = false
-    if owner.smartRuntime then
-        owner.nextPumpAt = now + 10
-        reserved = not not (
-            context.stage
-            or context.reloadState
-            or context.editorUi
-            or context.modelSettingsUi
-            or context.logViewer
-            or context.appRebuild
-            or context.reflowIndex
-        )
-        context.flightDashboardDue = reserved or nil
-        if reserved then
-            closeDashboard(context)
-        end
-    end
+    -- The broker's own tasks poll and decide after this setup.
+    owner:setup(now, owner.session or owner.dormantRevision ~= context.flightFactory.revision)
     local state = owner.view
     if
         context.flightReportedRevision == (state.diagnosticRevision or 0)
@@ -2885,6 +2835,10 @@ local function runCallback(context, hidden, widgetEvent, touchState)
     context.scheduler.clear()
     if flightTask then
         context.scheduler.add(flightTask)
+        local tasks = owner:tasks()
+        for index = 1, #tasks do
+            context.scheduler.add(tasks[index])
+        end
     end
     enrolHost(context, hidden)
     runTasks(context, hidden)

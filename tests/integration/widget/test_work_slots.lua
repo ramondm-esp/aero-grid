@@ -260,7 +260,10 @@ context.flightFactory = {
         errors = {},
         state = {},
         view = { diagnosticRevision = 0, epoch = 1 },
-        tick = function() end,
+        setup = function() end,
+        tasks = function()
+            return {}
+        end,
     },
 }
 context.flightReportedRevision, context.flightReportedEpoch = 0, 1

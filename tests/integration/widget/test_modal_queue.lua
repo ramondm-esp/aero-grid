@@ -112,7 +112,14 @@ assert(context.uiRequest == "log viewer" and steps == 5, "routing and preparatio
 definition.background(context)
 assert(steps == 5, "hidden callbacks must not prepare log text")
 
-local broker, flightSteps = { documentLoaded = true, filename = context.aerogridMenu.modelFilename }, 0
+local broker = {
+    documentLoaded = true,
+    filename = context.aerogridMenu.modelFilename,
+    tasks = function()
+        return {}
+    end,
+}
+local flightSteps = 0
 context.flightFactory = { broker = broker }
 context.flightTask = {
     broker = broker,

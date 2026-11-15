@@ -180,8 +180,9 @@ local queued = first.panels[1].instance
 queued.columnConsumers[1]:sample(queued.session.elapsed, 99)
 assert(#queued.columnConsumers[1].pending > 0)
 local activeCharts, activeObjects = {}, {}
-local objectCount = #fixture.lvglMock.objects
 for _, context in ipairs({ first, second }) do
+    -- Charts may still be filling their columns; only the reset must not add any.
+    local objectCount = #fixture.lvglMock.objects
     for _, entry in ipairs(context.panels) do
         activeCharts[entry.instance] = entry.instance.columnRenderer
     end

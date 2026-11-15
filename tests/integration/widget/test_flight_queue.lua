@@ -20,9 +20,12 @@ local owner = {
         calls[#calls + 1] = "identity"
         return "model"
     end,
-    tick = function()
-        assert(context.flightTask.cost == 1, "ordinary flight work requests one slot before ticking")
-        calls[#calls + 1] = "tick"
+    setup = function()
+        assert(context.flightTask.cost == 1, "ordinary flight work requests one slot before setup")
+        calls[#calls + 1] = "setup"
+    end,
+    tasks = function()
+        return {}
     end,
 }
 context.flightFactory = { broker = owner }
@@ -39,10 +42,10 @@ context.dashboardLoader.advanceLoad = function()
 end
 context.scheduler.cursor = 1
 definition.refresh(context)
-assert(table.concat(calls, ",") == "identity,tick")
+assert(table.concat(calls, ",") == "identity,setup")
 assert(context.stage == "probe" and context.remainingSlots == 7)
 definition.refresh(context)
-assert(table.concat(calls, ",") == "identity,tick,load", "a full-capacity host turn must defer flight entirely")
+assert(table.concat(calls, ",") == "identity,setup,load", "a full-capacity host turn must defer flight entirely")
 assert(context.remainingSlots == 0 and not context.stage)
 
 owner.documentLoaded = false

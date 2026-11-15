@@ -27,7 +27,13 @@ context.editorUiModule = {
         context.editorUi = nil
     end,
 }
-local broker = { documentLoaded = true, filename = context.aerogridMenu.modelFilename }
+local broker = {
+    documentLoaded = true,
+    filename = context.aerogridMenu.modelFilename,
+    tasks = function()
+        return {}
+    end,
+}
 context.flightFactory = { broker = broker }
 context.flightTask = {
     broker = broker,
