@@ -29,18 +29,15 @@ context.stage, context.lifecycleRequest = stages[1], "load"
 context.lifecycleTasks.load = nil
 context.scheduler.cursor = 1
 definition.refresh(context)
-assert(flights == 1 and #steps == 2, "small loading stages can share flight's callback")
-assert(grants[1] == 2 and grants[2] == 4)
-assert(context.remainingSlots == 1 and context.stage == "panel-migrate")
+assert(flights == 1 and #steps == 4, "small loading stages can share flight's callback")
+assert(grants[1] == 1 and grants[2] == 2 and grants[3] == 1 and grants[4] == 1)
+assert(context.remainingSlots == 2 and context.stage == "panel-build")
 local task = context.lifecycleTasks.load
-assert(task.spent == 6 and task.cost == 2 and task.pending, "continuation uses the next stage's cost")
-definition.refresh(context)
-assert(#steps == 4 and context.stage == "panel-build" and task.cost == context.scheduler.capacity)
-assert(grants[3] == 2 and grants[4] == 2 and task.spent == 10)
+assert(task.spent == 5 and task.cost == context.scheduler.capacity and task.pending)
 assert(task.refused == context.scheduler.callbacks, "expensive construction cannot use a leftover small grant")
 definition.refresh(context)
 assert(#steps == 5 and not context.stage and grants[5] == context.scheduler.capacity)
-assert(task.spent == 10 + context.scheduler.capacity and not task.pending)
+assert(task.spent == 5 + context.scheduler.capacity and not task.pending)
 context.stage = "services"
 broker.documentLoaded = false
 assert(not task.ready(task, getTime(), false), "service construction must wait for the model document")

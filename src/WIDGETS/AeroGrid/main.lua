@@ -2352,14 +2352,25 @@ local function lifecycleReady(task, _, hidden)
     return not hidden and not context.reloadState and not context.stage and context.appRebuild ~= nil
 end
 
+-- Slots reserved per load stage, from peak mocked-VM instruction counts at
+-- about 2000 instructions per slot; stages not listed reserve a full segment.
+local LOAD_STAGE_COST = {
+    ["header-migrate"] = 1,
+    ["panel-migrate"] = 1,
+    ["panel-validate"] = 1,
+    ["model-settings"] = 2,
+    ["read"] = 2,
+    ["services"] = 2,
+    ["header"] = 2,
+    ["header-finalize"] = 2,
+    ["panels"] = 2,
+    ["tokenize"] = 3,
+    ["theme-validate"] = 4,
+}
+
 local function loadCost(context)
-    local stage = context.stage
-    if stage == "header-migrate" or stage == "panel-migrate" or stage == "panel-validate" then
-        return math.min(2, context.scheduler.capacity)
-    elseif stage == "services" or stage == "theme-validate" then
-        return math.min(4, context.scheduler.capacity)
-    end
-    return math.min(context.scheduler.capacity, MAX_TASK_SLOTS)
+    local cost = LOAD_STAGE_COST[context.stage] or MAX_TASK_SLOTS
+    return math.min(cost, context.scheduler.capacity, MAX_TASK_SLOTS)
 end
 
 local function lifecycleStep(task)
