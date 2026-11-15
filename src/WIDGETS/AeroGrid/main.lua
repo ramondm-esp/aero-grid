@@ -703,7 +703,7 @@ end
 --- under the right callback budget.
 local function modelSettingsKnown(context)
     local factory = context.flightFactory
-    local member = factory.members[context]
+    local member = factory and factory.members[context]
     if not member or not member.modelFilename then
         return true
     end
