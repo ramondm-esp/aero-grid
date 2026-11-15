@@ -333,21 +333,29 @@ end
 do
     local queue, _, task = fixture()
     local fixed = task("missing usage", 2)
-    fixed.step = function()
-        return nil, false
-    end
-    assert(queue.run(0, 8) == 2 and fixed.failed)
-    assert(fixed.error == "step consumption must be whole slots within the grant")
+    fixed.step = function() end
+    assert(queue.run(0, 8) == 2 and not fixed.failed and not fixed.pending)
+    assert(fixed.spent == 2, "a fixed step without consumption used its grant")
 end
 
 do
     local queue, _, task = fixture()
-    local fixed = task("missing continuation", 2)
-    fixed.step = function(_, _, slots)
-        return slots
+    local variable = task("missing variable usage", "variable")
+    variable.minCost = 1
+    variable.step = function() end
+    assert(queue.run(0, 8) == 8 and variable.failed)
+    assert(variable.error == "step consumption must be whole slots within the grant")
+end
+
+do
+    local queue, _, task = fixture()
+    local fixed = task("named", 2)
+    fixed.verb = "finish"
+    fixed.step = function()
+        return 3
     end
-    assert(queue.run(0, 8) == 2 and fixed.failed)
-    assert(fixed.error == "step continuation must be boolean")
+    queue.run(0, 8)
+    assert(fixed.error == "finish consumption must be whole slots within the grant")
 end
 
 for _, continuation in ipairs({ 1, "yes" }) do

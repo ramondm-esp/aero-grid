@@ -6,7 +6,9 @@
 ---
 ---@class AeroGridTask
 ---@field name string Label used in error reports.
----@field step fun(task: AeroGridTask, now: integer, slots: integer, context: any): integer, boolean Returns slots used and whether more work is ready now.
+---@field step fun(task: AeroGridTask, now: integer, slots: integer, context: any): integer?, boolean? Returns slots used and whether more work is ready now.
+--- A fixed-cost step that returns no consumption used its whole grant; a
+--- variable-cost step must report it. No continuation means none is wanted.
 ---@field cost? integer|"variable" Slots one step needs, 0 to 8. Defaults to 1. Read before every step.
 ---@field minCost? integer Minimum grant for a variable-cost step, 1 to 8.
 ---@field due? integer Tick from which the task is eligible. Ignored while pending.
@@ -165,6 +167,12 @@ function scheduler.new(dependencies)
                         else
                             local ok, used, again = pcall(task.step, task, now, granted, context)
                             local spent = granted
+                            if used == nil and cost ~= "variable" then
+                                used = granted
+                            end
+                            if again == nil then
+                                again = false
+                            end
                             if not ok then
                                 failTask(task, tostring(used))
                             elseif type(used) == "number" and used >= 0 and used <= granted and used % 1 == 0 then
