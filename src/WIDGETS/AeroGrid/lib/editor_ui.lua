@@ -540,45 +540,25 @@ function uiModule.handle(context, event, touch)
     if state.mode ~= "menu" then
         return true
     end
-    if matches(event, "EVT_TOUCH_BREAK") and state.gearPress then
-        -- EdgeTX sends no TAP when the press outlasts its 250 ms tap time, and
-        -- BREAK coordinates are (0, 0), so act on the gear captured at FIRST.
-        local index = state.gearPress
-        state.gearPress = nil
-        if index == "add" then
-            openDrawer(context, state, "add")
-        elseif index <= #state.session.draft.panels then
-            state.handlers.editor.select(state.session, index)
-            openDrawer(context, state, "configure")
-        end
-        return true
+    local tap
+    if context.gesture.touch(event) then
+        state.gearPress, tap = context.gesture.track(state.gearPress, event, touch)
     end
-    if matches(event, "EVT_TOUCH_FIRST") then
-        local x, y = coordinates(context, touch)
-        state.gearPress = x and (gearIndex(state, x, y) or state.addRect and hit(state.addRect, x, y) and "add") or nil
-    elseif matches(event, "EVT_TOUCH_SLIDE") then
-        state.gearPress = nil
+    local x, y = coordinates(context, tap)
+    local target = x and (gearIndex(state, x, y) or state.addRect and hit(state.addRect, x, y) and "add")
+    if target == "add" then
+        openDrawer(context, state, "add")
+        return true
+    elseif target then
+        state.handlers.editor.select(state.session, target)
+        openDrawer(context, state, "configure")
+        return true
     end
     if drag(context, state, event, touch) then
         return true
     end
     if matches(event, "EVT_TOUCH_TAP") then
-        local x, y = coordinates(context, touch)
-        if not x then
-            return false
-        end
-        local gear = gearIndex(state, x, y)
-        if gear then
-            state.gearPress = nil
-            state.handlers.editor.select(state.session, gear)
-            openDrawer(context, state, "configure")
-            return true
-        end
-        if state.addRect and hit(state.addRect, x, y) then
-            state.gearPress = nil
-            openDrawer(context, state, "add")
-            return true
-        end
+        return false
     elseif matches(event, "EVT_VIRTUAL_EXIT") then
         if state.session.dirty then
             context.editorDrawerModule.openExit(context, state)

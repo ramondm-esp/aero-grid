@@ -124,12 +124,21 @@ assert(context.locationOverlay.hidden, "missing GPS must not reveal the overlay"
 local entry = fixture.entryById(context, "compass")
 local rect = context.dashboardLoader.panelRect(context, entry.placement)
 local point = { x = rect.x + 20, y = rect.y + 30 }
+feed.fix = true
 input(EVT_TOUCH_FIRST, point)
-input(EVT_TOUCH_SLIDE, point)
+input(EVT_TOUCH_SLIDE, { x = point.x, y = point.y + 11 })
 input(EVT_TOUCH_TAP, point)
 assert(not context.locationDetails, "a drag must not open details on release")
-
-feed.fix = true
+tap()
+assert(context.locationDetails)
+input(EVT_TOUCH_FIRST, point)
+input(EVT_TOUCH_SLIDE, { x = point.x + 11, y = point.y })
+input(EVT_TOUCH_TAP, point)
+assert(context.locationDetails, "a drag on the overlay must not close it")
+input(EVT_TOUCH_FIRST, point)
+input(EVT_TOUCH_SLIDE, { x = point.x + 4, y = point.y + 4 })
+input(EVT_TOUCH_TAP, point)
+assert(not context.locationDetails, "jitter within ten pixels still closes the overlay")
 tap()
 assert(context.locationDetails)
 fixture.lvglMock.setFullScreen(false)

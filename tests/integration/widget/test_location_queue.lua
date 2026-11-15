@@ -71,12 +71,15 @@ assert(
 )
 assert(state.url == "https://www.google.com/maps/search/?api=1&query=47.000000,8.000000")
 
--- A release without a preceding press on the overlay is not a tap; a long press closes it.
+-- A release without a preceding press on the overlay is not a tap; a press past the tap time closes it.
 context.locationDetailsModule.handle(context, EVT_TOUCH_BREAK)
 assert(not context.locationRequest, "the release of the opening press must not close the overlay")
-context.locationDetailsModule.handle(context, EVT_TOUCH_FIRST)
-context.locationDetailsModule.handle(context, EVT_TOUCH_BREAK)
-assert(context.locationRequest and context.locationRequest.kind == "close", "a long press closes the overlay")
+context.locationDetailsModule.handle(context, EVT_TOUCH_FIRST, { x = 20, y = 20 })
+context.locationDetailsModule.handle(context, EVT_TOUCH_BREAK, { x = 0, y = 0 })
+assert(
+    context.locationRequest and context.locationRequest.kind == "close",
+    "a press past the tap time closes the overlay"
+)
 context.locationRequest = nil
 context.locationDetailsModule.handle(context, EVT_VIRTUAL_EXIT)
 assert(

@@ -464,11 +464,12 @@ equal(#context.editorSession.draft.panels, 1, "old top-left X target does not re
 equal(state.mode, "menu", "top-left panel tap does not configure")
 local gearX, gearY = rect.x + rect.w - 12, rect.y + 12
 refresh(EVT_TOUCH_FIRST, { x = gearX, y = gearY })
-refresh(EVT_TOUCH_SLIDE, { x = gearX + 4, y = gearY })
+refresh(EVT_TOUCH_SLIDE, { x = gearX - 11, y = gearY })
 refresh(EVT_TOUCH_BREAK, { x = 0, y = 0 })
 equal(state.mode, "menu", "a slide off the gear does not open settings")
 -- A press longer than the tap time sends no TAP, and BREAK reports (0, 0).
 refresh(EVT_TOUCH_FIRST, { x = gearX, y = gearY })
+refresh(EVT_TOUCH_SLIDE, { x = gearX + 4, y = gearY })
 refresh(EVT_TOUCH_BREAK, { x = 0, y = 0 })
 settleDrawer()
 equal(state.mode, "configure", "gear opens settings")

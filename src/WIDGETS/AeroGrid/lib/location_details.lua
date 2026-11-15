@@ -128,15 +128,11 @@ function details.open(context, view, accent)
     label(math.floor((rect.w - hintWidth) / 2), rect.h - 24, hintWidth, hint, theme.color.textFaint, SMLSIZE)
 end
 
-function details.handle(context, event)
-    if event == _G.EVT_TOUCH_FIRST then
-        context.locationPressed = true
-    end
-    -- EdgeTX sends no TAP for a press longer than its 250 ms tap time, so the
-    -- release of a press that began on this overlay closes it as well.
-    local released = event == _G.EVT_TOUCH_BREAK and context.locationPressed
-    if event == _G.EVT_VIRTUAL_EXIT or event == _G.EVT_EXIT_BREAK or event == _G.EVT_TOUCH_TAP or released then
-        context.locationPressed = nil
+function details.handle(context, event, touch)
+    local tap
+    context.locationPress, tap = context.gesture.track(context.locationPress, event, touch)
+    if event == _G.EVT_VIRTUAL_EXIT or event == _G.EVT_EXIT_BREAK or tap then
+        context.locationPress = nil
         context.locationRequest = { kind = "close", state = context.locationDetails }
     end
     return true

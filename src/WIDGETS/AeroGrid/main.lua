@@ -818,6 +818,7 @@ initialize = function(context)
         context.flightConfig = runtimeModule("lib/flight_config.lua")
         context.nativeBudget = runtimeModule("lib/native_budget.lua")
         context.aeroMenuModule = runtimeModule("lib/aerogrid_menu.lua")
+        context.gesture = runtimeModule("lib/gesture.lua")
         local flightRegistration = runtimeModule("lib/flight_registration.lua")
         if flightRegistration then
             context.configureFlight = function(host)
@@ -933,6 +934,7 @@ initialize = function(context)
         or not context.flightConfig
         or not context.configureFlight
         or not context.aeroMenuModule
+        or not context.gesture
         or not context.panelHost
         or not context.scheduler
         or not context.themeBuilder
@@ -1028,7 +1030,7 @@ local function handleEvent(context, widgetEvent, touchState)
         return context.editorUiModule.handle(context, widgetEvent, touchState)
     end
     if context.locationDetails then
-        return context.locationDetailsModule.handle(context, widgetEvent)
+        return context.locationDetailsModule.handle(context, widgetEvent, touchState)
     end
     if context.logViewer then
         return context.logViewerModule.handle(context, widgetEvent, touchState)
@@ -1038,25 +1040,9 @@ local function handleEvent(context, widgetEvent, touchState)
         return true
     end
 
-    -- EdgeTX sends no TAP when a press outlasts its 250 ms tap time, and BREAK
-    -- coordinates are (0, 0), so the release acts on the press captured at FIRST.
     local tap
-    if widgetEvent == _G.EVT_TOUCH_FIRST then
-        context.panelTouchSlid, context.panelTapDone = false, false
-        context.panelPress = touchState and { x = touchState.x, y = touchState.y } or nil
-    elseif widgetEvent == _G.EVT_TOUCH_SLIDE then
-        context.panelTouchSlid = true
-    elseif widgetEvent == _G.EVT_TOUCH_TAP and touchState then
-        tap = touchState
-    elseif widgetEvent == _G.EVT_TOUCH_BREAK then
-        tap = context.panelPress
-    end
-    if tap and not context.panelTapDone then
-        context.panelTapDone, context.panelPress = true, nil
-    else
-        tap = nil
-    end
-    if tap and not context.panelTouchSlid and isFullScreen() then
+    context.panelPress, tap = context.gesture.track(context.panelPress, widgetEvent, touchState)
+    if tap and isFullScreen() then
         local touchState = tap
         for _, entry in ipairs(context.panels) do
             local logPanel = entry.placement.type == "host-diagnostics" and entry.settings.section == "log"

@@ -184,34 +184,24 @@ local function applyInput(host, event, touch)
         viewer.close(host)
     elseif state.prepareIndex then
         return true
-    elseif matches(event, "EVT_TOUCH_FIRST") and touch then
-        state.dragY, state.slid = touch.y, false
-        state.pressX, state.dragStartY, state.tapDone = touch.x, touch.y, false
-    elseif matches(event, "EVT_TOUCH_SLIDE") and touch and state.dragY then
-        local delta = state.dragY - touch.y
-        local steps = math.floor(math.abs(delta) / state.lineHeight)
-        if steps > 0 then
-            state.slid = true
-            local direction = delta > 0 and 1 or -1
-            move(state, direction)
-            state.dragY = touch.y
-            render(state)
-        end
-    elseif matches(event, "EVT_TOUCH_TAP") and touch and not state.slid and not state.tapDone then
-        state.tapDone = true
-        if touch.x >= host.zone.w - 80 and touch.y < 32 then
-            viewer.close(host)
-        end
-    elseif matches(event, "EVT_TOUCH_BREAK") then
-        -- No TAP arrives for a press longer than the tap time, and BREAK reports
-        -- (0, 0), so the release closes from the press captured at FIRST.
-        local pressX, pressY = state.pressX, state.dragStartY
-        state.dragY, state.pressX, state.dragStartY = nil, nil, nil
-        if pressX and pressY and not state.slid and not state.tapDone then
-            state.tapDone = true
-            if pressX >= host.zone.w - 80 and pressY < 32 then
-                viewer.close(host)
+    elseif host.gesture.touch(event) then
+        local tap
+        state.press, tap = host.gesture.track(state.press, event, touch)
+        if matches(event, "EVT_TOUCH_FIRST") then
+            state.dragY = touch and touch.y
+        elseif matches(event, "EVT_TOUCH_SLIDE") and touch and state.dragY then
+            local delta = state.dragY - touch.y
+            local steps = math.floor(math.abs(delta) / state.lineHeight)
+            if steps > 0 then
+                move(state, delta > 0 and 1 or -1)
+                state.dragY = touch.y
+                render(state)
             end
+        elseif matches(event, "EVT_TOUCH_BREAK") then
+            state.dragY = nil
+        end
+        if tap and tap.x >= host.zone.w - 80 and tap.y < 32 then
+            viewer.close(host)
         end
     elseif matches(event, "EVT_ROT_LEFT") or matches(event, "EVT_VIRTUAL_PREV") then
         move(state, -1)
