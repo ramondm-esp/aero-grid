@@ -605,6 +605,29 @@ end
 
 local initialize
 
+--- Build whatever part of the bare page shell is missing, so errors have
+--- somewhere to be shown.
+---@param context AeroGridContext
+local function ensureShell(context)
+    local zone = context.zone
+    if not context.root then
+        context.root = lvgl.box({ x = 0, y = 0, w = zone.w, h = zone.h })
+    end
+    if not context.page then
+        context.page = lvgl.box(context.root, { x = 0, y = 0, w = zone.w, h = zone.h })
+    end
+    if not context.canvas then
+        context.canvas = lvgl.rectangle(context.page, {
+            x = 0,
+            y = 0,
+            w = zone.w,
+            h = zone.h,
+            color = lcd.RGB(0x101316),
+            filled = true,
+        })
+    end
+end
+
 --- Create one AeroGrid host instance for an EdgeTX custom-screen zone.
 ---@param zone AeroGridZone
 ---@param widgetOptions AeroGridWidgetOptions
@@ -676,16 +699,7 @@ local function create(zone, widgetOptions, path)
     end
     if not context.scheduler then
         context.runtimeFailed = true
-        context.root = lvgl.box({ x = 0, y = 0, w = zone.w, h = zone.h })
-        context.page = lvgl.box(context.root, { x = 0, y = 0, w = zone.w, h = zone.h })
-        context.canvas = lvgl.rectangle(context.page, {
-            x = 0,
-            y = 0,
-            w = zone.w,
-            h = zone.h,
-            color = lcd.RGB(0x101316),
-            filled = true,
-        })
+        ensureShell(context)
         showErrors(context)
         return context
     end
@@ -1118,6 +1132,14 @@ local function event(context, widgetEvent, touchState)
     return true
 end
 
+--- Stop dashboard services and panels for the rest of this callback. Host
+--- work that may replace or retire their owners calls this; they are enrolled
+--- afresh on the next callback.
+---@param context AeroGridContext
+local function closeDashboard(context)
+    context.scheduledServices, context.scheduledPanels = false, false
+end
+
 --- Task steps that adapt the panel and service contracts to the scheduler.
 --- Each task's `owner` is the service instance or panel entry it runs for.
 local function serviceReady(task)
@@ -1334,6 +1356,28 @@ local function liveDangerously(context)
         and preload.liveDangerously == true
 end
 
+--- Run the enrolled tasks for one callback in `1 + segments` segments, then
+--- release them and show any failure.
+local function runScheduled(context, hidden, segments)
+    local scheduler = context.scheduler
+    local _, _, _, failure = scheduler.run(getTime(), scheduler.budget.capacity, hidden or false, {
+        segments = segments,
+        cross = context.nativeBudget and context.nativeBudget.cross,
+    })
+    context.remainingSlots = scheduler.remaining
+    if failure then
+        context.liveDangerouslyFailed = true
+        addError(context, "extended callback budget: " .. failure)
+        context.schedulerFailed = true
+    end
+    scheduler.clear()
+    if context.schedulerFailed then
+        context.schedulerFailed = nil
+        ensureShell(context)
+        showErrors(context)
+    end
+end
+
 --- Run flight, host work, services and panels in one fair queue.
 local function runTasks(context, hidden, flightTask, hostTask)
     local registry, support = context.serviceRuntime, context.servicesModule
@@ -1351,23 +1395,7 @@ local function runTasks(context, hidden, flightTask, hostTask)
 
     -- Extra segments run past EdgeTX's per-callback limit in the same
     -- callback; only pending and deferred work continues.
-    local extended = liveDangerously(context)
-    local _, _, _, failure = scheduler.run(getTime(), scheduler.budget.capacity, hidden or false, {
-        segments = extended and EXTENDED_SEGMENTS or 0,
-        cross = context.nativeBudget and context.nativeBudget.cross,
-    })
-    context.remainingSlots = scheduler.remaining
-    if failure then
-        context.liveDangerouslyFailed = true
-        addError(context, "extended callback budget: " .. failure)
-        context.schedulerFailed = true
-    end
-    scheduler.clear()
-
-    if context.schedulerFailed then
-        context.schedulerFailed = nil
-        showErrors(context)
-    end
+    runScheduled(context, hidden, liveDangerously(context) and EXTENDED_SEGMENTS or 0)
 end
 
 local function flightReady(task)
@@ -1394,7 +1422,7 @@ local function pumpFlight(task, now, granted)
     end
     if filename ~= owner.filename then
         owner:reset(filename)
-        context.scheduledServices, context.scheduledPanels = false, false
+        closeDashboard(context)
         if granted < context.scheduler.budget.slots then
             return nil, true
         end
@@ -1404,7 +1432,7 @@ local function pumpFlight(task, now, granted)
             local storeModule, storeError = loadModule(context.path, "lib/model_settings_store.lua", 1)
             if not storeModule then
                 owner.loadError, owner.documentLoaded = storeError, true
-                context.scheduledServices, context.scheduledPanels = false, false
+                closeDashboard(context)
                 return nil, true
             end
             local created, store = pcall(storeModule.new, context.path, context.yaml, {
@@ -1416,7 +1444,7 @@ local function pumpFlight(task, now, granted)
             })
             if not created then
                 owner.loadError, owner.documentLoaded = tostring(store), true
-                context.scheduledServices, context.scheduledPanels = false, false
+                closeDashboard(context)
                 return nil, true
             end
             owner.store = store
@@ -1438,7 +1466,7 @@ local function pumpFlight(task, now, granted)
         else
             owner.loadError, owner.documentLoaded = tostring(info), true
         end
-        context.scheduledServices, context.scheduledPanels = false, false
+        closeDashboard(context)
         return nil, true
     end
     local resetConfigured = owner.document and owner.document.sessionReset and owner.document.sessionReset ~= ""
@@ -1486,7 +1514,7 @@ local function pumpFlight(task, now, granted)
         )
         context.flightDashboardDue = reserved or nil
         if reserved then
-            context.scheduledServices, context.scheduledPanels = false, false
+            closeDashboard(context)
         end
     end
     local state = owner.view
@@ -2552,13 +2580,13 @@ local function advanceHost(task, _, _, hidden)
     local context = task.host
     -- Mutations may replace or retire enrolled owners; dashboard work resumes
     -- with freshly enrolled tasks on the next callback.
-    context.scheduledServices, context.scheduledPanels = false, false
+    closeDashboard(context)
     if hidden then
         advanceHidden(context)
     else
         advanceForeground(context)
     end
-    context.scheduledServices, context.scheduledPanels = false, false
+    closeDashboard(context)
 end
 
 local function runCallback(context, hidden, widgetEvent, touchState)
@@ -2566,30 +2594,10 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         if not hidden then
             event(context, widgetEvent, touchState)
         end
-        local scheduler = context.scheduler
-        scheduler.add(context.initializationTask)
-        scheduler.run(getTime(), scheduler.budget.capacity, hidden)
-        context.remainingSlots = scheduler.remaining
-        scheduler.clear()
-        if context.schedulerFailed then
-            if not context.root then
-                context.root = lvgl.box({ x = 0, y = 0, w = context.zone.w, h = context.zone.h })
-            end
-            if not context.page then
-                context.page = lvgl.box(context.root, { x = 0, y = 0, w = context.zone.w, h = context.zone.h })
-            end
-            if not context.canvas then
-                context.canvas = lvgl.rectangle(context.page, {
-                    x = 0,
-                    y = 0,
-                    w = context.zone.w,
-                    h = context.zone.h,
-                    color = lcd.RGB(0x101316),
-                    filled = true,
-                })
-            end
-            showErrors(context)
-        end
+        -- The first callback reads the model's settings in one segment;
+        -- later callbacks follow them.
+        context.scheduler.add(context.initializationTask)
+        runScheduled(context, hidden, 0)
         return
     end
     if not context.scheduler or context.runtimeFailed then

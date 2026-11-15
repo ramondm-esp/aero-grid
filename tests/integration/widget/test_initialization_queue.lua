@@ -61,7 +61,7 @@ local failed = definition.create({ x = 0, y = 0, w = 480, h = 272 }, {
     Theme = "modern-dark",
 }, context.path)
 definition.refresh(failed)
-assert(not failed.initializing and failed.runtimeFailed and failed.schedulerFailed)
+assert(not failed.initializing and failed.runtimeFailed and not failed.schedulerFailed)
 assert(failed.root and failed.page and failed.canvas and failed.errorLabel)
 assert(string.find(table.concat(failed.errors, "\n"), "initialization allocation failed", 1, true))
 failed.zone.w = 320
