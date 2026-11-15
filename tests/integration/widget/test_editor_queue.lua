@@ -38,8 +38,7 @@ definition.refresh(context)
 assert(steps == 0 and context.uiRequest == "editor")
 definition.refresh(context)
 local task = context.uiTasks.editor
-assert(steps == 1 and not task.pending, "editor phases keep native callback separation")
-definition.refresh(context)
+assert(steps == 2 and task.pending, "build stages continue in the same callback while slots remain")
 definition.refresh(context)
 assert(steps == 3 and not context.uiRequest and not context.editorUi.buildStage)
 context.editorUi.saving = 2

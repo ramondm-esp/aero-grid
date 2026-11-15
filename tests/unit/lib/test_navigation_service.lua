@@ -65,6 +65,21 @@ local function captureFixture(homes)
     return service, view, reading, arm, update
 end
 
+local function testRoundContinuesUntilEverySubscriptionIsPolled()
+    local service, _, _, _, update = captureFixture()
+    for index = 1, 4 do
+        service:subscribe("GPS" .. index, "SFv")
+    end
+    local total = #service.entries
+    local turns = 0
+    repeat
+        local _, again = service:update(turns * 10)
+        turns = turns + 1
+    until not again
+    assert(turns == math.ceil(total / 2), "one round polls every subscription: " .. turns)
+    update(100, false)
+end
+
 local function testFirstArmHome()
     local service, view, reading, _, update = captureFixture()
     update(0, false)
@@ -436,6 +451,7 @@ end
 local function run()
     testPositionChecksAndDistance()
     testServiceCreatesRuntime()
+    testRoundContinuesUntilEverySubscriptionIsPolled()
     testFirstArmHome()
     testInvalidFirstArmRetriesOnNextTransition()
     testArmObservationAndFreshness()

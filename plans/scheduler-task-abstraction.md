@@ -212,6 +212,12 @@ task readiness rather than suppressing them.
   Repeated scheduler passes occur inside the same native callback and therefore
   do not perform firmware deferred cleanup. Page and panel rebuild phases must
   retain their cross-callback separation.
+- Work that only creates or computes continues in the same callback: load
+  stages (reserved by measured cost), editor build stages and saves, model
+  settings fields, flight document setup, telemetry and navigation poll rounds,
+  and host-diagnostics log repaints. Retirement, previews, drawers, exits,
+  menus, dialog opening and input (one event per grant) keep their callback
+  boundary.
 - Re-enrol or gate live work using current host state after transitions. A modal,
   reload or retired panel must not accidentally allow stale dashboard tasks
   later in the same callback.

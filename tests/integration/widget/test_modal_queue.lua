@@ -45,7 +45,7 @@ end)
 definition.background(context)
 assert(steps == 1 and inputs == 0, "hidden modal work must not handle foreground input")
 local modelTask = context.uiTasks["model settings"]
-assert(not modelTask.pending, "modal transitions must retain native callback separation")
+assert(modelTask.pending, "settings fields continue when the grant is used up")
 definition.refresh(context)
 definition.refresh(context)
 assert(steps == 3 and not context.uiRequest and not context.modelSettingsUi.build)

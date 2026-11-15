@@ -458,6 +458,7 @@ function telemetryService:update(now, slots)
 
     local entries = self.entries
     if #entries == 0 then
+        self.unpolled = nil
         return 1
     end
     local polls = math.min(
@@ -466,6 +467,10 @@ function telemetryService:update(now, slots)
         slots and slots * telemetryService.SOURCES_PER_SLOT or self.pollCap or telemetryService.POLL_CAP
     )
     local consumed = math.max(1, math.ceil(polls / telemetryService.SOURCES_PER_SLOT))
+    -- Sources still unpolled in this round continue in the same callback.
+    local unpolled = (self.unpolled or #entries) - polls
+    self.unpolled = unpolled > 0 and unpolled or nil
+    local again = unpolled > 0
     self.cursor = self.support.roundRobin(entries, self.cursor, polls, pollEntry, self, now)
 
     -- Republished after the polls, because a live reading can prove the
@@ -481,7 +486,7 @@ function telemetryService:update(now, slots)
     end
     if self.precisionScans == 0 then
         self.scanCursor = scan
-        return consumed
+        return consumed, again
     end
     for _ = 1, total do
         local entry = entries[scan]
@@ -492,7 +497,7 @@ function telemetryService:update(now, slots)
         end
     end
     self.scanCursor = scan
-    return consumed
+    return consumed, again
 end
 
 --- Format a reading for display, honoring its precision.

@@ -552,13 +552,19 @@ local flightFactories = {}
 
 local function taskStep(action)
     return function(task, now, slots, context)
-        local _, canContinue = action(task, now, slots, context)
+        local used, canContinue = action(task, now, slots, context)
         if canContinue == nil then
             canContinue = false
         elseif type(canContinue) ~= "boolean" then
             error("task continuation must be boolean", 0)
         end
-        return slots, canContinue
+        -- An action may report fewer slots than it was granted.
+        if used == nil then
+            used = slots
+        elseif type(used) ~= "number" or used < 0 or used > slots or used % 1 ~= 0 then
+            error("task consumption must be whole slots within the grant", 0)
+        end
+        return used, canContinue
     end
 end
 
@@ -1420,7 +1426,8 @@ local function pumpFlight(task, now, granted)
             if not storeModule then
                 owner.loadError, owner.documentLoaded = storeError, true
                 context.scheduledServices, context.scheduledPanels = false, false
-                return
+                task.cost = 1
+                return nil, true
             end
             local created, store = pcall(storeModule.new, context.path, context.yaml, {
                 modelFilename = function()
@@ -1432,7 +1439,8 @@ local function pumpFlight(task, now, granted)
             if not created then
                 owner.loadError, owner.documentLoaded = tostring(store), true
                 context.scheduledServices, context.scheduledPanels = false, false
-                return
+                task.cost = 1
+                return nil, true
             end
             owner.store = store
         end
@@ -1454,7 +1462,8 @@ local function pumpFlight(task, now, granted)
             owner.loadError, owner.documentLoaded = tostring(info), true
         end
         context.scheduledServices, context.scheduledPanels = false, false
-        return
+        task.cost = 1
+        return nil, true
     end
     local resetConfigured = owner.document and owner.document.sessionReset and owner.document.sessionReset ~= ""
     if (context.stage or context.reloadState) and not owner.session and not resetConfigured then
@@ -2044,6 +2053,39 @@ local function editorWorkNeeded(state)
         )
 end
 
+-- Slots the editor's next step reserves: small build stages are cheap.
+local function editorCost(context)
+    local state = context.editorUi
+    if
+        state
+        and state.buildStage
+        and state.buildStage <= 9
+        and not state.nativeInput
+        and not state.previewPending
+        and not state.previewRefresh
+        and not state.exitCommand
+        and not state.drawerPending
+        and state.drawerBuild == nil
+        and not state.saving
+    then
+        return math.min(3, context.scheduler.capacity)
+    end
+    return math.min(context.scheduler.capacity, MAX_TASK_SLOTS)
+end
+
+-- Building controls and writing the layout create or compute only; previews,
+-- drawers and exits retire LVGL objects and keep their callback boundary.
+local function editorContinues(state)
+    return state
+        and (state.buildStage or state.saving)
+        and not state.nativeInput
+        and not state.previewPending
+        and not state.previewRefresh
+        and not state.exitCommand
+        and not state.drawerPending
+        and state.drawerBuild == nil
+end
+
 local function inputReady(task, _, hidden)
     local context = task.host
     return not hidden
@@ -2284,12 +2326,22 @@ local function uiStep(task, _, _, hidden)
         context.editorController.advanceEditor(context)
         if editorWorkNeeded(context.editorUi) then
             context.uiRequest = task.kind
+            if editorContinues(context.editorUi) then
+                task.cost = editorCost(context)
+                return nil, true
+            end
         end
     elseif task.kind == "model settings" then
         context.modelSettingsUiModule.advance(context)
         local state = context.modelSettingsUi
         if state and (state.build or state.pending or state.closing) then
             context.uiRequest = task.kind
+            -- Fields only create controls; commands and closing keep their boundary.
+            if state.build and not state.pending and not state.closing then
+                local cost = context.modelSettingsUiModule.cost
+                task.cost = cost and math.min(cost(context), MAX_TASK_SLOTS) or task.cost
+                return nil, true
+            end
         end
     else
         local state = context.logViewer
@@ -2822,20 +2874,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                 hostTask.cost = math.min(context.modelSettingsUiModule.cost(context), MAX_TASK_SLOTS)
             end
         elseif context.uiTasks and hostTask == context.uiTasks.editor then
-            local state = context.editorUi
-            if
-                state.buildStage
-                and state.buildStage <= 9
-                and not state.nativeInput
-                and not state.previewPending
-                and not state.previewRefresh
-                and not state.exitCommand
-                and not state.drawerPending
-                and state.drawerBuild == nil
-                and not state.saving
-            then
-                hostTask.cost = math.min(3, scheduler.capacity)
-            end
+            hostTask.cost = editorCost(context)
         end
         if
             hostTask == context.locationTask and context.locationRequest.kind == "close"

@@ -596,6 +596,7 @@ function diagnostics.refresh(context)
     local lines = diagnostics.lines(context.host, context.section, context.visibleLines)
     local start = context.section == "log" and math.max(1, #lines - context.visibleLines + 1) or 1
     local changed = 0
+    context.refreshContinuation = nil
 
     for position = 1, context.visibleLines do
         local index = context.section == "log" and context.visibleLines - position + 1 or position
@@ -606,7 +607,9 @@ function diagnostics.refresh(context)
             changed = changed + 1
             -- A history shift changes every row; keep its repaint within the host budget.
             if context.section == "log" and changed == 3 then
-                break
+                -- The remaining rows repaint in another turn of this callback.
+                context.refreshContinuation = true
+                return nil, true
             end
         end
     end

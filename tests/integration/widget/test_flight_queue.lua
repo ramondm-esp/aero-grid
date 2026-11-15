@@ -74,7 +74,8 @@ definition.refresh(context)
 assert(reset and not owner.documentLoaded and context.flightTask.pending)
 assert(context.remainingSlots == 7, "identity reset must defer document work until a full grant fits")
 definition.refresh(context)
-assert(owner.documentLoaded and not context.flightTask.pending and context.remainingSlots == 0)
+assert(owner.documentLoaded and context.remainingSlots == 0)
+assert(context.flightTask.cost == 1, "setup continues at the ordinary flight cost")
 
 context.flightFactory.members = { [context] = {} }
 context.document.legacyFlightArms = {}

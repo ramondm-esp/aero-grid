@@ -77,8 +77,9 @@ local function testHostPollingBudgetKeepsRoundRobinProgress()
     end
     service.pollCap = 4
     for step = 1, 6 do
-        service:update(step * 10)
+        local _, again = service:update(step * 10)
         assertions.assertEqual(service.cursor, step * 4 % 24 + 1)
+        assertions.assertEqual(again, step < 6, "an unfinished round continues in the same callback")
     end
     for index = 1, 24 do
         assertions.assertEqual(reads[index], 1, "a reduced budget must still visit every source")
