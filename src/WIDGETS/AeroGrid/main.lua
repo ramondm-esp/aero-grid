@@ -1122,6 +1122,7 @@ end
 --- Each task's `owner` is the service instance or panel entry it runs for.
 local function serviceReady(task)
     local instance = task.owner
+    task.cost, task.minCost = instance.updateCost, instance.updateMinCost
     return task.host.scheduledServices and not instance.failed and instance.count ~= 0
 end
 
@@ -1153,19 +1154,30 @@ local function finishPending(context, entry)
     local ok, message, result = context.panelHost.dispatch(entry, "finishPending")
     if not ok then
         addError(context, entry.placement.id .. ": finishPending: " .. tostring(message))
+        if context.refreshOwner == entry then
+            context.refreshOwner = nil
+        end
         context.schedulerFailed = true
         return false
     end
     return result
 end
 
+local function instanceField(entry, key)
+    if type(entry.instance) == "table" then
+        return rawget(entry.instance, key)
+    end
+end
+
 local function refreshReady(task, _, hidden)
     local entry, owner = task.owner, task.host.refreshOwner
+    task.cost = instanceField(entry, "refreshCost") or rawget(entry.module, "refreshCost") or 1
+    task.minCost = instanceField(entry, "refreshMinCost") or rawget(entry.module, "refreshMinCost")
     if
         not task.host.scheduledPanels
         or hidden
         or entry.failed
-        or owner and entry ~= owner and entry.module.id == owner.module.id
+        or owner and not owner.failed and entry ~= owner and entry.module.id == owner.module.id
     then
         return false
     end
@@ -1183,11 +1195,14 @@ local function finishReady(task, _, hidden)
         return false
     end
     -- The next stage may need more than the module's default minimum.
-    task.minCost = rawget(entry.instance, "finishMinCost") or rawget(entry.module, "finishMinCost")
+    task.minCost = instanceField(entry, "finishMinCost") or rawget(entry.module, "finishMinCost")
     return true
 end
 
 local function backgroundReady(task, _, hidden)
+    local entry = task.owner
+    local minimum = instanceField(entry, "backgroundMinCost") or rawget(entry.module, "backgroundMinCost")
+    task.cost, task.minCost = minimum and "variable" or 1, minimum
     return task.host.scheduledPanels and hidden and not task.owner.failed
 end
 
@@ -1209,6 +1224,9 @@ local function panelStep(task, now, granted)
         -- Ending a cycle sets when the next refresh is due.
         if ok and type(interval) == "number" then
             entry.nextRefresh = now + entry.interval
+            if entry.refreshTask then
+                entry.refreshTask.due = entry.nextRefresh
+            end
         end
     elseif eventName == "refresh" then
         entry.nextRefresh = now + entry.interval
@@ -1219,6 +1237,9 @@ local function panelStep(task, now, granted)
         end
     end
     if not ok then
+        if context.refreshOwner == entry then
+            context.refreshOwner = nil
+        end
         error(message or "panel failed", 0)
     end
     local canContinue = unfinished == true
@@ -1226,7 +1247,7 @@ local function panelStep(task, now, granted)
         -- A panel may opt in for one turn, as it may override the refresh cost.
         canContinue = canContinue
             and (
-                rawget(entry.instance, "refreshContinuation") == true
+                instanceField(entry, "refreshContinuation") == true
                 or rawget(entry.module, "refreshContinuation") == true
             )
     end
@@ -1277,8 +1298,8 @@ local function enrolTasks(context, registry)
                 }
                 entry.refreshTask = task
             end
-            task.cost = rawget(entry.instance, "refreshCost") or rawget(module, "refreshCost") or 1
-            task.minCost = rawget(entry.instance, "refreshMinCost") or rawget(module, "refreshMinCost")
+            task.cost = instanceField(entry, "refreshCost") or rawget(module, "refreshCost") or 1
+            task.minCost = instanceField(entry, "refreshMinCost") or rawget(module, "refreshMinCost")
             task.due, task.failed = entry.nextRefresh or 0, entry.failed
             scheduler.add(task)
         end
@@ -1296,7 +1317,7 @@ local function enrolTasks(context, registry)
                 }
                 entry.finishTask = task
             end
-            task.minCost = rawget(entry.instance, "finishMinCost") or rawget(module, "finishMinCost")
+            task.minCost = instanceField(entry, "finishMinCost") or rawget(module, "finishMinCost")
             task.failed = entry.failed
             scheduler.add(task)
         end
@@ -1314,7 +1335,7 @@ local function enrolTasks(context, registry)
                 entry.backgroundTask = task
             end
             -- A panel that declares a minimum is charged what it reports.
-            local minimum = rawget(entry.instance, "backgroundMinCost") or rawget(module, "backgroundMinCost")
+            local minimum = instanceField(entry, "backgroundMinCost") or rawget(module, "backgroundMinCost")
             task.cost, task.minCost = minimum and "variable" or 1, minimum
             task.failed = entry.failed
             scheduler.add(task)
@@ -1355,7 +1376,7 @@ local function runTasks(context, hidden, flightTask, hostTask)
     if hostTask then
         scheduler.add(hostTask)
     end
-    if not hostTask and registry and support then
+    if (not hostTask or hostTask.settingsInput) and registry and support then
         enrolTasks(context, registry)
     end
 
@@ -1831,7 +1852,17 @@ local function routeHost(context, hidden)
         return true
     end
     if context.modelSettingsUi then
-        context.uiRequest = "model settings"
+        local state = context.modelSettingsUi
+        local broker = context.flightFactory and context.flightFactory.broker
+        if
+            state.build
+            or state.pending
+            or state.closing
+            or broker and broker.filename ~= state.modelFilename
+            or not isFullScreen()
+        then
+            context.uiRequest = "model settings"
+        end
         return true
     end
     if hidden then
@@ -2119,7 +2150,10 @@ local function inputStep(task)
     context.inputHandled = context.inputPending
     if context.modelSettingsUi then
         context.modelSettingsUiModule.handle(context, widgetEvent, touchState)
-        context.uiRequest = "model settings"
+        local state = context.modelSettingsUi
+        if state and (state.build or state.pending or state.closing) then
+            context.uiRequest = "model settings"
+        end
         return
     end
     if context.aeroMenuModule and context.aeroMenuModule.handle(context, widgetEvent, touchState) then
@@ -2639,7 +2673,8 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         routeHost(context, hidden)
     end
     local hostNeeded = hostWorkNeeded(context, hidden, context.widgetEvent, fullscreen)
-    context.scheduledServices = not hostNeeded and not (hidden and context.reflowIndex)
+    local settingsInput = not hidden and context.inputPending and context.modelSettingsUi ~= nil
+    context.scheduledServices = (not hostNeeded or settingsInput) and not (hidden and context.reflowIndex)
     context.scheduledPanels = not hostNeeded
         and not (hidden and context.reflowIndex)
         and not (not hidden and (context.modelSettingsUi or context.logViewer))
@@ -2720,6 +2755,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                     }
                     context.inputTask = task
                 end
+                task.settingsInput = context.modelSettingsUi ~= nil
                 if inputReady(task, nil, hidden) then
                     hostTask = task
                 end
@@ -2890,6 +2926,9 @@ local function runCallback(context, hidden, widgetEvent, touchState)
             end
         elseif context.uiTasks and hostTask == context.uiTasks.editor then
             hostTask.cost = editorCost(context)
+        elseif hostTask == context.inputTask and hostTask.settingsInput then
+            -- Settings input only records a close request; services share the rest.
+            hostTask.cost = 1
         end
         if
             hostTask == context.locationTask and context.locationRequest.kind == "close"

@@ -362,6 +362,16 @@ end
 
 do
     local queue, _, task = fixture()
+    local fixed = task("invalid continuation refund", 2)
+    fixed.step = function()
+        return 0, "bad"
+    end
+    assert(queue.run(0, 8) == 2 and fixed.failed)
+    assert(fixed.spent == 2, "an invalid continuation must not refund its grant")
+end
+
+do
+    local queue, _, task = fixture()
     local fixed = task("too large", 9)
     assert(queue.run(0, 8) == 0 and fixed.failed)
     assert(fixed.error == "invalid slot cost")

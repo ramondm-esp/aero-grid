@@ -154,6 +154,40 @@ definition.refresh(context)
 assert(continuationTurns == 9, "pending service work must resume despite its future deadline")
 
 context.serviceRuntime = support.runtime({})
+context.panels = {}
+local dynamicMinimumTurns, dynamicGrants = 0, {}
+local dynamicMinimum = {
+    id = "dynamic minimum",
+    interval = 0,
+    count = 1,
+    revision = 0,
+    updateCost = "variable",
+    updateMinCost = 8,
+    update = function(self, _, slots)
+        dynamicMinimumTurns = dynamicMinimumTurns + 1
+        dynamicGrants[#dynamicGrants + 1] = slots
+        if dynamicMinimumTurns == 1 then
+            self.updateMinCost = 1
+            return 1, true
+        end
+        if dynamicMinimumTurns == 2 then
+            self.updateCost = 2
+            self.updateMinCost = nil
+            return 1, true
+        end
+        return 1, false
+    end,
+}
+support.register(context.serviceRuntime, dynamicMinimum, 0)
+context.scheduler.cursor = 1
+fixture.tick(10)
+definition.refresh(context)
+assert(
+    dynamicMinimumTurns == 3 and dynamicGrants[1] == 8 and dynamicGrants[2] == 7 and dynamicGrants[3] == 2,
+    "a continuing service must use updated slot cost and minimum on each turn"
+)
+
+context.serviceRuntime = support.runtime({})
 support.register(context.serviceRuntime, telemetry, 0)
 support.register(context.serviceRuntime, ordinary, 0)
 

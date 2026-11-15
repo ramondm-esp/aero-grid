@@ -56,6 +56,41 @@ definition.refresh(context)
 assert(not context.modelSettingsUi and not context.inputQueue and steps == 4)
 assert(not modelTask.ui, "closed modal objects must not stay reachable through a cached task")
 
+local services = fixture.module("lib/services.lua")
+context.serviceRuntime = services.runtime({})
+local serviceUpdates, idleUiAdvances = 0, 0
+local settingsUiModule = context.modelSettingsUiModule
+services.register(context.serviceRuntime, {
+    id = "modal progress",
+    count = 1,
+    interval = 0,
+    revision = 0,
+    update = function()
+        serviceUpdates = serviceUpdates + 1
+        return 0
+    end,
+}, 0)
+context.modelSettingsUi = {
+    modelFilename = context.flightFactory and context.flightFactory.broker.filename,
+}
+context.modelSettingsUiModule = {
+    handle = function() end,
+    advance = function()
+        idleUiAdvances = idleUiAdvances + 1
+        return false
+    end,
+}
+definition.refresh(context, 992)
+assert(not context.uiRequest, "ordinary modal input must not schedule a no-op UI turn")
+assert(serviceUpdates > 0, "ordinary modal input must leave slots for subscribed services")
+for _ = 1, 5 do
+    fixture.tick(10)
+    definition.refresh(context)
+end
+assert(serviceUpdates > 0, "an idle foreground settings modal must not starve subscribed services")
+assert(idleUiAdvances == 0, "an idle modal must not reserve a host turn")
+context.modelSettingsUi, context.modelSettingsUiModule = nil, settingsUiModule
+
 context.logViewer = { width = context.zone.w - 16, height = context.zone.h, prepareIndex = 3 }
 context.logViewerModule = {
     advance = function()

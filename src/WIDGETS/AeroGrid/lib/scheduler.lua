@@ -209,10 +209,11 @@ function scheduler.new(dependencies)
                             if not ok then
                                 failTask(task, tostring(used))
                             elseif type(used) == "number" and used >= 0 and used <= granted and used % 1 == 0 then
-                                spent = used
                                 if type(again) ~= "boolean" then
                                     ok = false
                                     failTask(task, (task.verb or "step") .. " continuation must be boolean")
+                                else
+                                    spent = used
                                 end
                             else
                                 ok = false

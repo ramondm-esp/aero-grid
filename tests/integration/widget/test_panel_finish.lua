@@ -20,8 +20,8 @@ local pending = false
 local function entry(module, instance)
     return { placement = { id = "demo" }, module = module, instance = instance or {}, interval = 0, nextRefresh = 0 }
 end
-local function run(panels)
-    context.panels, context.refreshOwner = panels, nil
+local function run(panels, refreshOwner)
+    context.panels, context.refreshOwner = panels, refreshOwner
     context.scheduler.cursor = 1
     calls = {}
     fixture.tick(10)
@@ -56,6 +56,55 @@ pending = false
 run({ entry(module) })
 assert(#calls == 1 and calls[1].id == "refresh", "refreshes resume once finishing is done")
 
+-- A finish can move the next refresh deadline; the refresh task must see it
+-- before another scheduler pass in the same callback.
+local refreshesAfterFinish = 0
+pending = true
+local delayedRefresh = {
+    id = "demo",
+    refreshCost = 1,
+    finishMinCost = 1,
+    refresh = function()
+        refreshesAfterFinish = refreshesAfterFinish + 1
+        return 1, false, 1
+    end,
+    finishPending = function()
+        return pending
+    end,
+    finish = function()
+        pending = false
+        return 50, false, 1
+    end,
+}
+local delayedEntry = entry(delayedRefresh)
+run({ delayedEntry })
+assert(refreshesAfterFinish == 0, "finish must defer refresh until its new deadline")
+assert(delayedEntry.refreshTask.due == delayedEntry.nextRefresh)
+
+-- Dynamic instance minima are resolved again before a continuation grant.
+local finishTurns, finishGrants = 0, {}
+pending = true
+local dynamicFinish = {
+    id = "demo",
+    finishMinCost = 8,
+    finishPending = function()
+        return pending
+    end,
+    finish = function(instance, _, slots)
+        finishTurns = finishTurns + 1
+        finishGrants[#finishGrants + 1] = slots
+        if finishTurns == 1 then
+            instance.finishMinCost = 1
+            return nil, true, 1
+        end
+        pending = false
+        return nil, false, 1
+    end,
+}
+local dynamicEntry = entry(dynamicFinish, { finishMinCost = 8 })
+run({ dynamicEntry })
+assert(finishTurns == 2 and finishGrants[1] == 8 and finishGrants[2] == 7)
+
 -- The minimum can change per instance and per turn.
 local instance = { finishMinCost = 8 }
 pending = true
@@ -85,6 +134,25 @@ run({ entry(continuing, opted) })
 assert(turns > 1 and turns <= 8, "an opted-in refresh continues while slots remain, up to the callback")
 assert(#context.errors == 0, "continuation must not raise errors")
 
+local dynamicRefreshTurns, dynamicRefreshGrants = 0, {}
+local dynamicRefresh = {
+    id = "demo",
+    refreshCost = "variable",
+    refreshMinCost = 1,
+    refresh = function(instance, _, slots)
+        dynamicRefreshTurns = dynamicRefreshTurns + 1
+        dynamicRefreshGrants[#dynamicRefreshGrants + 1] = slots
+        instance.refreshMinCost = 1
+        return 1, dynamicRefreshTurns < 2, 1
+    end,
+}
+local dynamicRefreshEntry = entry(dynamicRefresh, { refreshMinCost = 8, refreshContinuation = true })
+run({ dynamicRefreshEntry })
+assert(
+    dynamicRefreshTurns == 2 and dynamicRefreshGrants[1] == 8 and dynamicRefreshGrants[2] == 7,
+    "a continuing refresh must use its updated minimum on each turn"
+)
+
 -- A hidden dashboard's background work is a variable task when it declares a minimum.
 local background = {
     id = "demo",
@@ -100,6 +168,25 @@ fixture.tick(10)
 definition.background(context)
 assert(#calls == 1 and calls[1].slots >= 3, "background must receive its declared minimum")
 assert(context.panels[1].backgroundTask.spent == 3, "background is charged what it reports")
+
+local dynamicBackgroundTurns, dynamicBackgroundGrants = 0, {}
+local dynamicBackground = {
+    id = "demo",
+    background = function(instance, _, slots)
+        dynamicBackgroundTurns = dynamicBackgroundTurns + 1
+        dynamicBackgroundGrants[#dynamicBackgroundGrants + 1] = slots
+        instance.backgroundMinCost = 1
+        return nil, dynamicBackgroundTurns < 2, 1
+    end,
+}
+local dynamicBackgroundEntry = entry(dynamicBackground, { backgroundMinCost = 8 })
+context.panels = { dynamicBackgroundEntry }
+fixture.tick(10)
+definition.background(context)
+assert(
+    dynamicBackgroundTurns == 2 and dynamicBackgroundGrants[1] == 8 and dynamicBackgroundGrants[2] == 7,
+    "continuing background work must use its updated minimum on each turn"
+)
 
 -- A failing readiness callback is isolated and reported rather than escaping the scheduler.
 local broken = entry({
@@ -134,3 +221,37 @@ context.errors = {}
 run({ invalid })
 assert(invalid.failed, "a non-boolean finishPending result must disable its panel")
 assert(#context.errors == 1 and string.find(context.errors[1], "must return a boolean", 1, true))
+
+-- Failed readiness must release a same-type refresh lease immediately.
+local neighborRefreshes = 0
+local leaseOwner = entry({
+    id = "demo",
+    refresh = function() end,
+    finishPending = function()
+        error("lease owner failed readiness")
+    end,
+})
+local neighbor = entry({
+    id = "demo",
+    refresh = function()
+        neighborRefreshes = neighborRefreshes + 1
+    end,
+})
+context.errors = {}
+run({ leaseOwner, neighbor }, leaseOwner)
+assert(leaseOwner.failed and context.refreshOwner == nil)
+assert(neighborRefreshes == 1, "a failed lease owner must not block a healthy same-type panel")
+
+-- The create contract permits opaque panel state, including non-tables.
+local scalarRefreshes = 0
+local scalarEntry = entry({
+    id = "scalar",
+    refreshCost = 1,
+    refreshContinuation = true,
+    refresh = function()
+        scalarRefreshes = scalarRefreshes + 1
+        return nil, true
+    end,
+}, 17)
+run({ scalarEntry })
+assert(scalarRefreshes == 8 and not scalarEntry.failed, "non-table panel state remains supported")
