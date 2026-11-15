@@ -1323,7 +1323,7 @@ local function enrolTasks(context, registry)
 end
 
 -- Further segments of scheduler capacity a callback may run past EdgeTX's
--- 20000-instruction limit when the model enables "Live dangerously".
+-- 20000-instruction limit when the model enables "Pre-release features".
 local EXTENDED_SEGMENTS = 4
 
 local function liveDangerously(context)

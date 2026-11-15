@@ -44,10 +44,10 @@ local fields = {
     },
     {
         key = "liveDangerously",
-        label = "Live dangerously",
+        label = "Pre-release features",
         kind = "toggle",
-        section = "Experimental",
-        description = "Lets busy callbacks run past EdgeTX's 20000-instruction limit. Unsupported.",
+        section = "Pre-release",
+        description = "Enable pre-release features that are not fully validated yet.",
     },
 }
 

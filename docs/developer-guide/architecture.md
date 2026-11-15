@@ -112,7 +112,7 @@ declares `backgroundMinCost`. An instance may override each minimum for the
 stage it needs next. Unused slots are released to later
 tasks, and pending work remains subject to the scheduler's fair rotation. A
 task's `due` time controls its next eligibility independently of same-callback
-continuation. With the per-model **Live dangerously** setting, and for every
+continuation. With the per-model **Pre-release features** setting, and for every
 model until its settings document has loaded, work still pending
 or deferred after the first eight slots continues in four more eight-slot
 segments of the same callback. `scheduler.cross` first burns instructions under

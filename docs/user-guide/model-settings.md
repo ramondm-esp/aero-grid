@@ -135,9 +135,9 @@ radio telemetry minima/maxima, EdgeTX home, saved settings/layouts, and
 unsaved editor changes are preserved. The dashboard stays on screen; only
 session-dependent content is redrawn.
 
-## Live dangerously
+## Pre-release features
 
-**Live dangerously** is an experimental, per-model setting that is off by default.
+**Pre-release features** enables features that are not fully validated yet. It is a per-model setting that is off by default.
 EdgeTX stops a widget callback after 20,000 Lua instructions. With the setting
 on, AeroGrid can use up to five times its usual work budget in a busy callback.
 Until a model's settings have loaded, AeroGrid uses the extended budget for
