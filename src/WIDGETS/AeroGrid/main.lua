@@ -1790,12 +1790,14 @@ local function pumpSessionReset(context)
     return true
 end
 
+--- A session reset waits for a load or reload to finish, then runs before other host work.
+local function sessionResetDue(context)
+    return context.sessionResetPending and not (context.stage or context.reloadState)
+end
+
 local function sessionResetReady(task)
     local context = task.host
-    return context.sessionResetPending
-        and not context.stage
-        and not context.reloadState
-        and not context.modelArmingReload
+    return sessionResetDue(context) and not context.modelArmingReload
 end
 
 local function sessionResetStep(task)
@@ -1906,6 +1908,20 @@ local function routeHost(context, hidden)
     return false
 end
 
+local function editorWorkNeeded(state)
+    return state
+        and (
+            state.buildStage
+            or state.saving
+            or state.drawerBuild ~= nil
+            or state.drawerPending
+            or state.nativeInput
+            or state.exitCommand
+            or state.previewPending
+            or state.previewRefresh
+        )
+end
+
 local function advanceForeground(context)
     if context.runtimeFailed then
         context.root:set({ w = context.zone.w, h = context.zone.h })
@@ -1927,19 +1943,7 @@ local function advanceForeground(context)
         context.editorPress = nil
     end
 
-    if
-        context.editorUi
-        and (
-            context.editorUi.buildStage
-            or context.editorUi.saving
-            or context.editorUi.drawerBuild ~= nil
-            or context.editorUi.drawerPending
-            or context.editorUi.nativeInput
-            or context.editorUi.exitCommand
-            or context.editorUi.previewPending
-            or context.editorUi.previewRefresh
-        )
-    then
+    if editorWorkNeeded(context.editorUi) then
         context.uiRequest = "editor"
         return
     end
@@ -2043,20 +2047,6 @@ local function menuStep(task)
     task.host.menuVisibleFullscreen = isFullScreen()
 end
 
-local function editorWorkNeeded(state)
-    return state
-        and (
-            state.buildStage
-            or state.saving
-            or state.drawerBuild ~= nil
-            or state.drawerPending
-            or state.nativeInput
-            or state.exitCommand
-            or state.previewPending
-            or state.previewRefresh
-        )
-end
-
 -- Slots the editor's next step reserves: small build stages are cheap.
 local function editorCost(context)
     local state = context.editorUi
@@ -2097,7 +2087,7 @@ local function inputReady(task, _, hidden)
     return not hidden
         and isFullScreen()
         and not context.modelArmingReload
-        and not (context.sessionResetPending and not (context.stage or context.reloadState))
+        and not sessionResetDue(context)
         and (context.modelSettingsUi or not context.stage and not context.reloadState)
         and not editorWorkNeeded(context.editorUi)
         and (context.inputPending or context.editorPress and getTime() - context.editorPress.started >= 60)
@@ -2240,12 +2230,7 @@ local function editorTransitionReady(task, _, hidden)
     if request == "suspend" then
         return context.modelArmingReload and not (state and state.saving)
     end
-    if
-        hidden
-        or context.modelArmingReload
-        or context.sessionResetPending and not (context.stage or context.reloadState)
-        or context.modelSettingsUi
-    then
+    if hidden or context.modelArmingReload or sessionResetDue(context) or context.modelSettingsUi then
         return false
     end
     if request == "leave" then
@@ -2314,14 +2299,14 @@ local function uiReady(task, _, hidden)
         if context.modelArmingReload then
             return state.saving ~= nil
         end
-        return not (context.sessionResetPending and not (context.stage or context.reloadState))
+        return not sessionResetDue(context)
             and not context.modelSettingsUi
             and (hidden and state.saving ~= nil or not hidden and (isFullScreen() or state.saving ~= nil))
             and (hidden or not menuWorkNeeded(context, isFullScreen()))
     end
     if
         context.modelArmingReload
-        or context.sessionResetPending and not (context.stage or context.reloadState)
+        or sessionResetDue(context)
         or not hidden and menuWorkNeeded(context, isFullScreen())
     then
         return false
@@ -2417,7 +2402,7 @@ local function lifecycleReady(task, _, hidden)
     end
     if
         context.modelArmingReload
-        or context.sessionResetPending and not (context.stage or context.reloadState)
+        or sessionResetDue(context)
         or context.modelSettingsUi
         or context.editorUi and (hidden and context.editorUi.saving or not hidden)
         or not hidden
@@ -2513,7 +2498,7 @@ local function hostWorkNeeded(context, hidden, widgetEvent, fullscreen)
         or context.uiRequest
         or context.editorTransitionRequest
         or context.modelArmingReload
-        or context.sessionResetPending and not (context.stage or context.reloadState)
+        or sessionResetDue(context)
         or context.reloadState
         or context.stage
     then
@@ -2540,7 +2525,7 @@ local function hostWorkNeeded(context, hidden, widgetEvent, fullscreen)
     if
         context.locationDetails and not fullscreen
         or context.logViewer and (not fullscreen or context.logViewer.prepareIndex or context.logViewer.closing or context.logViewer.inputs or context.logViewer.width ~= context.zone.w - 16 or context.logViewer.height ~= context.zone.h)
-        or editor and (not fullscreen or editor.buildStage or editor.saving or editor.drawerBuild ~= nil or editor.drawerPending or editor.nativeInput or editor.exitCommand or editor.previewPending or editor.previewRefresh)
+        or editor and (not fullscreen or editorWorkNeeded(editor))
         or context.editorStash and not editor and fullscreen and context.document
         or not fullscreen
             and (context.pageBuiltFullscreen or context.rootBuiltFullscreen or context.nativeDialogsCreated)
@@ -2691,12 +2676,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                 }
                 context.optionsTask = hostTask
             end
-        elseif
-            context.sessionResetPending
-            and not context.stage
-            and not context.reloadState
-            and not context.modelArmingReload
-        then
+        elseif sessionResetDue(context) and not context.modelArmingReload then
             hostTask = context.sessionResetTask
             if not hostTask then
                 hostTask = {
