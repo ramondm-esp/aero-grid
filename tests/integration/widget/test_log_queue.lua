@@ -62,23 +62,23 @@ untilState(function()
 end)
 local position, offset = state.index, state.offset
 local touch = { x = 120, y = 100 }
-context.logViewerModule.handle(context, EVT_TOUCH_FIRST, touch)
+definition.event(context, EVT_TOUCH_FIRST, touch)
 touch.y = 200
-assert(state.inputs[1].touch.y == 100 and not state.dragY, "deferred input must retain its arrival coordinates")
+assert(not state.dragY, "native input waits for a granted turn")
 untilState(function()
-    return not state.inputs
+    return not context.inputQueue
 end)
-assert(state.dragY == 100)
-context.logViewerModule.handle(context, EVT_ROT_LEFT)
-assert(state.inputs and state.index == position and state.offset == offset, "viewer input cannot scroll synchronously")
-local task = context.uiTasks["log viewer"]
+assert(state.dragY == 100, "granted input must keep its arrival coordinates")
+definition.event(context, EVT_ROT_LEFT)
+assert(state.index == position and state.offset == offset, "viewer input cannot scroll synchronously")
+local inputTask = context.inputTask
 context.scheduler.cursor = 1
 definition.refresh(context)
-assert(state.inputs and context.scheduler.state(task).refused == context.scheduler.callbacks)
+assert(context.inputQueue and context.scheduler.state(inputTask).refused == context.scheduler.callbacks)
 definition.refresh(context)
-assert(
-    not state.inputs and task.cost == context.scheduler.budget.capacity and not context.scheduler.state(task).pending
-)
+assert(not context.inputQueue and not context.scheduler.state(inputTask).pending)
+local task = context.uiTasks["log viewer"]
+assert(not context.scheduler.state(task).pending, "applied input must not leave viewer work behind")
 
 state.closeButton.properties.press()
 assert(context.logViewer == state and state.closing and not context.logOverlay.hidden)

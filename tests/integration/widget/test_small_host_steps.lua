@@ -48,7 +48,7 @@ context.locationDetails = nil
 context.logViewer = { closing = true, width = context.zone.w - 16, height = context.zone.h }
 context.uiRequest = "log viewer"
 context.logViewerModule = {
-    advanceInput = function()
+    close = function()
         closes = closes + 1
         context.logViewer = nil
     end,

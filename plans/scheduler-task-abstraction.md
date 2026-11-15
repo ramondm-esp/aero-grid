@@ -354,8 +354,8 @@ routes still need conversion.
 
 Log opening now has a full-capacity task for module loading, snapshot reading
 and overlay construction. Entry is cancelled when its page/model changes or
-fullscreen ends. Log input records copied coordinates in the viewer's queue;
-the viewer task scrolls or closes on a separate grant, before more wrapping.
+fullscreen ends. Log input is applied by the input task's grant; the viewer
+task only wraps text and closes.
 The native Close button only records closing intent, and callbacks from a
 retired viewer cannot close its replacement. Geometry/reload/fullscreen
 cancellation also closes through the viewer task. Opening, preparation and

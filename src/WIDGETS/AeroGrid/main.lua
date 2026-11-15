@@ -1941,7 +1941,7 @@ local function advanceForeground(context)
     end
 
     if context.logViewer then
-        if context.logViewer.prepareIndex or context.logViewer.closing or context.logViewer.inputs then
+        if context.logViewer.prepareIndex or context.logViewer.closing then
             context.uiRequest = "log viewer"
         end
         return
@@ -2308,7 +2308,6 @@ local function uiReady(task, _, hidden)
     end
     local viewer = context.logViewer
     return not hidden
-        and (not context.inputPending or viewer and viewer.closing)
         and not context.modelSettingsUi
         and not context.stage
         and viewer ~= nil
@@ -2319,7 +2318,7 @@ local function uiReady(task, _, hidden)
                 and isFullScreen()
                 and viewer.width == context.zone.w - 16
                 and viewer.height == context.zone.h
-                and (viewer.prepareIndex ~= nil or viewer.inputs ~= nil)
+                and viewer.prepareIndex ~= nil
         )
 end
 
@@ -2345,13 +2344,8 @@ local function uiStep(task, _, _, hidden)
             end
         end
     else
-        local state = context.logViewer
-        if state.closing or state.inputs then
-            context.logViewerModule.advanceInput(context)
-            state = context.logViewer
-            if state and (state.inputs or state.prepareIndex) then
-                context.uiRequest = task.kind
-            end
+        if context.logViewer.closing then
+            context.logViewerModule.close(context)
             return
         end
         context.logViewerModule.advance(context)
@@ -2516,7 +2510,7 @@ local function hostWorkNeeded(context, hidden, widgetEvent, fullscreen)
     end
     if
         context.locationDetails and not fullscreen
-        or context.logViewer and (not fullscreen or context.logViewer.prepareIndex or context.logViewer.closing or context.logViewer.inputs or context.logViewer.width ~= context.zone.w - 16 or context.logViewer.height ~= context.zone.h)
+        or context.logViewer and (not fullscreen or context.logViewer.prepareIndex or context.logViewer.closing or context.logViewer.width ~= context.zone.w - 16 or context.logViewer.height ~= context.zone.h)
         or editor and (not fullscreen or editorWorkNeeded(editor))
         or context.editorStash and not editor and fullscreen and context.document
         or not fullscreen

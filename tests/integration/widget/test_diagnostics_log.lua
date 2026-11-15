@@ -103,7 +103,7 @@ local function input(event, touch, draining)
             if
                 not diagnostics.inputQueue
                 and not diagnostics.logOpenRequest
-                and not (diagnostics.logViewer and (diagnostics.logViewer.inputs or diagnostics.logViewer.closing))
+                and not (diagnostics.logViewer and (diagnostics.logViewer.prepareIndex or diagnostics.logViewer.closing))
                 and not (diagnostics.hostTask and diagnostics.scheduler.state(diagnostics.hostTask).refused == diagnostics.scheduler.callbacks)
                 and not (
                     diagnostics.menuTask

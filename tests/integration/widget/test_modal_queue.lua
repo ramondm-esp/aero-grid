@@ -130,9 +130,6 @@ definition.refresh(context)
 assert(flightSteps == 1 and steps == 5, "the deferred viewer gets first turn next callback")
 local viewerTask = context.uiTasks["log viewer"]
 assert(context.scheduler.state(viewerTask).pending)
-context.inputPending = true
-assert(not viewerTask.ready(viewerTask, getTime(), false), "input must preempt log preparation")
-context.inputPending = false
 context.flightFactory = nil
 definition.refresh(context)
 definition.refresh(context)

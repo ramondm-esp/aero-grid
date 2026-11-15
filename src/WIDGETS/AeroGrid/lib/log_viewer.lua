@@ -223,33 +223,12 @@ local function applyInput(host, event, touch)
     return true
 end
 
---- Native and host input only records work for a later scheduler grant.
+--- Apply one input the host has already granted a scheduler turn.
 function viewer.handle(host, event, touch)
-    local state = host.logViewer
-    if not state then
+    if not host.logViewer then
         return false
     end
-    local input = { event = event }
-    if touch then
-        input.touch = { x = touch.x, y = touch.y }
-    end
-    state.inputs = state.inputs or {}
-    state.inputs[#state.inputs + 1] = input
-    host.uiRequest = "log viewer"
-    return true
-end
-
-function viewer.advanceInput(host)
-    local state = host.logViewer
-    if state.closing then
-        viewer.close(host)
-        return
-    end
-    local input = table.remove(state.inputs, 1)
-    if #state.inputs == 0 then
-        state.inputs = nil
-    end
-    applyInput(host, input.event, input.touch)
+    return applyInput(host, event, touch)
 end
 
 return viewer
