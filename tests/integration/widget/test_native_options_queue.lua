@@ -15,14 +15,14 @@ context.editorSession, context.editorStash, context.editorUi = {}, {}, { saving 
 context.editorTransitionRequest, context.modelSettingsRequest = "open", true
 context.editorUiModule = {
     close = function(_, discard)
-        assert(context.optionsTask.cost == context.scheduler.capacity)
+        assert(context.optionsTask.cost == context.scheduler.budget.capacity)
         assert(discard == true, "changing native options discards the old draft and any unfinished save")
         closed = closed + 1
         context.editorUi = nil
     end,
 }
 context.editorController.restorePreview = function()
-    assert(context.optionsTask.cost == context.scheduler.capacity)
+    assert(context.optionsTask.cost == context.scheduler.budget.capacity)
     restored = restored + 1
 end
 context.flightTask = {

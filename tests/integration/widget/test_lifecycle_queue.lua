@@ -13,7 +13,7 @@ context.serviceRuntime = context.servicesModule.runtime({})
 local calls, loadSteps, reflowSteps = {}, 0, 0
 local function record(kind)
     local task = assert(context.lifecycleTasks[kind])
-    assert(task.cost == (kind == "rebuild" and 1 or context.scheduler.capacity))
+    assert(task.cost == (kind == "rebuild" and 1 or context.scheduler.budget.capacity))
     calls[#calls + 1] = { kind = kind, callback = context.scheduler.callbacks }
 end
 context.dashboardLifecycle.retirePage = function()
@@ -63,7 +63,7 @@ for index = 1, 3 do
     assert(context.lifecycleTasks.load.pending == (index < 3))
 end
 assert(not context.stage and not context.lifecycleRequest)
-assert(context.lifecycleTasks.load.spent - spentBefore == 3 * context.scheduler.capacity)
+assert(context.lifecycleTasks.load.spent - spentBefore == 3 * context.scheduler.budget.capacity)
 context.stage = "probe"
 local loadTask = context.lifecycleTasks.load
 context.inputPending = true

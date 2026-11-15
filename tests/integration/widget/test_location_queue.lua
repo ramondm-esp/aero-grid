@@ -65,7 +65,7 @@ untilState(function()
 end)
 local state = assert(context.locationDetails)
 assert(flights == before + 1 and state.latitude == 47 and state.longitude == 8)
-assert(context.locationTask.cost == context.scheduler.capacity and not context.locationTask.pending)
+assert(context.locationTask.cost == context.scheduler.budget.capacity and not context.locationTask.pending)
 assert(state.url == "https://www.google.com/maps/search/?api=1&query=47.000000,8.000000")
 
 -- A release without a preceding press on the overlay is not a tap; a long press closes it.
@@ -96,7 +96,7 @@ untilState(function()
     return context.locationDetails ~= nil
 end)
 assert(context.locationDetails.latitude == -33 and context.locationDetails.longitude == 151)
-assert(context.locationTask.cost == context.scheduler.capacity, "reopening must restore the full opening cost")
+assert(context.locationTask.cost == context.scheduler.budget.capacity, "reopening must restore the full opening cost")
 context.locationDetailsModule.handle(context, EVT_VIRTUAL_EXIT)
 local replacement = {}
 context.locationDetails = replacement

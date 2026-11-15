@@ -12,7 +12,7 @@ local advances, flightSteps = 0, 0
 local advance = context.aeroMenuModule.advance
 context.aeroMenuModule.advance = function(host)
     assert(host.menuTask.ran ~= host.scheduler.callbacks, "advance is called before grant attribution")
-    assert(host.menuTask.cost == host.scheduler.capacity)
+    assert(host.menuTask.cost == host.scheduler.budget.capacity)
     advances = advances + 1
     return advance(host)
 end
@@ -45,7 +45,7 @@ definition.refresh(context)
 assert(advances == 3 and not menu.open)
 local actions = 0
 menu.handlers.uiSetup = function()
-    assert(context.menuTask.cost == context.scheduler.capacity)
+    assert(context.menuTask.cost == context.scheduler.budget.capacity)
     actions = actions + 1
 end
 menu.action = "uiSetup"

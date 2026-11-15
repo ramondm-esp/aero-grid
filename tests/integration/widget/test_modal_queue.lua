@@ -23,7 +23,7 @@ context.modelSettingsUiModule = {
     end,
     advance = function()
         local task = assert(context.uiTasks["model settings"])
-        assert(task.cost == context.scheduler.capacity)
+        assert(task.cost == context.scheduler.budget.capacity)
         steps = steps + 1
         local state = context.modelSettingsUi
         if state.closing then
@@ -95,7 +95,7 @@ context.logViewer = { width = context.zone.w - 16, height = context.zone.h, prep
 context.logViewerModule = {
     advance = function()
         local task = assert(context.uiTasks["log viewer"])
-        assert(task.cost == context.scheduler.capacity)
+        assert(task.cost == context.scheduler.budget.capacity)
         steps = steps + 1
         context.logViewer.prepareIndex = context.logViewer.prepareIndex > 1 and context.logViewer.prepareIndex - 1
             or nil

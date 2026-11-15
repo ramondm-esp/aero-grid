@@ -33,7 +33,7 @@ context.flightReportedRevision, context.flightReportedEpoch = 0, 1
 context.stage = "probe"
 context.lifecycleRequest = "load"
 context.dashboardLoader.advanceLoad = function()
-    assert(context.lifecycleTasks.load.cost == context.scheduler.capacity)
+    assert(context.lifecycleTasks.load.cost == context.scheduler.budget.capacity)
     calls[#calls + 1] = "load"
     context.stage = nil
 end
@@ -48,7 +48,7 @@ assert(context.remainingSlots == 0 and not context.stage)
 owner.documentLoaded = false
 owner.store = {
     load = function(_, filename)
-        assert(filename == "model" and context.flightTask.cost == context.scheduler.capacity)
+        assert(filename == "model" and context.flightTask.cost == context.scheduler.budget.capacity)
         calls[#calls + 1] = "document"
         return {}
     end,

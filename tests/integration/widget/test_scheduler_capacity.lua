@@ -10,7 +10,7 @@ loadScript = function(filename)
     if chunk and string.sub(filename, -#relative) == relative then
         return function(...)
             local module = chunk(...)
-            module.SLOTS = 12
+            module.CAPACITY = 12
             return module
         end
     end
@@ -20,8 +20,8 @@ local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-da
 fixture.pump(context, 6)
 loadScript = originalLoadScript
 local definition = fixture.module("main.lua")
-assert(context.scheduler.capacity == 12)
-assert(context.servicesModule.SLOTS == 8 and context.servicesModule.INSTRUCTIONS_PER_SLOT == 2000)
+assert(context.scheduler.budget.capacity == 12)
+assert(context.servicesModule.SLOTS == 8 and context.scheduler.budget.slots == 8)
 assert(context.panelHost.SLOTS == 8)
 assert(context.servicesModule.grant(8, 12) == 8)
 assert(not pcall(context.servicesModule.grant, 9, 12))

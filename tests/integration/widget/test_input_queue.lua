@@ -18,11 +18,11 @@ context.flightTask = {
     end,
 }
 context.editorController.editorEntryHit = function(_, value, _, held)
-    assert(context.inputTask.cost == context.scheduler.capacity)
+    assert(context.inputTask.cost == context.scheduler.budget.capacity)
     return held and value == EVT_TOUCH_FIRST
 end
 context.panelHost.dispatch = function(entry, method, value)
-    assert(method == "event" and context.inputTask.cost == context.scheduler.capacity)
+    assert(method == "event" and context.inputTask.cost == context.scheduler.budget.capacity)
     calls = calls + 1
     seen[#seen + 1] = { owner = entry, event = value }
     return true, nil, entry.consume

@@ -33,7 +33,7 @@ context.locationDetailsModule = {
 }
 context.locationRequest = { kind = "close", state = state }
 tick()
-assert(flights == 1 and closes == 1 and context.remainingSlots == context.scheduler.capacity - 2)
+assert(flights == 1 and closes == 1 and context.remainingSlots == context.scheduler.budget.capacity - 2)
 assert(context.locationTask.spent == 1 and not context.locationTask.pending)
 
 context.locationDetails = state
@@ -56,7 +56,7 @@ local before = flights
 tick()
 assert(closes == 2 and flights == before + 1)
 assert(context.uiTasks["log viewer"].spent == 1)
-assert(context.remainingSlots == context.scheduler.capacity - 2)
+assert(context.remainingSlots == context.scheduler.budget.capacity - 2)
 context.aeroMenuModal = false
 
 local retired
@@ -84,5 +84,5 @@ before = flights
 tick()
 assert(rebuilds == 1 and flights == before + 1 and context.stage == "probe")
 assert(context.lifecycleTasks.rebuild.spent == 1 and not context.lifecycleTasks.rebuild.pending)
-assert(context.remainingSlots == context.scheduler.capacity - 2)
+assert(context.remainingSlots == context.scheduler.budget.capacity - 2)
 assert(#context.errors == 0, table.concat(context.errors, "\n"))

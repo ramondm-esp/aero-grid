@@ -26,13 +26,13 @@ for _, path in ipairs(loaded) do
     assert(string.match(path, "/lib/scheduler%.lua$"), "native create loaded more than its scheduler bootstrap")
 end
 loadScript = originalLoadScript
-assert(context.initializationTask.cost == context.scheduler.capacity)
+assert(context.initializationTask.cost == context.scheduler.budget.capacity)
 definition.background(context)
 assert(not context.initializing and context.root and context.grid and context.configureFlight)
 assert(context.root == shellRoot and context.page == shellPage and context.canvas == shellCanvas)
 assert(context.flightFactory.members[context] and context.stage ~= "initialize")
 assert(context.remainingSlots == 0 and not context.initializationTask.pending)
-assert(context.initializationTask.spent == context.scheduler.capacity)
+assert(context.initializationTask.spent == context.scheduler.budget.capacity)
 assert(#context.panels == 0, "initialization must not also construct panels")
 fixture.pump(context, 100)
 assert(not context.stage and #context.errors == 0, table.concat(context.errors, "\n"))

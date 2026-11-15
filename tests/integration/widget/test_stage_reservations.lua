@@ -33,11 +33,11 @@ assert(flights == 1 and #steps == 4, "small loading stages can share flight's ca
 assert(grants[1] == 1 and grants[2] == 2 and grants[3] == 1 and grants[4] == 1)
 assert(context.remainingSlots == 2 and context.stage == "panel-build")
 local task = context.lifecycleTasks.load
-assert(task.spent == 5 and task.cost == context.scheduler.capacity and task.pending)
+assert(task.spent == 5 and task.cost == context.scheduler.budget.capacity and task.pending)
 assert(task.refused == context.scheduler.callbacks, "expensive construction cannot use a leftover small grant")
 definition.refresh(context)
-assert(#steps == 5 and not context.stage and grants[5] == context.scheduler.capacity)
-assert(task.spent == 5 + context.scheduler.capacity and not task.pending)
+assert(#steps == 5 and not context.stage and grants[5] == context.scheduler.budget.capacity)
+assert(task.spent == 5 + context.scheduler.budget.capacity and not task.pending)
 context.stage = "services"
 broker.documentLoaded = false
 assert(not task.ready(task, getTime(), false), "service construction must wait for the model document")
@@ -56,7 +56,7 @@ context.editorController.advanceEditor = function()
         assert(cost == 3)
         editor.buildStage = nil
     else
-        assert(cost == context.scheduler.capacity, "preview work cannot inherit a build reservation")
+        assert(cost == context.scheduler.budget.capacity, "preview work cannot inherit a build reservation")
         editor.previewPending = nil
     end
 end
@@ -65,12 +65,12 @@ local before = flights
 context.scheduler.cursor = 1
 definition.refresh(context)
 assert(flights == before + 1 and not editor.buildStage)
-assert(context.remainingSlots == context.scheduler.capacity - 4)
+assert(context.remainingSlots == context.scheduler.budget.capacity - 4)
 editor.previewPending = true
 context.uiRequest = "editor"
 context.scheduler.cursor = 1
 definition.refresh(context)
-assert(editor.previewPending and context.uiTasks.editor.cost == context.scheduler.capacity)
+assert(editor.previewPending and context.uiTasks.editor.cost == context.scheduler.budget.capacity)
 definition.refresh(context)
 assert(not editor.previewPending)
 assert(#context.errors == 0, table.concat(context.errors, "\n"))
@@ -95,7 +95,7 @@ for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagn
                     name = name .. "/" .. tostring(task.ui.build or task.ui.buildStage)
                 end
                 local count = 0
-                if slots > 0 and slots < host.scheduler.capacity and task.hostWork then
+                if slots > 0 and slots < host.scheduler.budget.capacity and task.hostWork then
                     debug.sethook(function()
                         count = count + 100
                     end, "", 100)

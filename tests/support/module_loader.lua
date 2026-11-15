@@ -16,7 +16,7 @@ local function loadModule(relative)
         return chunk(loadModule("lib/reading.lua"))
     end
     if relative == "panels/chart.lua" then
-        return chunk(loadModule("lib/scheduler.lua").new())
+        return chunk(loadModule("lib/scheduler.lua").new().budget)
     end
     if relative == "main.lua" then
         -- Instruction-budget tests measure one 8-slot segment per callback, so

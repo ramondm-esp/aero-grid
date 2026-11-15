@@ -65,7 +65,6 @@
 ---@field editorUi? table Active editor screen state.
 
 local WIDGET_PATH = "/WIDGETS/AeroGrid/"
-local MAX_TASK_SLOTS = 8
 
 local function directory(path)
     return string.sub(path, -1) == "/" and path or path .. "/"
@@ -672,7 +671,7 @@ local function create(zone, widgetOptions, path)
                 })
             end),
         })
-        context.scheduler.run(getTime(), context.scheduler.capacity, false)
+        context.scheduler.run(getTime(), context.scheduler.budget.capacity, false)
         context.scheduler.clear()
     end
     if not context.scheduler then
@@ -696,7 +695,7 @@ local function create(zone, widgetOptions, path)
         owner = "initialize",
         host = context,
         hostWork = true,
-        cost = math.min(context.scheduler.capacity, MAX_TASK_SLOTS),
+        cost = context.scheduler.budget.slots,
         step = taskStep(function()
             context.initializing = nil
             initialize(context)
@@ -1382,12 +1381,12 @@ local function runTasks(context, hidden, flightTask, hostTask)
 
     local now = getTime()
     local stats = context.schedulerStats
-    local used, requested, denied = scheduler.run(now, scheduler.capacity, hidden or false)
+    local used, requested, denied = scheduler.run(now, scheduler.budget.capacity, hidden or false)
     -- Slots are measured against everything the callback may run: the extended
     -- budget whenever it is enabled, whether or not this callback needed it.
     local extended = liveDangerously(context)
-    local available = scheduler.capacity * (extended and 1 + EXTENDED_SEGMENTS or 1)
-    context.remainingSlots = scheduler.capacity - used
+    local available = scheduler.budget.capacity * (extended and 1 + EXTENDED_SEGMENTS or 1)
+    context.remainingSlots = scheduler.budget.capacity - used
     if extended and scheduler.more(now, hidden or false) then
         -- Extra segments run past EdgeTX's per-callback limit in the same
         -- callback; only pending and deferred work continues.
@@ -1397,11 +1396,11 @@ local function runTasks(context, hidden, flightTask, hostTask)
                     break
                 end
                 local segmentUsed, segmentRequested, segmentDenied =
-                    scheduler.resume(now, scheduler.capacity, hidden or false)
+                    scheduler.resume(now, scheduler.budget.capacity, hidden or false)
                 -- A request denied earlier and retried here is still one request,
                 -- and only what remains denied after the last segment is deferred.
                 used, requested, denied = used + segmentUsed, requested + segmentRequested - denied, segmentDenied
-                context.remainingSlots = scheduler.capacity - segmentUsed
+                context.remainingSlots = scheduler.budget.capacity - segmentUsed
             end
         end)
         if not ok then
@@ -1450,9 +1449,9 @@ local function pumpFlight(task, now, granted)
     end
     if filename ~= owner.filename then
         owner:reset(filename)
-        task.cost = math.min(context.scheduler.capacity, MAX_TASK_SLOTS)
+        task.cost = context.scheduler.budget.slots
         context.scheduledServices, context.scheduledPanels = false, false
-        if granted < context.scheduler.capacity then
+        if granted < context.scheduler.budget.slots then
             return nil, true
         end
     end
@@ -2114,9 +2113,9 @@ local function editorCost(context)
         and state.drawerBuild == nil
         and not state.saving
     then
-        return math.min(3, context.scheduler.capacity)
+        return math.min(3, context.scheduler.budget.slots)
     end
-    return math.min(context.scheduler.capacity, MAX_TASK_SLOTS)
+    return context.scheduler.budget.slots
 end
 
 -- Building controls and writing the layout create or compute only; previews,
@@ -2388,7 +2387,7 @@ local function uiStep(task, _, _, hidden)
             -- Fields only create controls; commands and closing keep their boundary.
             if state.build and not state.pending and not state.closing then
                 local cost = context.modelSettingsUiModule.cost
-                task.cost = cost and math.min(cost(context), MAX_TASK_SLOTS) or task.cost
+                task.cost = cost and math.min(cost(context), context.scheduler.budget.slots) or task.cost
                 return nil, true
             end
         end
@@ -2470,8 +2469,8 @@ local LOAD_STAGE_COST = {
 }
 
 local function loadCost(context)
-    local cost = LOAD_STAGE_COST[context.stage] or MAX_TASK_SLOTS
-    return math.min(cost, context.scheduler.capacity, MAX_TASK_SLOTS)
+    local slots = context.scheduler.budget.slots
+    return math.min(LOAD_STAGE_COST[context.stage] or slots, slots)
 end
 
 local function lifecycleStep(task)
@@ -2620,7 +2619,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         end
         local scheduler = context.scheduler
         scheduler.add(context.initializationTask)
-        context.remainingSlots = scheduler.capacity - scheduler.run(getTime(), scheduler.capacity, hidden)
+        context.remainingSlots = scheduler.budget.capacity - scheduler.run(getTime(), scheduler.budget.capacity, hidden)
         scheduler.clear()
         if context.schedulerFailed then
             if not context.root then
@@ -2693,7 +2692,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
             }
             context.flightTask = flightTask
         end
-        flightTask.cost = owner.documentLoaded and 1 or math.min(scheduler.capacity, MAX_TASK_SLOTS)
+        flightTask.cost = owner.documentLoaded and 1 or scheduler.budget.slots
     end
     local hostTask
     if hostNeeded then
@@ -2917,12 +2916,12 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                 context.hostTask = hostTask
             end
         end
-        hostTask.cost = math.min(scheduler.capacity, MAX_TASK_SLOTS)
+        hostTask.cost = scheduler.budget.slots
         if context.lifecycleTasks and hostTask == context.lifecycleTasks.load then
             hostTask.cost = loadCost(context)
         elseif context.uiTasks and hostTask == context.uiTasks["model settings"] then
             if context.modelSettingsUiModule.cost then
-                hostTask.cost = math.min(context.modelSettingsUiModule.cost(context), MAX_TASK_SLOTS)
+                hostTask.cost = math.min(context.modelSettingsUiModule.cost(context), scheduler.budget.slots)
             end
         elseif context.uiTasks and hostTask == context.uiTasks.editor then
             hostTask.cost = editorCost(context)

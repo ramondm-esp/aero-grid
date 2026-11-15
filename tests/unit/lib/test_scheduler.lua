@@ -2,7 +2,7 @@
 
 local root = assert(...)
 local module = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/scheduler.lua"))()
-assert(module.SLOTS == 8 and module.INSTRUCTIONS_PER_SLOT == 2000)
+assert(module.SLOTS == 8 and module.CAPACITY == 8 and module.INSTRUCTIONS_PER_SLOT == 2000)
 
 for _, capacity in ipairs({ false, 0, -1, 1.5, math.huge, 0 / 0, "8" }) do
     assert(not pcall(module.new, { capacity = capacity }), "invalid capacity must be rejected")

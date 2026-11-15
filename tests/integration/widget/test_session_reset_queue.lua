@@ -22,7 +22,7 @@ local service = {
     end,
     resetSession = function(_, resetTime, item)
         assert(resetTime == now, "a reset job keeps its original time")
-        assert(context.sessionResetTask.cost == context.scheduler.capacity)
+        assert(context.sessionResetTask.cost == context.scheduler.budget.capacity)
         items = items + 1
         assert(item == items)
         return item < 10 and item + 1 or nil
@@ -56,7 +56,7 @@ context.scheduler.cursor = 1
 definition.refresh(context)
 assert(items == 8 and panelTurns == 0 and liveTurns == 0)
 assert(context.sessionResetTask.pending and context.remainingSlots == 0)
-assert(context.sessionResetTask.spent == context.scheduler.capacity)
+assert(context.sessionResetTask.spent == context.scheduler.budget.capacity)
 fixture.tick(10)
 definition.background(context)
 assert(items == 10 and service.revision == 1 and service.due == now)
@@ -68,7 +68,7 @@ assert(panelTurns == 2 and context.sessionResetPending)
 definition.refresh(context)
 assert(not context.sessionResetPending and not context.sessionResetJob and not context.sessionResetTask.pending)
 assert(liveTurns == 0, "reset completion still owns its whole callback")
-assert(context.sessionResetTask.spent == 5 * context.scheduler.capacity)
+assert(context.sessionResetTask.spent == 5 * context.scheduler.budget.capacity)
 definition.refresh(context)
 assert(liveTurns == 2, "normal queued work resumes after reset completion")
 

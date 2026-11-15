@@ -21,7 +21,8 @@
 ---@field spun? integer Callback in which the task was stopped after repeated free turns.
 
 local MAX_TASK_SLOTS = 8
-local scheduler = { RUNTIME_API = 1, SLOTS = MAX_TASK_SLOTS, INSTRUCTIONS_PER_SLOT = 2000 }
+--- `SLOTS` caps one turn; `CAPACITY` is the default allowance of one callback segment.
+local scheduler = { RUNTIME_API = 1, SLOTS = MAX_TASK_SLOTS, CAPACITY = MAX_TASK_SLOTS, INSTRUCTIONS_PER_SLOT = 2000 }
 
 --- Burns VM instructions until EdgeTX's per-callback CPU limit raises an error.
 --- Only the instruction count matters, so the body is cheap register moves
@@ -99,19 +100,24 @@ end
 function scheduler.new(dependencies)
     dependencies = dependencies or {}
     local fail, charge = dependencies.fail, dependencies.charge
+    local capacity = dependencies.capacity == nil and scheduler.CAPACITY or dependencies.capacity
+    assert(
+        type(capacity) == "number" and capacity > 0 and capacity < math.huge and capacity % 1 == 0,
+        "capacity must be a positive whole number"
+    )
     local self = {
-        capacity = dependencies.capacity == nil and scheduler.SLOTS or dependencies.capacity,
-        instructionsPerSlot = scheduler.INSTRUCTIONS_PER_SLOT,
+        -- Read-only description of the callback budget, shared with panels.
+        budget = {
+            capacity = capacity,
+            slots = math.min(capacity, MAX_TASK_SLOTS),
+            instructionsPerSlot = scheduler.INSTRUCTIONS_PER_SLOT,
+        },
         tasks = {},
         count = 0,
         cursor = 1,
         callbacks = 0,
         segments = 0,
     }
-    assert(
-        type(self.capacity) == "number" and self.capacity > 0 and self.capacity < math.huge and self.capacity % 1 == 0,
-        "capacity must be a positive whole number"
-    )
 
     --- Enrol one task for the coming run.
     function self.add(task)
@@ -147,7 +153,7 @@ function scheduler.new(dependencies)
     --- Consecutive zero-charge turns are limited to at most eight per task
     --- per callback; unfinished work resumes on the next callback.
     local function execute(now, slots, context, resuming)
-        local count, tasks, capacity = self.count, self.tasks, self.capacity
+        local count, tasks, turnSlots = self.count, self.tasks, self.budget.slots
         if count == 0 then
             return 0, 0, 0
         end
@@ -233,7 +239,7 @@ function scheduler.new(dependencies)
                             if ok and again then
                                 task.pending = true
                                 progressed = true
-                                if task.zeroTurns >= math.min(capacity, MAX_TASK_SLOTS) then
+                                if task.zeroTurns >= turnSlots then
                                     task.refused, task.spun = callback, callback
                                 end
                             else

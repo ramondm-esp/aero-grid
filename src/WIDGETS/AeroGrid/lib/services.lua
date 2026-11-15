@@ -29,9 +29,9 @@
 ---@field resetSession? fun(self: AeroGridServiceInstance, now: integer, index: integer): integer? Next reset item, or nil when finished.
 
 local services = { RUNTIME_API = 1 }
+-- Matches the scheduler's per-turn cap.
 local MAX_TASK_SLOTS = 8
 services.SLOTS = MAX_TASK_SLOTS
-services.INSTRUCTIONS_PER_SLOT = 2000
 
 function services.grant(cost, remaining, minimum)
     if cost == "variable" then

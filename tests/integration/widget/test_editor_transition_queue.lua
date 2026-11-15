@@ -12,12 +12,12 @@ context.document.panels, context.emptyHint = { {} }, nil
 context.serviceRuntime = context.servicesModule.runtime({})
 local opened, closed, restored, flightSteps = 0, 0, 0, 0
 context.editorController.openEditor = function()
-    assert(context.editorTransitionTask.cost == context.scheduler.capacity)
+    assert(context.editorTransitionTask.cost == context.scheduler.budget.capacity)
     opened = opened + 1
     return true
 end
 context.editorController.restorePreview = function()
-    assert(context.editorTransitionTask.cost == context.scheduler.capacity)
+    assert(context.editorTransitionTask.cost == context.scheduler.budget.capacity)
     restored = restored + 1
 end
 context.editorUiModule = {

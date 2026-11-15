@@ -12,7 +12,7 @@ local loads, opened, closed, restored, flightSteps, saves = 0, 0, 0, 0, 0, 0
 local document = { revision = 1, armed = "", flight = {}, sessionReset = "" }
 broker.store.load = function(_, filename)
     assert(filename == broker.filename)
-    assert(context.modelSettingsOpenTask.cost == context.scheduler.capacity)
+    assert(context.modelSettingsOpenTask.cost == context.scheduler.budget.capacity)
     loads = loads + 1
     return document
 end
@@ -22,7 +22,7 @@ broker.setDocument = function(_, value)
 end
 context.modelSettingsUiModule = {
     open = function(_, value)
-        assert(context.modelSettingsOpenTask.cost == context.scheduler.capacity)
+        assert(context.modelSettingsOpenTask.cost == context.scheduler.budget.capacity)
         assert(value.modelFilename == broker.filename)
         opened = opened + 1
         context.modelSettingsUi = {}
@@ -33,18 +33,18 @@ context.editorSession, context.editorUi = draft, { saving = {} }
 context.aeroMenuModal = true
 context.editorUiModule = {
     close = function(_, discard)
-        assert(context.modelSettingsOpenTask.cost == context.scheduler.capacity)
+        assert(context.modelSettingsOpenTask.cost == context.scheduler.budget.capacity)
         assert(not discard and not context.editorUi.saving)
         closed = closed + 1
         context.editorUi = nil
     end,
 }
 context.editorController.restorePreview = function()
-    assert(context.modelSettingsOpenTask.cost == context.scheduler.capacity)
+    assert(context.modelSettingsOpenTask.cost == context.scheduler.budget.capacity)
     restored = restored + 1
 end
 context.editorController.advanceEditor = function()
-    assert(context.uiTasks.editor.cost == context.scheduler.capacity)
+    assert(context.uiTasks.editor.cost == context.scheduler.budget.capacity)
     saves = saves + 1
     context.editorUi.saving = nil
 end

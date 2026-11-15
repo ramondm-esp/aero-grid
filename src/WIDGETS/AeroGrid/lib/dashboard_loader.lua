@@ -173,7 +173,7 @@ function module.new(dependencies)
         end
 
         local panel, panelError =
-            loadModule(context.path, "panels/" .. placement.type .. ".lua", nil, context.scheduler)
+            loadModule(context.path, "panels/" .. placement.type .. ".lua", nil, context.scheduler.budget)
         local contractValid, contractError
 
         if panel then
@@ -564,7 +564,6 @@ function module.new(dependencies)
                 end
 
                 context.servicesModule = support
-                support.INSTRUCTIONS_PER_SLOT = context.scheduler.instructionsPerSlot
                 context.serviceRuntime = support.runtime(support.environment())
                 context.serviceRuntime.host = context
                 context.serviceRuntime.modules = {}

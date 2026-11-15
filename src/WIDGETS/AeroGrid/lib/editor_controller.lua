@@ -227,7 +227,7 @@ function module.new(dependencies)
         end
         if action.initialRefresh then
             local entry = action.initialRefresh
-            local ok, message = context.panelHost.dispatch(entry, "refresh", false, context.scheduler.capacity)
+            local ok, message = context.panelHost.dispatch(entry, "refresh", false, context.scheduler.budget.slots)
             if not ok then
                 return true, entry.placement.id .. ": preview refresh: " .. tostring(message)
             end
@@ -327,7 +327,8 @@ function module.new(dependencies)
             if type(typeName) ~= "string" or not string.match(typeName, "^[%w_-]+$") then
                 return nil, "invalid panel type"
             end
-            local panel, panelError = loadModule(context.path, "panels/" .. typeName .. ".lua", nil, context.scheduler)
+            local panel, panelError =
+                loadModule(context.path, "panels/" .. typeName .. ".lua", nil, context.scheduler.budget)
             if panel then
                 context.editorPanelCache[typeName] = panel
             end

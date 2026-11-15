@@ -362,7 +362,7 @@ local function buildField(context, state, field)
 end
 
 function ui.cost(context)
-    local state, capacity = context.modelSettingsUi, context.scheduler.capacity
+    local state, capacity = context.modelSettingsUi, context.scheduler.budget.slots
     local field = state and state.build and fields[state.build]
     -- Switch controls resolve firmware names; the output list also builds 65 choices.
     if
