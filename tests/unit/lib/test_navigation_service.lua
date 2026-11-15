@@ -71,12 +71,19 @@ local function testRoundContinuesUntilEverySubscriptionIsPolled()
         service:subscribe("GPS" .. index, "SFv")
     end
     local total = #service.entries
+    local polls = 0
+    local poll = service.poll
+    service.poll = function(self, entry, now)
+        polls = polls + 1
+        return poll(self, entry, now)
+    end
     local turns = 0
     repeat
-        local _, again = service:update(turns * 10)
+        local _, again = service:update(50)
         turns = turns + 1
     until not again
     assert(turns == math.ceil(total / 2), "one round polls every subscription: " .. turns)
+    assert(polls == total, "a continuation must not poll a subscription twice: " .. polls)
     update(100, false)
 end
 

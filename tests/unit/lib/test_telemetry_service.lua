@@ -79,7 +79,7 @@ local function testHostPollingBudgetKeepsRoundRobinProgress()
     for step = 1, 6 do
         local _, again = service:update(step * 10)
         assertions.assertEqual(service.cursor, step * 4 % 24 + 1)
-        assertions.assertEqual(again, step < 6, "an unfinished round continues in the same callback")
+        assertions.assertEqual(again, true, "an unfinished round asks to continue in the same callback")
     end
     for index = 1, 24 do
         assertions.assertEqual(reads[index], 1, "a reduced budget must still visit every source")
@@ -104,6 +104,37 @@ local function testHostPollingBudgetKeepsRoundRobinProgress()
     consumed = service:update(100, 8)
     assertions.assertEqual(consumed, 4, "a capped poll batch returns unused slots")
     assertions.assertEqual(observed, 10)
+end
+
+local function testContinuationPollsEachSourceOncePerRound()
+    local reads = {}
+    local service = telemetryService.new(
+        services.environment({
+            getRSSI = function()
+                return 42
+            end,
+            getFieldInfo = function(name)
+                return { id = tonumber(name), name = name, unit = 0 }
+            end,
+            getValue = function(id)
+                reads[id] = (reads[id] or 0) + 1
+                return id
+            end,
+        }),
+        services
+    )
+    for index = 1, 12 do
+        service:subscribe(tostring(index))
+    end
+    local turns, again = 0, true
+    while again do
+        _, again = service:update(10, 8)
+        turns = turns + 1
+    end
+    assertions.assertEqual(turns, 2, "twelve sources need two turns of at most eight")
+    for index = 1, 12 do
+        assertions.assertEqual(reads[index], 1, "a continuation must not poll a source twice in one callback")
+    end
 end
 
 local function testPrecisionSearchesResumeAfterIdle()
@@ -185,6 +216,7 @@ local function run()
     testLinkSubscriptionExists()
     testTransmitterLocalSourceIsNotLinkEvidence()
     testHostPollingBudgetKeepsRoundRobinProgress()
+    testContinuationPollsEachSourceOncePerRound()
     testPrecisionSearchesResumeAfterIdle()
 end
 
