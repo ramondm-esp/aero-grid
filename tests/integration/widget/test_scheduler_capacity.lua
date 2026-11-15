@@ -45,18 +45,12 @@ context.servicesModule.register(context.serviceRuntime, {
         return slots
     end,
 }, 0)
-context.schedulerStats = {
-    started = getTime(),
-    callbacks = 0,
-    used = 0,
-    requested = 0,
-    denied = 0,
-    revision = 0,
-}
+local totals = context.scheduler.stats()
+local used, available = totals.used, totals.available
 fixture.tick(100)
 definition.refresh(context)
 assert(granted == 8 and context.remainingSlots == 4)
-assert(context.schedulerStats.capacity == 12 and context.schedulerStats.utilization < 100)
+assert(totals.available - available == 12 and totals.used - used < 12)
 fixture.tick(10)
 definition.background(context)
 assert(granted == 8 and context.remainingSlots == 4, "a task turn stays capped at eight slots in hidden callbacks")

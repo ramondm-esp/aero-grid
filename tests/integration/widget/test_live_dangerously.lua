@@ -31,11 +31,14 @@ local function service(turns)
             return slots, updates < turns
         end,
     }, 0)
-    context.schedulerStats = { started = getTime(), callbacks = 0, used = 0, requested = 0, denied = 0, revision = 0 }
 end
 
 -- EdgeTX stops a callback with "CPU limit" after 20000 instructions.
+-- Scheduler counters for the last callback.
+local last
 local function callback(limited)
+    local totals = context.scheduler.stats()
+    local used, available, denied = totals.used, totals.available, totals.denied
     fixture.tick(100)
     if limited then
         local hooks = 0
@@ -50,20 +53,21 @@ local function callback(limited)
     local ok, message = pcall(definition.refresh, context)
     debug.sethook()
     assert(ok, message)
+    last = { used = totals.used - used, available = totals.available - available, denied = totals.denied - denied }
 end
 
 enable(false)
 service(100)
 callback(false)
 assert(updates == 1 and context.remainingSlots == 0, "without the option a callback stays within its slots")
-assert(context.schedulerStats.capacity == 8)
+assert(last.available == 8)
 
 enable(true)
 service(100)
 callback(false)
 assert(updates == 5, "the option adds four more segments: " .. updates)
-assert(context.schedulerStats.capacity == 40 and context.schedulerStats.utilization == 100)
-assert(context.schedulerStats.deferrals > 0, "work left over after the last segment is deferred")
+assert(last.available == 40 and last.used == 40)
+assert(last.denied > 0, "work left over after the last segment is deferred")
 assert(not context.liveDangerouslyFailed)
 
 service(100)
@@ -74,8 +78,8 @@ assert(not context.liveDangerouslyFailed and #context.errors == 0)
 service(3)
 callback(true)
 assert(updates == 3, "unneeded segments are not run")
-assert(context.schedulerStats.capacity == 40 and context.schedulerStats.utilization == 60)
-assert(context.schedulerStats.deferrals == 0, "work that finished within the callback is not deferred")
+assert(last.available == 40 and last.used == 24)
+assert(last.denied == 0, "work that finished within the callback is not deferred")
 
 enable(false)
 service(100)

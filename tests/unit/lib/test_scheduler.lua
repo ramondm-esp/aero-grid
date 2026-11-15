@@ -387,6 +387,16 @@ do
     assert(fixed.error == "invalid slot cost")
 end
 
+-- Further segments run inside `cross`, which reports like pcall.
+local function crossing()
+    local crossings = { count = 0 }
+    function crossings.cross(fn)
+        crossings.count = crossings.count + 1
+        return pcall(fn)
+    end
+    return crossings
+end
+
 do
     -- A callback continues with new slots: only tasks that asked for another
     -- step or did not fit run again, and a task that already ran is not rerun.
@@ -395,46 +405,52 @@ do
     task("B", 4)
     task("C", 4)
     task("D", 1)
-    local used, requested, denied = queue.run(0, 8)
-    assert(table.concat(calls, ",") == "A,B" and used == 8 and requested == 5 and denied == 3)
-    assert(queue.more(0), "pending and deferred tasks remain")
-    local before = queue.callbacks
-    used, requested, denied = queue.resume(0, 8)
-    assert(queue.callbacks == before, "a continuation stays in the same callback")
-    assert(table.concat(calls, ",") == "A,B,C,D" and used == 5 and requested == 3 and denied == 1)
-    assert(queue.more(0))
-    used = queue.resume(0, 8)
-    assert(table.concat(calls, ",") == "A,B,C,D,A,A" and used == 8)
-    assert(not queue.more(0), "nothing is left to continue")
-    assert(queue.resume(0, 8) == 0, "an idle continuation runs nothing")
-    assert(#calls == 6)
+    local crossings, segments, callbacks = crossing(), queue.segments, queue.callbacks
+    local used, requested, denied, failure = queue.run(0, 8, nil, { segments = 4, cross = crossings.cross })
+    assert(table.concat(calls, ",") == "A,B,C,D,A,A" and used == 21, table.concat(calls, ","))
+    assert(requested == 6 and denied == 0 and failure == nil)
+    assert(queue.callbacks == callbacks + 1, "segments stay in the same callback")
+    assert(queue.segments == segments + 3 and crossings.count == 1, "unneeded segments are not run")
+    assert(queue.remaining == 0)
+    local stats = queue.stats()
+    assert(stats.callbacks == 1 and stats.used == 21 and stats.available == 40, "every allowed segment is available")
+    assert(stats.requested == 6 and stats.denied == 0)
 end
 
 do
     local queue, calls, task = fixture()
     task("A", 1)
     task("B", 1)
-    queue.run(0, 8)
-    assert(not queue.more(0) and queue.resume(0, 8) == 0 and #calls == 2, "ran tasks do not repeat")
+    local crossings = crossing()
+    queue.run(0, 8, nil, { segments = 4, cross = crossings.cross })
+    assert(crossings.count == 0 and #calls == 2 and queue.remaining == 6, "ran tasks do not repeat")
     local free = task("free", 0, 100)
     queue.clear()
     queue.add(free)
-    queue.run(1, 8)
+    queue.run(1, 8, nil, { segments = 4, cross = crossings.cross })
     assert(queue.state(free).pending and queue.state(free).refused == queue.callbacks)
-    assert(not queue.more(1), "a task stopped after repeated free turns waits for the next callback")
+    assert(crossings.count == 0, "a task stopped after repeated free turns waits for the next callback")
 end
 
 do
-    local queue = module.new()
-    queue.add({
-        name = "heavy",
-        cost = 8,
-        step = function()
-            return 8, false
+    local queue, calls, task = fixture()
+    task("A", 4)
+    task("heavy", 8)
+    local used, requested, denied = queue.run(0, 8, nil, { segments = 1, cross = crossing().cross })
+    assert(table.concat(calls, ",") == "A,heavy" and used == 12, "a deferred task continues")
+    assert(requested == 2 and denied == 0)
+    used, requested, denied = queue.run(1, 8)
+    assert(used == 8 and requested == 2 and denied == 1, "without further segments a deferred task waits")
+end
+
+do
+    local queue, _, task = fixture()
+    task("A", 8, 2)
+    local _, _, denied, failure = queue.run(0, 8, nil, {
+        segments = 2,
+        cross = function()
+            return false, "CPU limit"
         end,
     })
-    queue.run(0, 4)
-    assert(queue.more(0), "a deferred task continues")
-    assert(queue.resume(0, 8) == 8)
-    assert(not queue.more(0))
+    assert(failure == "CPU limit" and denied == 1 and queue.remaining == 0)
 end

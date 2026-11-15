@@ -74,7 +74,11 @@ function scheduler.new(dependencies)
         cursor = 1,
         callbacks = 0,
         segments = 0,
+        -- Slots left in the last segment of the last run.
+        remaining = 0,
     }
+    -- Cumulative counters since creation; readers take differences.
+    local totals = { callbacks = 0, used = 0, available = 0, requested = 0, denied = 0 }
     -- Weak keys: a retired task is collectable once its owner drops it.
     local records = setmetatable({}, { __mode = "k" })
 
@@ -112,6 +116,15 @@ function scheduler.new(dependencies)
         self.count = 0
     end
 
+    --- Whether a task carries over into the next segment of this callback:
+    --- it asked for another step or did not fit the last segment, and it did
+    --- not spin on free turns.
+    local function carries(task, state, callback, segment)
+        return not task.failed
+            and state.spun ~= callback
+            and (state.pending and state.refused ~= callback or state.denied == segment)
+    end
+
     local function failTask(task, state, message)
         task.failed, task.error, state.pending = true, message, false
         if fail then
@@ -119,8 +132,8 @@ function scheduler.new(dependencies)
         end
     end
 
-    --- Run one segment of a callback's work. A fresh callback starts with
-    --- `run`; `resume` continues the same callback with new slots.
+    --- Run one segment of a callback's work. Without `resuming` it starts a
+    --- new callback; with it, it continues the same callback with new slots.
     --- Every eligible task takes a turn per pass, and a task that asks for
     --- another step runs again only after the rest of the ring has had its turn.
     --- The first task that does not fit keeps the next callback's first turn;
@@ -143,8 +156,9 @@ function scheduler.new(dependencies)
             -- Tasks that did not fit the last segment continue with the new
             -- allowance; tasks that spun on free turns wait for the next callback.
             for index = 1, count do
-                local state = record(tasks[index])
-                if state.denied == previous and state.spun ~= callback then
+                local task = tasks[index]
+                local state = record(task)
+                if state.denied == previous and carries(task, state, callback, previous) then
                     state.refused, state.pending = nil, true
                 end
             end
@@ -237,49 +251,70 @@ function scheduler.new(dependencies)
         return slots - remaining, requested, denied
     end
 
-    --- Run one callback's worth of work.
-    ---@param now integer
-    ---@param slots integer Slots available to this callback.
-    ---@param context any Passed through to `ready` and `step`.
-    ---@return integer used
-    ---@return integer requested Eligible tasks that asked for slots.
-    ---@return integer denied Eligible tasks that did not fit.
-    function self.run(now, slots, context)
-        return execute(now, slots, context, false)
-    end
-
-    --- Continue the callback of the last `run` with a new allowance. Only tasks
-    --- that asked for another step or did not fit the previous segment take a
-    --- turn; a task that already ran does not run again just because it is due.
-    ---@param now integer
-    ---@param slots integer Slots available to this segment.
-    ---@param context any Passed through to `ready` and `step`.
-    ---@return integer used
-    ---@return integer requested
-    ---@return integer denied
-    function self.resume(now, slots, context)
-        return execute(now, slots, context, true)
-    end
-
-    --- Whether `resume` has work to do after the last segment.
-    ---@param now integer
-    ---@param context any Passed through to `ready`.
-    ---@return boolean
-    function self.more(now, context)
+    --- Whether another segment of this callback has work to do.
+    local function more(now, context)
         local callback, segment, tasks = self.callbacks, self.segments, self.tasks
         for index = 1, self.count do
             local task = tasks[index]
-            local state = record(task)
             if
-                not task.failed
-                and state.spun ~= callback
-                and (state.pending and state.refused ~= callback or state.denied == segment)
+                carries(task, record(task), callback, segment)
                 and (not task.ready or task.ready(task, now, context))
             then
                 return true
             end
         end
         return false
+    end
+
+    --- Run one callback's worth of work in one or more segments of `slots`.
+    --- Later segments only continue work that asked for another step or did
+    --- not fit; a task that already ran does not run again just because it is
+    --- due. `options.segments` allows that many further segments, run inside
+    --- `options.cross(fn)`, which reports `ok, failure` like `pcall`; without
+    --- `cross` no further segment runs.
+    --- Every allowed segment counts as available, whether or not it was needed.
+    ---@param now integer
+    ---@param slots integer Slots available to each segment.
+    ---@param context any Passed through to `ready` and `step`.
+    ---@param options? {segments?: integer, cross?: fun(fn: function): boolean, any}
+    ---@return integer used
+    ---@return integer requested Eligible tasks that asked for slots.
+    ---@return integer denied Eligible tasks that did not fit the last segment.
+    ---@return string? failure Why the further segments were abandoned.
+    function self.run(now, slots, context, options)
+        local extra = options and options.segments or 0
+        local cross = options and options.cross
+        local used, requested, denied = execute(now, slots, context, false)
+        self.remaining = slots - used
+        local failure
+        if cross and extra > 0 and more(now, context) then
+            local ok, message = cross(function()
+                for _ = 1, extra do
+                    if not more(now, context) then
+                        break
+                    end
+                    local segmentUsed, segmentRequested, segmentDenied = execute(now, slots, context, true)
+                    -- A request denied earlier and retried here is still one request,
+                    -- and only what remains denied after the last segment is deferred.
+                    used, requested, denied = used + segmentUsed, requested + segmentRequested - denied, segmentDenied
+                    self.remaining = slots - segmentUsed
+                end
+            end)
+            if not ok then
+                failure = tostring(message)
+            end
+        end
+        totals.callbacks = totals.callbacks + 1
+        totals.used, totals.available = totals.used + used, totals.available + slots * (1 + extra)
+        totals.requested, totals.denied = totals.requested + requested, totals.denied + denied
+        return used, requested, denied, failure
+    end
+
+    --- Cumulative counters since creation: callbacks, used, available,
+    --- requested and denied. Read only; readers take differences.
+    ---@return table
+    function self.stats()
+        return totals
     end
 
     return self

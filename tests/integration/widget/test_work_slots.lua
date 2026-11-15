@@ -225,34 +225,30 @@ assert(fixture.module("lib/control_service.lua").updateCost == 1)
 
 -- Free panels run even after charged work was deferred, without affecting demand.
 context.panels = { panel("blocked"), panel("diagnostic", 0) }
-context.schedulerStats = {
-    started = getTime(),
-    callbacks = 0,
-    used = 0,
-    requested = 0,
-    denied = 0,
-    revision = 0,
-    utilization = 0,
-    deferrals = 0,
-}
+local stats = context.scheduler.stats()
+local function counters()
+    return { used = stats.used, available = stats.available, requested = stats.requested, denied = stats.denied }
+end
+local before = counters()
 context.scheduler.cursor = 1
 calls = {}
 fixture.tick(100)
 definition.refresh(context)
 assert(#calls == 3 and calls[3].id == "diagnostic" and calls[3].slots == 0)
-local stats = context.schedulerStats
-assert(stats.revision == 1 and stats.utilization == 100 and stats.deferrals == 50)
+assert(stats.used - before.used == stats.available - before.available)
+assert(stats.denied > before.denied and (stats.denied - before.denied) * 2 == stats.requested - before.requested)
 assert(context.remainingSlots == 0)
 -- The same zero-cost contract can be selected by an individual panel instance.
 context.panels[2].module.refreshCost = 1
 context.panels[2].instance.refreshCost = 0
 context.scheduler.cursor = 1
 calls = {}
+before = counters()
 fixture.tick(100)
 definition.refresh(context)
 assert(#calls == 3 and calls[3].id == "diagnostic" and calls[3].slots == 0)
-assert(stats.revision == 2 and stats.deferrals == 50)
-assert(stats.capacity == 8 and stats.seconds == 1, "capacity is reported per measured second")
+assert(stats.denied > before.denied and (stats.denied - before.denied) * 2 == stats.requested - before.requested)
+assert(stats.available - before.available == 8, "one callback offers one segment")
 context.flightFactory = {
     broker = {
         identity = function()
@@ -277,8 +273,9 @@ context.panels = { panel("two", 2), panel("one", 1), panel("not-due", 8) }
 context.panels[3].nextRefresh = getTime() + 1000
 context.scheduler.cursor = 1
 fixture.tick(100)
+before = counters()
 definition.refresh(context)
-assert(stats.revision == 4 and stats.utilization == 37.5 and stats.deferrals == 0)
+assert(stats.used - before.used == 3 and stats.available - before.available == 8 and stats.denied == before.denied)
 context.panels = {}
 fixture.tick(100)
 -- Keep an inactive service in the registry so the normal dispatch path runs.
@@ -292,8 +289,9 @@ local inactive = {
     end,
 }
 support.register(context.serviceRuntime, inactive, 0)
+before = counters()
 definition.refresh(context)
-assert(stats.revision == 5 and stats.utilization == 0 and stats.deferrals == 0)
+assert(stats.used == before.used and stats.denied == before.denied)
 
 context.serviceRuntime = support.runtime({})
 local backgroundTurns = 0

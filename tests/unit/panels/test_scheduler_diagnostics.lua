@@ -10,8 +10,8 @@ local panel = diagnostics.create(dashboard.page, { x = 0, y = 0, w = 238, h = 13
     section = "scheduler",
     accent = "cyan",
 }, services)
-assert(panel.refreshCost == 0 and dashboard.schedulerStats)
-local stats, graph = dashboard.schedulerStats, panel.graph
+assert(panel.refreshCost == 0)
+local stats, graph = dashboard.scheduler.stats(), panel.graph
 assert(graph.cursor.properties.w == 1, "native vertical line width is its stroke thickness")
 for _, object in ipairs(fixture.lvglMock.objects) do
     if object.kind == "hline" then
@@ -20,14 +20,19 @@ for _, object in ipairs(fixture.lvglMock.objects) do
 end
 assert(panel.rows[1].properties.text == "Slots used" and panel.rows[2].properties.text == "Requests deferred")
 
--- A new second of statistics arrives with each revision.
+-- The panel reads differences of the scheduler's cumulative counters; a
+-- second with 100 available slots and 100 requests makes percentages direct.
+local function advance(utilization, deferred)
+    stats.used, stats.available = stats.used + utilization, stats.available + 100
+    stats.requested, stats.denied = stats.requested + 100, stats.denied + deferred
+end
 local function sample(utilization, deferred)
     fixture.tick(100)
-    stats.revision = stats.revision + 1
-    stats.utilization, stats.deferrals = utilization, deferred
-    stats.capacity, stats.seconds = 160, 1
+    advance(utilization, deferred)
     diagnostics.refresh(panel)
 end
+diagnostics.refresh(panel)
+assert(graph.index == 0, "the first refresh only takes a baseline")
 local bottom = graph.y + graph.height
 sample(100, 0)
 assert(graph.index == 1)
@@ -37,11 +42,11 @@ local saved = graph.usage[1].properties.pts
 diagnostics.refresh(panel)
 assert(graph.index == 1 and graph.usage[1].properties.pts == saved, "unchanged statistics must not redraw")
 
--- At most one point a second, however fast revisions arrive.
-stats.revision = stats.revision + 1
+-- At most one point a second, however much work arrives.
+advance(100, 0)
 diagnostics.refresh(panel)
 assert(graph.index == 1, "a point is added at most once a second")
-stats.revision = stats.revision - 1
+stats.used, stats.available, stats.requested = stats.used - 100, stats.available - 100, stats.requested - 100
 
 sample(0, 100)
 local points = graph.usage[2].properties.pts
@@ -50,10 +55,10 @@ assert(points[1][2] == graph.y and points[2][2] == bottom)
 points = graph.lines[2].properties.pts
 assert(points[1][2] == bottom and points[2][2] == graph.y)
 
--- A gap in the statistics starts a new segment instead of drawing across it.
-stats.revision = stats.revision + 5
-fixture.tick(100)
-stats.utilization, stats.deferrals = 50, 50
+-- A gap in the measurements starts a new segment instead of drawing across it.
+fixture.tick(500)
+advance(250, 250)
+stats.available, stats.requested = stats.available + 400, stats.requested + 400
 diagnostics.refresh(panel)
 points = graph.usage[3].properties.pts
 assert(points[2][1] == graph.x + 2 and points[1][2] == points[2][2], "a gap must not be bridged")
@@ -79,17 +84,19 @@ assert(panel.graph.lines[1] == first and first.hidden, "resize hides and reuses 
 sample(25, 50)
 assert(panel.graph.lines[1] == first and not first.hidden, "resized sweep reuses native objects")
 
-diagnostics.destroy(panel)
-assert(dashboard.schedulerStats == nil)
 services.preview = true
 local preview = diagnostics.create(dashboard.page, { x = 0, y = 0, w = 238, h = 132 }, {
     section = "scheduler",
     accent = "cyan",
 }, services)
 diagnostics.refresh(preview)
-assert(dashboard.schedulerStats == nil, "previews must not enable measurement")
+fixture.tick(100)
+advance(50, 0)
+diagnostics.refresh(preview)
+assert(preview.graph.index == 0 and preview.graph.sample == nil, "previews do not measure")
 preview.preview = false
 diagnostics.refresh(preview)
-assert(dashboard.schedulerStats, "saving a preview must enable live measurement")
-diagnostics.destroy(preview)
-assert(dashboard.schedulerStats == nil)
+fixture.tick(100)
+advance(50, 0)
+diagnostics.refresh(preview)
+assert(preview.graph.index == 1, "a saved preview measures the live scheduler")

@@ -87,23 +87,10 @@ local diagnostics = {
 --- Most lines any section will draw, whatever its span.
 local MAX_LINES = 12
 
+--- The host scheduler's cumulative counters, or nil for previews.
 local function schedulerStats(context)
-    if context.host and not context.preview then
-        context.schedulerActive = true
-    end
-    if context.host and not context.preview and not context.host.schedulerStats then
-        context.host.schedulerStats = {
-            started = getTime(),
-            callbacks = 0,
-            used = 0,
-            requested = 0,
-            denied = 0,
-            revision = 0,
-            utilization = 0,
-            deferrals = 0,
-        }
-    end
-    return context.host and context.host.schedulerStats
+    local scheduler = context.host and not context.preview and context.host.scheduler
+    return scheduler and scheduler.stats()
 end
 
 --- Two lines, one point a second: slots used and requests deferred, each as a
@@ -129,7 +116,6 @@ local function schedulerGraph(context, rect, area)
     graph.x, graph.y = area.pad, area.top + area.lineHeight * graph.legend
     graph.width, graph.height = math.max(2, area.content // 1), math.max(1, rect.h - graph.y - area.frame.bottom)
     graph.index, graph.previous, graph.previousUsage, graph.at = 0, nil, nil, nil
-    graph.revision = context.host and context.host.schedulerStats and context.host.schedulerStats.revision or 0
     local cursor = {
         x = graph.x,
         y = graph.y,
@@ -188,22 +174,40 @@ local function extend(graph, lines, index, previous, y, color, consecutive)
     end
 end
 
+--- Percentages of slots used and requests deferred over the last second,
+--- from differences of the scheduler's cumulative counters.
 local function refreshScheduler(context)
     local stats, graph = schedulerStats(context), context.graph
-    if not stats or stats.revision == graph.revision then
+    if not stats then
         return
     end
-    local now = getTime()
-    if graph.at and now - graph.at < 100 then
+    local now, sample = getTime(), graph.sample
+    if not sample then
+        graph.sample = {
+            at = now,
+            used = stats.used,
+            available = stats.available,
+            requested = stats.requested,
+            denied = stats.denied,
+        }
         return
     end
-    local consecutive = stats.revision == graph.revision + 1
-    graph.revision, graph.at = stats.revision, now
+    local elapsed = now - sample.at
+    if elapsed < 100 then
+        return
+    end
+    local available, requested = stats.available - sample.available, stats.requested - sample.requested
+    local utilization = available > 0 and (stats.used - sample.used) * 100 / available or 0
+    local deferrals = requested > 0 and (stats.denied - sample.denied) * 100 / requested or 0
+    -- A second that was not measured right after the last starts a new segment.
+    local consecutive = elapsed < 200
+    sample.at, sample.used, sample.available = now, stats.used, stats.available
+    sample.requested, sample.denied = stats.requested, stats.denied
     local index = graph.index
     local function boundary(percent)
         return graph.y + math.floor((100 - math.max(0, math.min(100, percent))) * graph.height / 100 + 0.5)
     end
-    local usage, deferred = boundary(stats.utilization), boundary(stats.deferrals)
+    local usage, deferred = boundary(utilization), boundary(deferrals)
     extend(graph, graph.usage, index, graph.previousUsage, usage, context.theme.chartColor.cyan, consecutive)
     extend(graph, graph.lines, index, graph.previous, deferred, context.theme.chartColor.orange, consecutive)
     graph.previousUsage, graph.previous = usage, deferred
@@ -580,7 +584,6 @@ function diagnostics.create(parent, rect, settings, services)
     context.visibleLines = area.lines
     if section == "scheduler" then
         context.refreshCost = 0
-        schedulerStats(context)
         schedulerGraph(context, rect, area)
     end
     return context
@@ -643,18 +646,6 @@ function diagnostics.update(context, rect)
     context.visibleLines = area.lines
     if context.section == "scheduler" then
         schedulerGraph(context, rect, area)
-    end
-end
-
-function diagnostics.destroy(context)
-    if context.section == "scheduler" and context.host and not context.preview then
-        context.schedulerActive = false
-        for _, entry in ipairs(context.host.panels or {}) do
-            if entry.instance and entry.instance ~= context and entry.instance.schedulerActive then
-                return
-            end
-        end
-        context.host.schedulerStats = nil
     end
 end
 

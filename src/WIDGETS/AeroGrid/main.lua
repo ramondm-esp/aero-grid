@@ -594,7 +594,7 @@ local function newScheduler(context, schedulerModule)
         addError(context, "lib/scheduler.lua: " .. tostring(ok and "constructor did not return a table" or scheduler))
         return nil
     end
-    for _, operation in ipairs({ "add", "clear", "run", "resume", "more" }) do
+    for _, operation in ipairs({ "add", "clear", "run", "state", "stats" }) do
         if type(rawget(scheduler, operation)) ~= "function" then
             addError(context, "lib/scheduler.lua: missing operation " .. operation)
             return nil
@@ -1349,51 +1349,21 @@ local function runTasks(context, hidden, flightTask, hostTask)
         enrolTasks(context, registry)
     end
 
-    local now = getTime()
-    local stats = context.schedulerStats
-    local used, requested, denied = scheduler.run(now, scheduler.budget.capacity, hidden or false)
-    -- Slots are measured against everything the callback may run: the extended
-    -- budget whenever it is enabled, whether or not this callback needed it.
+    -- Extra segments run past EdgeTX's per-callback limit in the same
+    -- callback; only pending and deferred work continues.
     local extended = liveDangerously(context)
-    local available = scheduler.budget.capacity * (extended and 1 + EXTENDED_SEGMENTS or 1)
-    context.remainingSlots = scheduler.budget.capacity - used
-    if extended and scheduler.more(now, hidden or false) then
-        -- Extra segments run past EdgeTX's per-callback limit in the same
-        -- callback; only pending and deferred work continues.
-        local ok, failure = context.nativeBudget.cross(function()
-            for _ = 1, EXTENDED_SEGMENTS do
-                if not scheduler.more(now, hidden or false) then
-                    break
-                end
-                local segmentUsed, segmentRequested, segmentDenied =
-                    scheduler.resume(now, scheduler.budget.capacity, hidden or false)
-                -- A request denied earlier and retried here is still one request,
-                -- and only what remains denied after the last segment is deferred.
-                used, requested, denied = used + segmentUsed, requested + segmentRequested - denied, segmentDenied
-                context.remainingSlots = scheduler.budget.capacity - segmentUsed
-            end
-        end)
-        if not ok then
-            context.liveDangerouslyFailed = true
-            addError(context, "extended callback budget: " .. tostring(failure))
-            context.schedulerFailed = true
-        end
+    local _, _, _, failure = scheduler.run(getTime(), scheduler.budget.capacity, hidden or false, {
+        segments = extended and EXTENDED_SEGMENTS or 0,
+        cross = context.nativeBudget and context.nativeBudget.cross,
+    })
+    context.remainingSlots = scheduler.remaining
+    if failure then
+        context.liveDangerouslyFailed = true
+        addError(context, "extended callback budget: " .. failure)
+        context.schedulerFailed = true
     end
     scheduler.clear()
 
-    if stats then
-        stats.callbacks = stats.callbacks + 1
-        stats.used, stats.available = stats.used + used, (stats.available or 0) + available
-        stats.requested, stats.denied = stats.requested + requested, stats.denied + denied
-        if now - stats.started >= 100 then
-            stats.utilization = stats.used * 100 / stats.available
-            stats.deferrals = stats.requested > 0 and stats.denied * 100 / stats.requested or 0
-            stats.revision = stats.revision + 1
-            stats.capacity, stats.seconds = stats.available, (now - stats.started) / 100
-            stats.started, stats.callbacks, stats.used, stats.available = now, 0, 0, 0
-            stats.requested, stats.denied = 0, 0
-        end
-    end
     if context.schedulerFailed then
         context.schedulerFailed = nil
         showErrors(context)
@@ -2598,7 +2568,8 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         end
         local scheduler = context.scheduler
         scheduler.add(context.initializationTask)
-        context.remainingSlots = scheduler.budget.capacity - scheduler.run(getTime(), scheduler.budget.capacity, hidden)
+        scheduler.run(getTime(), scheduler.budget.capacity, hidden)
+        context.remainingSlots = scheduler.remaining
         scheduler.clear()
         if context.schedulerFailed then
             if not context.root then
