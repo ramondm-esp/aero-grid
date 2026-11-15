@@ -1179,6 +1179,7 @@ end
 
 local function backgroundReady(task, _, hidden)
     local entry = task.owner
+    -- A panel that declares a minimum is charged what it reports.
     local minimum = instanceField(entry, "backgroundMinCost") or rawget(entry.module, "backgroundMinCost")
     task.cost, task.minCost = minimum and "variable" or 1, minimum
     return task.host.scheduledPanels and hidden and not task.owner.failed
@@ -1237,8 +1238,7 @@ local function enrolTasks(context, registry)
             }
             instance.task = task
         end
-        task.cost, task.minCost, task.due, task.failed =
-            instance.updateCost, instance.updateMinCost, instance.due, instance.failed
+        task.due, task.failed = instance.due, instance.failed
         scheduler.add(task)
     end
     local panels = context.panels
@@ -1259,8 +1259,6 @@ local function enrolTasks(context, registry)
                 }
                 entry.refreshTask = task
             end
-            task.cost = instanceField(entry, "refreshCost") or rawget(module, "refreshCost") or 1
-            task.minCost = instanceField(entry, "refreshMinCost") or rawget(module, "refreshMinCost")
             task.due, task.failed = entry.nextRefresh or 0, entry.failed
             scheduler.add(task)
         end
@@ -1279,7 +1277,6 @@ local function enrolTasks(context, registry)
                 }
                 entry.finishTask = task
             end
-            task.minCost = instanceField(entry, "finishMinCost") or rawget(module, "finishMinCost")
             task.failed = entry.failed
             scheduler.add(task)
         end
@@ -1297,9 +1294,6 @@ local function enrolTasks(context, registry)
                 }
                 entry.backgroundTask = task
             end
-            -- A panel that declares a minimum is charged what it reports.
-            local minimum = instanceField(entry, "backgroundMinCost") or rawget(module, "backgroundMinCost")
-            task.cost, task.minCost = minimum and "variable" or 1, minimum
             task.failed = entry.failed
             scheduler.add(task)
         end
@@ -1394,6 +1388,11 @@ local function runTasks(context, hidden, flightTask, hostTask)
     end
 end
 
+local function flightReady(task)
+    task.cost = task.broker.documentLoaded and 1 or task.host.scheduler.budget.slots
+    return true
+end
+
 local function pumpFlight(task, now, granted)
     local context, inputPending = task.host, task.host.inputPending
     local owner = context.flightFactory and context.flightFactory.broker
@@ -1413,7 +1412,6 @@ local function pumpFlight(task, now, granted)
     end
     if filename ~= owner.filename then
         owner:reset(filename)
-        task.cost = context.scheduler.budget.slots
         context.scheduledServices, context.scheduledPanels = false, false
         if granted < context.scheduler.budget.slots then
             return nil, true
@@ -1425,7 +1423,6 @@ local function pumpFlight(task, now, granted)
             if not storeModule then
                 owner.loadError, owner.documentLoaded = storeError, true
                 context.scheduledServices, context.scheduledPanels = false, false
-                task.cost = 1
                 return nil, true
             end
             local created, store = pcall(storeModule.new, context.path, context.yaml, {
@@ -1438,7 +1435,6 @@ local function pumpFlight(task, now, granted)
             if not created then
                 owner.loadError, owner.documentLoaded = tostring(store), true
                 context.scheduledServices, context.scheduledPanels = false, false
-                task.cost = 1
                 return nil, true
             end
             owner.store = store
@@ -1461,7 +1457,6 @@ local function pumpFlight(task, now, granted)
             owner.loadError, owner.documentLoaded = tostring(info), true
         end
         context.scheduledServices, context.scheduledPanels = false, false
-        task.cost = 1
         return nil, true
     end
     local resetConfigured = owner.document and owner.document.sessionReset and owner.document.sessionReset ~= ""
@@ -2097,6 +2092,8 @@ end
 
 local function inputReady(task, _, hidden)
     local context = task.host
+    -- Settings input only records a close request; services share the rest.
+    task.cost = task.settingsInput and 1 or context.scheduler.budget.slots
     return not hidden
         and isFullScreen()
         and not context.modelArmingReload
@@ -2202,6 +2199,12 @@ local function logOpenStep(task)
     end
 end
 
+local function locationReady(task)
+    local request = task.host.locationRequest
+    task.cost = request and request.kind == "close" and 1 or task.host.scheduler.budget.slots
+    return true
+end
+
 local function locationStep(task)
     local context = task.host
     local request = context.locationRequest
@@ -2289,8 +2292,20 @@ local function uiField(kind)
     return "logViewer"
 end
 
+local function uiCost(task)
+    local context, slots = task.host, task.host.scheduler.budget.slots
+    if task.kind == "editor" then
+        return editorCost(context)
+    elseif task.kind == "model settings" then
+        local cost = context.modelSettingsUiModule.cost
+        return cost and math.min(cost(context), slots) or slots
+    end
+    return context.logViewer and context.logViewer.closing and 1 or slots
+end
+
 local function uiReady(task, _, hidden)
     local context = task.host
+    task.cost = uiCost(task)
     if task.kind == "editor" then
         local state = context.editorUi
         if not state or state ~= task.ui or not editorWorkNeeded(state) then
@@ -2339,7 +2354,6 @@ local function uiStep(task, _, _, hidden)
         if editorWorkNeeded(context.editorUi) then
             context.uiRequest = task.kind
             if editorContinues(context.editorUi) then
-                task.cost = editorCost(context)
                 return nil, true
             end
         end
@@ -2350,8 +2364,6 @@ local function uiStep(task, _, _, hidden)
             context.uiRequest = task.kind
             -- Fields only create controls; commands and closing keep their boundary.
             if state.build and not state.pending and not state.closing then
-                local cost = context.modelSettingsUiModule.cost
-                task.cost = cost and math.min(cost(context), context.scheduler.budget.slots) or task.cost
                 return nil, true
             end
         end
@@ -2373,8 +2385,36 @@ local function uiStep(task, _, _, hidden)
     end
 end
 
+-- Slots reserved per load stage, from peak mocked-VM instruction counts at
+-- about 2000 instructions per slot; stages not listed reserve a full segment.
+local LOAD_STAGE_COST = {
+    ["header-migrate"] = 1,
+    ["panel-migrate"] = 1,
+    ["panel-validate"] = 1,
+    ["model-settings"] = 2,
+    ["read"] = 2,
+    ["services"] = 2,
+    ["header"] = 2,
+    ["header-finalize"] = 2,
+    ["panels"] = 2,
+    ["tokenize"] = 3,
+    ["theme-validate"] = 4,
+}
+
+local function loadCost(context)
+    local slots = context.scheduler.budget.slots
+    return math.min(LOAD_STAGE_COST[context.stage] or slots, slots)
+end
+
 local function lifecycleReady(task, _, hidden)
     local context, kind = task.host, task.kind
+    if kind == "load" then
+        task.cost = loadCost(context)
+    elseif kind == "rebuild" then
+        task.cost = 1
+    else
+        task.cost = context.scheduler.budget.slots
+    end
     if
         context.modelArmingReload
         or context.sessionResetPending and not (context.stage or context.reloadState)
@@ -2416,27 +2456,6 @@ local function lifecycleReady(task, _, hidden)
     return not hidden and not context.reloadState and not context.stage and context.appRebuild ~= nil
 end
 
--- Slots reserved per load stage, from peak mocked-VM instruction counts at
--- about 2000 instructions per slot; stages not listed reserve a full segment.
-local LOAD_STAGE_COST = {
-    ["header-migrate"] = 1,
-    ["panel-migrate"] = 1,
-    ["panel-validate"] = 1,
-    ["model-settings"] = 2,
-    ["read"] = 2,
-    ["services"] = 2,
-    ["header"] = 2,
-    ["header-finalize"] = 2,
-    ["panels"] = 2,
-    ["tokenize"] = 3,
-    ["theme-validate"] = 4,
-}
-
-local function loadCost(context)
-    local slots = context.scheduler.budget.slots
-    return math.min(LOAD_STAGE_COST[context.stage] or slots, slots)
-end
-
 local function lifecycleStep(task)
     local context, kind = task.host, task.kind
     context.lifecycleRequest = nil
@@ -2454,7 +2473,6 @@ local function lifecycleStep(task)
             context.dashboardLoader.advanceLoad(context)
         end
         if context.stage then
-            task.cost = loadCost(context)
             context.lifecycleRequest = "load"
             return nil, true
         end
@@ -2653,10 +2671,10 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                 broker = owner,
                 host = context,
                 step = pumpFlight,
+                ready = flightReady,
             }
             context.flightTask = flightTask
         end
-        flightTask.cost = owner.documentLoaded and 1 or scheduler.budget.slots
     end
     local hostTask
     if hostNeeded then
@@ -2668,6 +2686,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                     owner = "native options",
                     host = context,
                     hostWork = true,
+                    cost = scheduler.budget.slots,
                     step = optionsStep,
                 }
                 context.optionsTask = hostTask
@@ -2685,6 +2704,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                     owner = "session reset",
                     host = context,
                     hostWork = true,
+                    cost = scheduler.budget.slots,
                     step = sessionResetStep,
                     ready = sessionResetReady,
                 }
@@ -2699,6 +2719,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         owner = "menu",
                         host = context,
                         hostWork = true,
+                        cost = scheduler.budget.slots,
                         step = menuStep,
                         ready = menuReady,
                     }
@@ -2731,6 +2752,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         owner = "model settings open",
                         host = context,
                         hostWork = true,
+                        cost = scheduler.budget.slots,
                         step = modelSettingsOpenStep,
                         ready = modelSettingsOpenReady,
                     }
@@ -2752,6 +2774,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                         owner = "editor transition",
                         host = context,
                         hostWork = true,
+                        cost = scheduler.budget.slots,
                         step = editorTransitionStep,
                         ready = editorTransitionReady,
                     }
@@ -2784,6 +2807,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                             owner = "log open",
                             host = context,
                             hostWork = true,
+                            cost = scheduler.budget.slots,
                             step = logOpenStep,
                         }
                         context.logOpenTask = hostTask
@@ -2807,6 +2831,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                             host = context,
                             hostWork = true,
                             step = locationStep,
+                            ready = locationReady,
                         }
                         context.locationTask = hostTask
                     end
@@ -2875,30 +2900,11 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                     owner = "host",
                     host = context,
                     hostWork = true,
+                    cost = scheduler.budget.slots,
                     step = advanceHost,
                 }
                 context.hostTask = hostTask
             end
-        end
-        hostTask.cost = scheduler.budget.slots
-        if context.lifecycleTasks and hostTask == context.lifecycleTasks.load then
-            hostTask.cost = loadCost(context)
-        elseif context.uiTasks and hostTask == context.uiTasks["model settings"] then
-            if context.modelSettingsUiModule.cost then
-                hostTask.cost = math.min(context.modelSettingsUiModule.cost(context), scheduler.budget.slots)
-            end
-        elseif context.uiTasks and hostTask == context.uiTasks.editor then
-            hostTask.cost = editorCost(context)
-        elseif hostTask == context.inputTask and hostTask.settingsInput then
-            -- Settings input only records a close request; services share the rest.
-            hostTask.cost = 1
-        end
-        if
-            hostTask == context.locationTask and context.locationRequest.kind == "close"
-            or context.lifecycleTasks and hostTask == context.lifecycleTasks.rebuild
-            or context.uiTasks and hostTask == context.uiTasks["log viewer"] and context.logViewer.closing
-        then
-            hostTask.cost = 1
         end
     end
     runTasks(context, hidden, flightTask, hostTask)
