@@ -1227,13 +1227,13 @@ local function finishPending(context, entry)
     if type(pending) ~= "function" then
         return false
     end
-    local ok, message, result = context.panelHost.dispatch(entry, "finishPending")
+    local ok, message, result, minimum = context.panelHost.dispatch(entry, "finishPending")
     if not ok then
         addError(context, entry.placement.id .. ": finishPending: " .. tostring(message))
         context.schedulerFailed = true
         return false
     end
-    return result
+    return result, minimum
 end
 
 local function instanceField(entry, key)
@@ -1258,12 +1258,12 @@ local function finishReady(task, _, hidden)
     if hidden or entry.failed or task.host.panelsHold then
         return false
     end
-    local pending = finishPending(task.host, entry)
+    local pending, minimum = finishPending(task.host, entry)
     if entry.failed or not pending then
         return false
     end
     -- The next stage may need more than the module's default minimum.
-    task.minCost = instanceField(entry, "finishMinCost") or rawget(entry.module, "finishMinCost")
+    task.minCost = minimum or rawget(entry.module, "finishMinCost")
     return true
 end
 

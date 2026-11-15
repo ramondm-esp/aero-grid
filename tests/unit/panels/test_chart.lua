@@ -890,7 +890,7 @@ do
     end
     gridPanel.metadataReady, gridPanel.columnsDecorating = nil, nil
     -- Readouts and legend belong to the finishing task and need two slots.
-    assert(chartModule.finishPending(gridPanel) and gridPanel.finishMinCost == 2, "readouts must declare their minimum")
+    assert(select(2, chartModule.finishPending(gridPanel)) == 2, "readouts must declare their minimum")
     local _, unfinished, used = chartModule.finish(gridPanel, false, 1)
     assert(unfinished and used == 1 and rendered == 0, "a grant below the minimum must not run readouts")
     _, unfinished, used = chartModule.finish(gridPanel, false, 2)

@@ -75,8 +75,8 @@ local function narrowTurn()
         assert(used >= 1 and used <= offered, "offers must not be exceeded")
     end
     for _ = 1, 2 do
-        if chart.finishPending(narrow) then
-            local offered = narrow.finishMinCost
+        local pending, offered = chart.finishPending(narrow)
+        if pending then
             local _, _, used = chart.finish(narrow, false, offered)
             assert(used >= 1 and used <= offered, "finishing must stay within its minimum")
         end

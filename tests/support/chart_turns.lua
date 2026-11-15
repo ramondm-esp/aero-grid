@@ -13,7 +13,10 @@ function turns.install(chart)
 
     --- Slots a chart's next task is really offered for a nominal `grant`.
     function chart.offered(panel, grant)
-        local minimum = chart.finishPending(panel) and panel.finishMinCost or panel.refreshMinCost
+        local pending, minimum = chart.finishPending(panel)
+        if not pending then
+            minimum = panel.refreshMinCost
+        end
         return math.min(8, math.max(grant or 8, minimum or 1))
     end
 

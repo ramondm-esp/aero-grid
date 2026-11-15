@@ -63,7 +63,7 @@ local draw = first.columnRenderer.append
 first.columnRenderer.append = function()
     error("readout pass attempted plot work")
 end
-assert(chart.finishPending(first) and first.finishMinCost == 2, "readouts must declare a two-slot minimum")
+assert(select(2, chart.finishPending(first)) == 2, "readouts must declare a two-slot minimum")
 local _, metadataPending, metadataSlots = chart.finish(first, false, 2)
 assert(not metadataPending and metadataSlots == 2 and first.metadataReady)
 assert(first.series[1].valueText == "45.000", "the readout pass did not update its readout")

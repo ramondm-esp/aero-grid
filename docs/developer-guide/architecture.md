@@ -111,9 +111,10 @@ to same-callback refresh continuation with `refreshContinuation`, which a panel
 instance may also set for a single turn; other staged refreshes resume on their
 next due callback. A panel may split work into further tasks: `finish`, ready
 while `finishPending` is true and declaring `finishMinCost`, runs after a
-refresh while refreshes wait; `background` becomes variable-cost when it
-declares `backgroundMinCost`. An instance may override each minimum for the
-stage it needs next. Unused slots are released to later
+refresh while refreshes wait; `finishPending` may also return the next stage's
+minimum. `background` becomes variable-cost when it declares
+`backgroundMinCost`. An instance may override the refresh and background
+minimums for the stage it needs next. Unused slots are released to later
 tasks, and pending work remains subject to the scheduler's fair rotation. A
 task's `due` time controls its next eligibility independently of same-callback
 continuation. With the per-model **Pre-release features** setting, and for every

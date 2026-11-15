@@ -31,8 +31,8 @@
 --- Refreshes receive (instance, false, slots) and may return consumed slots as
 --- a third result. Variable refreshes must declare a minimum and report consumption.
 ---@field finish? fun(instance: any, creating: boolean, slots: integer) Finishing work after a refresh. Its own variable-cost task, ready while `finishPending` is true; may return the ticks until the next refresh is due, whether more finishing is ready now, and slots consumed.
----@field finishPending? fun(instance: any): boolean While true the finishing task runs and refreshes wait.
----@field finishMinCost? integer Minimum grant for finishing, 1 to 8; an instance may override it.
+---@field finishPending? fun(instance: any): boolean, integer? While true the finishing task runs and refreshes wait. A second result sets the next stage's minimum grant.
+---@field finishMinCost? integer Minimum grant for finishing, 1 to 8, when `finishPending` reports none.
 ---@field background? fun(instance: any, creating: boolean, slots: integer) While the dashboard is hidden. A fixed one-slot task unless `backgroundMinCost` is declared.
 ---@field backgroundMinCost? integer Makes background a variable-cost task with this minimum grant, 1 to 8; an instance may override it. It then reports consumed slots as a third result.
 ---@field resetSession? fun(instance: any, now: integer) Second result true requests another reset turn.
@@ -348,8 +348,20 @@ function panelHost.dispatch(entry, event, ...)
     end
 
     local ok, resultOrError, unfinished, consumed = pcall(callback, entry.instance, ...)
-    if ok and event == "finishPending" and type(resultOrError) ~= "boolean" then
-        ok, resultOrError = false, "finishPending must return a boolean"
+    if ok and event == "finishPending" then
+        if type(resultOrError) ~= "boolean" then
+            ok, resultOrError = false, "finishPending must return a boolean"
+        elseif
+            unfinished ~= nil
+            and (
+                type(unfinished) ~= "number"
+                or unfinished < 1
+                or unfinished > MAX_REFRESH_SLOTS
+                or unfinished ~= math.floor(unfinished)
+            )
+        then
+            ok, resultOrError = false, "finishPending minimum must be a whole number from 1 to " .. MAX_REFRESH_SLOTS
+        end
     end
     if ok and (event == "refresh" or event == "finish") and type(resultOrError) == "number" then
         if resultOrError < 1 or resultOrError > 6000 or resultOrError ~= math.floor(resultOrError) then

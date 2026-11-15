@@ -214,16 +214,21 @@ local function label(context, color, font)
 end
 
 local GRID_CAP = 12
--- Leave 20% of each nominal slot for work outside the measured chart pipeline.
-local SLOT_INSTRUCTIONS = budget.instructionsPerSlot * 4 / 5
-local CALLBACK_RESERVE = 900
+-- How chart estimates turn into slots. Refresh, background and preparation
+-- estimates cover only the measured chart pipeline, so 20% of each slot and 900
+-- instructions per call are left for the work around it. Finishing stages are
+-- measured end to end and add only their 400-instruction call overhead.
+local PIPELINE = { slot = budget.instructionsPerSlot * 4 / 5, overhead = 900 }
+local END_TO_END = { slot = budget.instructionsPerSlot, overhead = 400 }
 
-local function instructionAllowance(slots)
-    return math.max(0, slots * SLOT_INSTRUCTIONS - CALLBACK_RESERVE)
+--- Instructions a grant of `slots` leaves for estimated work.
+local function allowance(model, slots)
+    return math.max(0, slots * model.slot - model.overhead)
 end
 
-local function consumedSlots(instructions)
-    return math.max(1, math.ceil((instructions + CALLBACK_RESERVE) / SLOT_INSTRUCTIONS))
+--- Slots to charge for `instructions` of estimated work.
+local function slotsFor(model, instructions)
+    return math.max(1, math.ceil((instructions + model.overhead) / model.slot))
 end
 
 -- Plot state owned by one layer. Auto windows prepare the next window in a
@@ -1557,12 +1562,12 @@ end
 -- Each reset turn also checks its state and walks the layers: about 300 to 500
 -- instructions beyond the hides, measured on the test runtime.
 local RESET_OVERHEAD = 500
-local RESET_ALLOWANCE = instructionAllowance(2) - RESET_OVERHEAD
+local RESET_ALLOWANCE = allowance(PIPELINE, 2) - RESET_OVERHEAD
 
 --- Retire the current native presentation in bounded batches.
 function chart.resetSession(context)
     local used, complete = resetPresentation(context, RESET_ALLOWANCE)
-    return nil, not complete, consumedSlots(used + RESET_OVERHEAD)
+    return nil, not complete, slotsFor(PIPELINE, used + RESET_OVERHEAD)
 end
 
 local function publishColumns(context)
@@ -2182,7 +2187,7 @@ local function background(context, allowance)
     hidden.columnsDecorating = true
     -- A pass that made no progress gets up to one slot, so the largest overlay
     -- item always fits without inflating ordinary turns.
-    local allowed = job.stalled and used == 0 and math.max(remaining, SLOT_INSTRUCTIONS) or remaining
+    local allowed = job.stalled and used == 0 and math.max(remaining, PIPELINE.slot) or remaining
     local _, unfinished, stage = finishColumns(hidden, allowed)
     job.stalled = unfinished and stage == 0
     if not unfinished then
@@ -2191,18 +2196,13 @@ local function background(context, allowance)
     return used + stage
 end
 
--- Finishing stages are measured end to end, so they are charged at the full
--- nominal slot plus the call overhead rather than the reserve refreshes keep
--- for work outside the chart pipeline.
-local FINISH_OVERHEAD = 400
-
 -- Every preparation turn also checks the job, the hidden layer and its
 -- decoration state; measured at 0.8k to 1.2k instructions on top of the stages.
 local PREP_OVERHEAD = 1100
 -- One series' reading and column, so intake never stops while a layer is prepared.
 local INTAKE_MIN = 700
 -- Smallest grant that fits that overhead, a useful stage and some intake.
-local PREP_MIN_SLOTS = consumedSlots(PREP_OVERHEAD + MIN_PREPARATION + INTAKE_MIN)
+local PREP_MIN_SLOTS = slotsFor(PIPELINE, PREP_OVERHEAD + MIN_PREPARATION + INTAKE_MIN)
 
 --- Instructions kept from intake for the next preparation turn: its overhead and
 --- the stage that did not fit last time.
@@ -2216,7 +2216,7 @@ end
 ---@return integer charged
 ---@return integer minimum The smallest grant the next preparation turn needs.
 local function prepare(context, slots, spent, wanted)
-    local room = instructionAllowance(slots) - spent - PREP_OVERHEAD
+    local room = allowance(PIPELINE, slots) - spent - PREP_OVERHEAD
     if room < MIN_PREPARATION then
         return 0, PREP_MIN_SLOTS
     end
@@ -2224,16 +2224,9 @@ local function prepare(context, slots, spent, wanted)
     local declared = context.auto and context.auto.need or 0
     local used = background(context, math.min(math.max(wanted, declared), room))
     local need = context.auto and context.auto.need
-    local minimum = need and math.min(8, math.max(PREP_MIN_SLOTS, consumedSlots(PREP_OVERHEAD + need + INTAKE_MIN)))
+    local minimum = need
+        and math.min(8, math.max(PREP_MIN_SLOTS, slotsFor(PIPELINE, PREP_OVERHEAD + need + INTAKE_MIN)))
     return used + PREP_OVERHEAD, minimum or PREP_MIN_SLOTS
-end
-
-local function finishAllowance(slots)
-    return math.max(0, slots * budget.instructionsPerSlot - FINISH_OVERHEAD)
-end
-
-local function finishSlots(instructions)
-    return math.max(1, math.ceil((instructions + FINISH_OVERHEAD) / budget.instructionsPerSlot))
 end
 
 -- Metadata (readouts, legend, header, status) runs as one stage; typical cost on
@@ -2268,15 +2261,23 @@ local function preparing(context, creating)
     return ready and (rescaling or full and autoPending(auto, context.session)), ready
 end
 
+-- Preparation turns in a row before the visible plot gets an ordinary refresh.
+local MAX_PREPARATION_TURNS = 4
+
 --- A bounded run of preparation turns between ordinary refreshes.
 local function preparationTurn(context, ready)
     local auto = context.auto
-    return auto and auto.wakeAt and ready and context.clock() < auto.wakeAt and (auto.backgroundTurns or 0) < 4
+    return auto
+        and auto.wakeAt
+        and ready
+        and context.clock() < auto.wakeAt
+        and (auto.backgroundTurns or 0) < MAX_PREPARATION_TURNS
 end
 
 --- Readouts and overlays are finished after an append, by their own task.
+---@return boolean pending
+---@return integer? minimum The smallest grant the next stage can honour.
 function chart.finishPending(context)
-    local host = context.host
     if
         not context.columnRenderer
         or context.columnSetup
@@ -2285,7 +2286,7 @@ function chart.finishPending(context)
         or not context.history
         or context.history.failed
         or #context.series == 0
-        or host and host.editorUi and not context.preview
+        or context.editing() and not context.preview
     then
         return false
     end
@@ -2297,9 +2298,7 @@ function chart.finishPending(context)
     if busy or preparationTurn(context, ready) then
         return false
     end
-    -- The next stage decides the smallest grant it can honour.
-    context.finishMinCost = context.columnsDecorating and 1 or finishSlots(metadataCost(context))
-    return true
+    return true, context.columnsDecorating and 1 or slotsFor(END_TO_END, metadataCost(context))
 end
 
 --- Pacing after a stage: a prepared layer takes an extra slot when one is left,
@@ -2315,7 +2314,7 @@ local function pace(context, interval, consumed, slots, idle)
         local used, minimum = prepare(context, slots - consumed, 0, BACKGROUND_ALLOWANCE)
         context.refreshMinCost = minimum
         if used > 0 then
-            consumed = math.min(slots, consumed + consumedSlots(used))
+            consumed = math.min(slots, consumed + slotsFor(PIPELINE, used))
         end
         pending = autoPending(auto, context.session)
     end
@@ -2334,8 +2333,8 @@ local function finishStage(context, slots)
     local interval, unfinished, consumed
     if context.columnsDecorating then
         local used
-        interval, unfinished, used = finishColumns(context, finishAllowance(slots))
-        consumed = math.min(slots, finishSlots(used))
+        interval, unfinished, used = finishColumns(context, allowance(END_TO_END, slots))
+        consumed = math.min(slots, slotsFor(END_TO_END, used))
         local idle = not unfinished and not context.columnsDecorating and not context.metadataReady
         interval, consumed = pace(context, interval, consumed, slots, idle)
         if unfinished then
@@ -2343,14 +2342,14 @@ local function finishStage(context, slots)
         end
         return interval, chart.finishPending(context), consumed
     end
-    if finishAllowance(slots) < metadataCost(context) then
+    if allowance(END_TO_END, slots) < metadataCost(context) then
         return nil, true, 1
     end
     if not context.layoutPending then
         chart.render(context, true)
         if context.layoutPending then
             -- Only the measuring is paid for here; the layout is the next stage.
-            return nil, true, math.min(slots, finishSlots(METADATA_COST))
+            return nil, true, math.min(slots, slotsFor(END_TO_END, METADATA_COST))
         end
     else
         local cost = layoutCost(context)
@@ -2363,7 +2362,7 @@ local function finishStage(context, slots)
         context.metadataReady = true
         updateHeader(context)
         text(context.status, plotStatus(context), context.theme.color.textFaint)
-        return nil, chart.finishPending(context), math.min(slots, finishSlots(cost + 500))
+        return nil, chart.finishPending(context), math.min(slots, slotsFor(END_TO_END, cost + 500))
     end
     if not context.rangesReady then
         chart.ranges(context)
@@ -2372,7 +2371,7 @@ local function finishStage(context, slots)
     updateHeader(context)
     text(context.status, plotStatus(context), context.theme.color.textFaint)
     context.metadataReady = true
-    interval, consumed = pace(context, 1, math.min(slots, finishSlots(METADATA_COST)), slots, false)
+    interval, consumed = pace(context, 1, math.min(slots, slotsFor(END_TO_END, METADATA_COST)), slots, false)
     return nil, chart.finishPending(context), consumed
 end
 
@@ -2396,7 +2395,7 @@ local function queued(context)
 end
 
 local function refreshColumns(context, slots)
-    local remaining, used = instructionAllowance(slots), 0
+    local remaining, used = allowance(PIPELINE, slots), 0
     if not context.columnRenderer then
         context.columnRenderer = context.columnRendererModule.new(context)
         return 1, true, 1
@@ -2406,7 +2405,7 @@ local function refreshColumns(context, slots)
         return 1, true, 1
     end
     if remaining < 1 then
-        return 1, true, consumedSlots(used)
+        return 1, true, slotsFor(PIPELINE, used)
     end
     remaining, used = remaining - 1, used + 1
     local owner = context.columnConsumers[1]
@@ -2420,22 +2419,22 @@ local function refreshColumns(context, slots)
         local axisReady, stageUsed = prepareAxis(context, remaining)
         remaining, used = remaining - stageUsed, used + stageUsed
         if not axisReady then
-            return 1, true, consumedSlots(used)
+            return 1, true, slotsFor(PIPELINE, used)
         end
     end
     if context.gridVersion ~= context.version then
         local complete, stageUsed = updateGrid(context, remaining)
         remaining, used = remaining - stageUsed, used + stageUsed
         if not complete then
-            return 1, true, consumedSlots(used)
+            return 1, true, slotsFor(PIPELINE, used)
         end
     end
     if used > 1 then
-        return 1, true, consumedSlots(used)
+        return 1, true, slotsFor(PIPELINE, used)
     end
     -- Charge the samples and columns actually taken; the rest stays queued.
     local appended, _, appendUsed = context.columnRenderer:append(false, remaining)
-    local consumed = consumedSlots(used + appendUsed)
+    local consumed = slotsFor(PIPELINE, used + appendUsed)
     if appended > 0 and context.appendRuns < MAX_APPEND_RUNS and queued(context) then
         -- Readings are still waiting: ask for another turn in this callback, which
         -- the host grants only while slots are left, before overlays and readouts.
@@ -2466,12 +2465,12 @@ local function refreshChart(context, creating, slots)
         end
     end
     if context.columnSetup then
-        local allowance, used = instructionAllowance(slots), 0
+        local allowance, used = allowance(PIPELINE, slots), 0
         if not context.columnSetupIndex then
             -- The geometry is one piece; it waits for a grant that can pay for it.
             local cost = geometryCost(context)
             if allowance < cost then
-                context.refreshMinCost = math.min(8, consumedSlots(cost))
+                context.refreshMinCost = math.min(8, slotsFor(PIPELINE, cost))
                 return 1, true, 1
             end
             chart.geometry(context, context.rect)
@@ -2506,7 +2505,7 @@ local function refreshChart(context, creating, slots)
                     }
                 or nil
         end
-        return 1, true, math.min(slots, consumedSlots(used))
+        return 1, true, math.min(slots, slotsFor(PIPELINE, used))
     end
     if creating or not context.history or context.history.failed or #context.series == 0 then
         chart.render(context)
@@ -2522,13 +2521,11 @@ function chart.refresh(context, creating, slots)
     context.refreshContinuation, context.refreshMinCost = nil, nil
     if context.resetWork and not creating then
         -- Old columns and overlays are hidden before anything new is drawn.
-        local used, complete = resetPresentation(context, math.max(0, instructionAllowance(slots) - RESET_OVERHEAD))
-        return 1, not complete, math.min(slots, consumedSlots(used + RESET_OVERHEAD))
+        local used, complete = resetPresentation(context, math.max(0, allowance(PIPELINE, slots) - RESET_OVERHEAD))
+        return 1, not complete, math.min(slots, slotsFor(PIPELINE, used + RESET_OVERHEAD))
     end
-    local host = context.host
     if
-        host
-        and host.editorUi
+        context.editing()
         and not context.preview
         and not creating
         and context.columnRenderer
@@ -2536,7 +2533,7 @@ function chart.refresh(context, creating, slots)
     then
         -- Recording time stops while editing, so only samples queued before the
         -- editor opened are taken; nothing is drawn until it closes.
-        local renderer, allowance, used = context.columnRendererModule, instructionAllowance(slots), 0
+        local renderer, allowance, used = context.columnRendererModule, allowance(PIPELINE, slots), 0
         for _, owner in ipairs(context.columnConsumers or {}) do
             local room = allowance - used - renderer.SERIES_COST
             if room < renderer.SAMPLE_COST then
@@ -2547,13 +2544,11 @@ function chart.refresh(context, creating, slots)
         end
         local waiting = queued(context)
         context.refreshContinuation = waiting
-        return waiting and 1 or 25, waiting, math.min(slots, consumedSlots(used))
+        return waiting and 1 or 25, waiting, math.min(slots, slotsFor(PIPELINE, used))
     end
     local auto = context.auto
-    local ready = auto and auto.consumers and not creating and context.columnRenderer and not context.columnSetup
-    local rescaling = auto and (auto.rangeRequest or auto.job and auto.job.kind == "range")
-    local full = ready and (auto.window or auto.slide) and overflowed(auto.consumers)
-    if ready and (rescaling or full and autoPending(auto, context.session)) then
+    local busy, ready = preparing(context, creating)
+    if busy then
         -- A full or wrongly scaled plot gains little from readout, overlay or column
         -- refreshes: samples are appended and the rest of the ordinary slot, plus
         -- the extra slot when granted, finishes the rescaled layer. Columns left
@@ -2563,47 +2558,31 @@ function chart.refresh(context, creating, slots)
         -- Intake comes first but leaves room for a preparation turn; preparation
         -- needs a larger grant than an ordinary refresh while it lasts.
         local reserve = slots >= PREP_MIN_SLOTS and prepReserve(context) or 0
-        local _, _, appendUsed = context.columnRenderer:append(true, math.max(0, instructionAllowance(slots) - reserve))
+        local _, _, appendUsed = context.columnRenderer:append(true, math.max(0, allowance(PIPELINE, slots) - reserve))
         local prepUsed, minimum = prepare(context, slots, appendUsed, math.huge)
         context.refreshMinCost = minimum
         context.refreshContinuation = queued(context)
-        return 1, true, math.min(slots, consumedSlots(appendUsed + prepUsed))
+        return 1, true, math.min(slots, slotsFor(PIPELINE, appendUsed + prepUsed))
     end
-    if auto and auto.wakeAt and ready then
-        local now = context.clock()
-        -- A bounded run of preparation turns never starves ordinary refreshes.
-        if now < auto.wakeAt and (auto.backgroundTurns or 0) < 4 then
-            auto.backgroundTurns = (auto.backgroundTurns or 0) + 1
-            -- Between ordinary refreshes only the rescaled layer is prepared.
-            local used, minimum = prepare(context, slots, 0, BACKGROUND_ALLOWANCE)
-            context.refreshMinCost = minimum
-            local interval = autoPending(auto, context.session) and 1 or auto.wakeAt - now
-            -- The visible plot still owes its next refresh.
-            return math.max(1, math.min(6000, interval)), true, math.min(slots, consumedSlots(used))
-        end
+    -- A bounded run of preparation turns never starves ordinary refreshes.
+    if preparationTurn(context, ready) then
+        auto.backgroundTurns = (auto.backgroundTurns or 0) + 1
+        -- Between ordinary refreshes only the rescaled layer is prepared.
+        local used, minimum = prepare(context, slots, 0, BACKGROUND_ALLOWANCE)
+        context.refreshMinCost = minimum
+        local interval = autoPending(auto, context.session) and 1 or auto.wakeAt - context.clock()
+        -- The visible plot still owes its next refresh.
+        return math.max(1, math.min(6000, interval)), true, math.min(slots, slotsFor(PIPELINE, used))
     end
     local interval, unfinished, consumed = refreshChart(context, creating, slots)
     consumed = consumed or 1
     if auto then
         auto.backgroundTurns = 0
     end
-    if auto and auto.consumers and context.auto == auto and not creating then
+    if auto and context.auto == auto and not creating then
         -- A cycle ends when decorations publish, not when the append returns.
         local idle = not unfinished and not context.columnsDecorating and not context.metadataReady
-        local pending = autoPending(auto, context.session)
-        -- At most one extra slot per refresh goes to a rescaled layer.
-        if slots > consumed and not context.columnsDecorating and (pending or idle and auto.job ~= nil) then
-            local used, minimum = prepare(context, slots - consumed, 0, BACKGROUND_ALLOWANCE)
-            context.refreshMinCost = minimum
-            if used > 0 then
-                consumed = math.min(slots, consumed + consumedSlots(used))
-            end
-            pending = autoPending(auto, context.session)
-        end
-        auto.wakeAt = idle and pending and context.clock() + interval or nil
-        if pending then
-            interval = 1
-        end
+        interval, consumed = pace(context, interval, consumed, slots, idle)
     end
     return interval, unfinished, consumed
 end
@@ -2623,7 +2602,7 @@ function chart.background(context, _, slots)
     -- Intake comes first but leaves room for a preparation turn.
     local _, _, appendUsed = renderer:append(
         rescaling or auto and (auto.window or auto.slide) and overflowed(auto.consumers),
-        math.max(0, instructionAllowance(slots) - reserve)
+        math.max(0, allowance(PIPELINE, slots) - reserve)
     )
     local prepUsed = 0
     if auto then
@@ -2631,7 +2610,11 @@ function chart.background(context, _, slots)
         prepUsed, minimum = prepare(context, slots, appendUsed, math.huge)
         context.backgroundMinCost = minimum
     end
-    return nil, false, math.min(slots, consumedSlots(appendUsed + prepUsed))
+    return nil, false, math.min(slots, slotsFor(PIPELINE, appendUsed + prepUsed))
+end
+
+local function notEditing()
+    return false
 end
 
 function chart.create(parent, rect, settings, services)
@@ -2644,6 +2627,7 @@ function chart.create(parent, rect, settings, services)
         settings = settings,
         history = services.history and (services.preview and services.history:preview() or services.history),
         host = services.host,
+        editing = services.editing or notEditing,
         columnModule = services.chartColumns,
         columnRendererModule = services.chartColumnsRenderer,
         preview = services.preview == true,
@@ -2729,7 +2713,7 @@ function chart.create(parent, rect, settings, services)
         context.checkRange = checkRange
         context.columnSetup = assert(services.chartColumns, "chart column runtime unavailable")
         assert(context.columnRendererModule, "chart column renderer runtime unavailable")
-        context.refreshMinCost = math.min(8, consumedSlots(1800 + 1500 * #context.series))
+        context.refreshMinCost = math.min(8, slotsFor(PIPELINE, 1800 + 1500 * #context.series))
     else
         chart.geometry(context, rect)
     end

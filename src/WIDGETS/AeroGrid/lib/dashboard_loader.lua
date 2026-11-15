@@ -125,6 +125,10 @@ function module.new(dependencies)
                 return builder.state(theme, name, accentName)
             end,
             clock = getTime,
+            -- Whether the layout editor is open over the dashboard.
+            editing = function()
+                return context.editorUi ~= nil
+            end,
             -- The host's own state, for the diagnostics view and nothing else.
             --
             -- The live context, not a copy. A diagnostics view reporting on a

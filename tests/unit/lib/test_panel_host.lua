@@ -116,6 +116,20 @@ local function testFinishDispatch()
     entry.failed = false
     pendingOk, pendingError = panelHost.dispatch(entry, "finishPending")
     assert(not pendingOk and entry.failed and string.find(pendingError, "must return a boolean", 1, true))
+    local minimum
+    entry.module.finishPending = function()
+        return true, minimum
+    end
+    for _, valid in ipairs({ 1, 8 }) do
+        minimum, entry.failed = valid, false
+        local ok, _, result, reported = panelHost.dispatch(entry, "finishPending")
+        assert(ok and result == true and reported == valid)
+    end
+    for _, invalid in ipairs({ 0, 9, 1.5, "2" }) do
+        minimum, entry.failed = invalid, false
+        pendingOk, pendingError = panelHost.dispatch(entry, "finishPending")
+        assert(not pendingOk and entry.failed and string.find(pendingError, "minimum must be", 1, true))
+    end
 end
 
 local function testSupportedSpans()

@@ -39,8 +39,8 @@ local module = {
         record("refresh", slots)
         return 1, false, 1
     end,
-    finishPending = function()
-        return pending
+    finishPending = function(instance)
+        return pending, instance.minimum
     end,
     finish = function(_, creating, slots)
         assert(creating == false)
@@ -81,32 +81,32 @@ run({ delayedEntry })
 assert(refreshesAfterFinish == 0, "finish must defer refresh until its new deadline")
 assert(delayedEntry.refreshTask.due == delayedEntry.nextRefresh)
 
--- Dynamic instance minima are resolved again before a continuation grant.
+-- The minimum finishPending reports is resolved again before a continuation grant.
 local finishTurns, finishGrants = 0, {}
 pending = true
 local dynamicFinish = {
     id = "demo",
     finishMinCost = 8,
-    finishPending = function()
-        return pending
+    finishPending = function(instance)
+        return pending, instance.minimum
     end,
     finish = function(instance, _, slots)
         finishTurns = finishTurns + 1
         finishGrants[#finishGrants + 1] = slots
         if finishTurns == 1 then
-            instance.finishMinCost = 1
+            instance.minimum = 1
             return nil, true, 1
         end
         pending = false
         return nil, false, 1
     end,
 }
-local dynamicEntry = entry(dynamicFinish, { finishMinCost = 8 })
+local dynamicEntry = entry(dynamicFinish, { minimum = 8 })
 run({ dynamicEntry })
 assert(finishTurns == 2 and finishGrants[1] == 8 and finishGrants[2] == 7)
 
--- The minimum can change per instance and per turn.
-local instance = { finishMinCost = 8 }
+-- finishPending can report a larger minimum than the module default.
+local instance = { minimum = 8 }
 pending = true
 run({ entry(module, instance) })
 assert(#calls == 1 and calls[1].id == "finish" and calls[1].slots == 8)

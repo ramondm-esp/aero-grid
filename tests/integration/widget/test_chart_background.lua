@@ -100,14 +100,16 @@ for _, object in pairs(renderer.objects) do
         return original(self, values)
     end
 end
-local host = panel.host
-panel.host = { editorUi = {} }
+local editing = panel.editing
+panel.editing = function()
+    return true
+end
 pump(200)
 equal(set, 0, "charts must not redraw while the editor is open")
 for _, owner in ipairs(panel.columnConsumers) do
     assert(#owner.pending <= 6, "edited charts must keep consuming telemetry")
 end
-panel.host = host
+panel.editing = editing
 worst = 0
 pump(80)
 assert(worst < 16000, string.format("leaving the editor cost %d Lua instructions in one callback", worst))
