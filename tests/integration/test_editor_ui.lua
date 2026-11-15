@@ -1810,7 +1810,10 @@ for _, mode in ipairs({ "battery", "bar", "none" }) do
     assert(entry and entry.instance, "new RX battery preview was not built")
     assert(editor.resize(context.editorSession, 1, 1))
     assert(context.editorUi.handlers.preview(context.editorSession.draft))
+    -- Real callbacks arrive every 50 ms; the fair ring may refresh the panel
+    -- before its newly subscribed service's first update.
     for _ = 1, 40 do
+        widget.tick(5)
         refresh()
     end
     equal(context.panels[1], entry, "resizing must update the existing preview")

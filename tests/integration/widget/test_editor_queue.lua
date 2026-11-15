@@ -25,17 +25,14 @@ context.editorController.advanceEditor = function()
         state.buildStage = state.buildStage < 3 and state.buildStage + 1 or nil
     end
 end
-definition.refresh(context)
-assert(steps == 0 and context.uiRequest == "editor", "host routing must not perform editor advancement")
 noGrant(context, fixture.lvglMock.objects, function()
     definition.refresh(context)
+    assert(context.uiRequest == "editor")
     definition.background(context)
     assert(steps == 0 and context.editorUi.buildStage == 1)
 end)
 definition.background(context)
 assert(steps == 0, "hidden callbacks must not build the editor")
-definition.refresh(context)
-assert(steps == 0 and context.uiRequest == "editor")
 definition.refresh(context)
 local task = context.uiTasks.editor
 assert(

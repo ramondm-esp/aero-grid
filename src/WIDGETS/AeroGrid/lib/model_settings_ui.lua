@@ -420,39 +420,45 @@ function ui.advance(context)
     if not command then
         return false
     end
-    state.pending = nil
     if command.apply then
+        state.pending = nil
         command.apply(command.value)
         return true
     end
-    local values, armed, sessionReset = state.config.resolve(state.values), state.armed, state.sessionReset
-    if command.key == "sessionReset" then
-        sessionReset = command.value
-    elseif command.key == "armed" then
-        armed = command.value
+    -- Preparing and writing a save each take a callback; pending blocks input between them.
+    local ok, saved, result
+    if not command.prepared then
+        local values, armed, sessionReset = state.config.resolve(state.values), state.armed, state.sessionReset
+        if command.key == "sessionReset" then
+            sessionReset = command.value
+        elseif command.key == "armed" then
+            armed = command.value
+        else
+            values[command.key] = command.value
+        end
+        local errors = state.config.validate(values)
+        if #errors > 0 then
+            ok, saved, result = true, false, table.concat(errors, "; ")
+        else
+            ok, saved, result =
+                pcall(state.handlers.prepare, values, state.revision, state.modelFilename, armed, sessionReset)
+            if ok and saved then
+                command.prepared, command.values, command.armed, command.sessionReset =
+                    result, values, armed, sessionReset
+                return true
+            end
+        end
     else
-        values[command.key] = command.value
+        ok, saved, result = pcall(state.handlers.commit, command.prepared)
     end
-    local errors = state.config.validate(values)
-    if #errors > 0 then
-        local message = table.concat(errors, "; ")
-        if state.dialog then
-            state.status:set({ text = message })
-        end
-        if state.handlers.error then
-            state.handlers.error(message)
-        end
-        return true
-    end
-    local ok, saved, result =
-        pcall(state.handlers.save, values, state.revision, state.modelFilename, armed, sessionReset)
+    state.pending = nil
     if not ok then
         saved, result = false, saved
     end
     if saved then
         state.values, state.armed, state.revision =
-            state.config.resolve(result.flight or values), armed, result.revision
-        state.sessionReset = sessionReset
+            state.config.resolve(result.flight or command.values), command.armed, result.revision
+        state.sessionReset = command.sessionReset
         state.readControls[command.key]()
         if state.dialog then
             state.status:set({ text = "" })

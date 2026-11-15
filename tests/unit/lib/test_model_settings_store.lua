@@ -59,6 +59,12 @@ do
     saved, result = store:save("plane.yml", 1, draft)
     assert(not saved and string.find(result, "reopen", 1, true))
     assert(yaml.parse(files[path()]).revision == 2)
+    local prepared, staged = store:prepare("plane.yml", 2, draft)
+    assert(prepared and yaml.parse(files[path()]).revision == 2, "prepare does not write")
+    assert(store:save("plane.yml", 2, draft))
+    saved, result = store:commit(staged)
+    assert(not saved and string.find(result, "changed during save", 1, true), result)
+    assert(yaml.parse(files[path()]).revision == 3, "a stale prepared save cannot overwrite a newer one")
 end
 
 do

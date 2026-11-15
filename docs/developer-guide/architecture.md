@@ -96,7 +96,11 @@ They do not each poll EdgeTX or maintain their own telemetry cache.
 Subscriptions to the same source share polling, and an unsubscribed service
 does not consume scheduled work.
 
-Due services and panels share nominal slots in round-robin order. The default
+Due services, panels and host work (flight, input, menus, modals, loading and
+editor transitions) share nominal slots in one round-robin ring. A host
+transition that changes dashboard membership holds services or panels until it
+completes, and at most one host step, plus its own continuations, runs per
+callback. The default
 callback capacity is eight 2,000-instruction slots, configured by `SLOTS` and
 `INSTRUCTIONS_PER_SLOT` in `lib/scheduler.lua`. Every task turn is capped at
 eight slots, even if a callback has a larger capacity. Fixed tasks reserve

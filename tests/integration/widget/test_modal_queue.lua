@@ -108,11 +108,9 @@ context.logViewerModule = {
     end,
 }
 definition.refresh(context)
-assert(context.uiRequest == "log viewer" and steps == 4)
+assert(context.uiRequest == "log viewer" and steps == 5, "routing and preparation share a callback")
 definition.background(context)
-assert(steps == 4, "hidden callbacks must not prepare log text")
-definition.refresh(context)
-assert(steps == 4 and context.uiRequest == "log viewer")
+assert(steps == 5, "hidden callbacks must not prepare log text")
 
 local broker, flightSteps = { documentLoaded = true, filename = context.aerogridMenu.modelFilename }, 0
 context.flightFactory = { broker = broker }
@@ -125,9 +123,9 @@ context.flightTask = {
 }
 context.scheduler.cursor = 1
 definition.refresh(context)
-assert(flightSteps == 1 and steps == 4, "flight's charged turn must defer the full-capacity viewer")
+assert(flightSteps == 1 and steps == 5, "flight's charged turn must defer the full-capacity viewer")
 definition.refresh(context)
-assert(flightSteps == 1 and steps == 5, "the deferred viewer gets first turn next callback")
+assert(flightSteps == 1 and steps == 6, "the deferred viewer gets first turn next callback")
 local viewerTask = context.uiTasks["log viewer"]
 assert(context.scheduler.state(viewerTask).pending)
 context.flightFactory = nil

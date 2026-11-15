@@ -46,7 +46,14 @@ local function fixture(width)
         modelFilename = function()
             return control.filename
         end,
-        save = function(values, revision, filename, armed, sessionReset)
+        prepare = function(values, revision, filename, armed, sessionReset)
+            control.prepared = (control.prepared or 0) + 1
+            return true,
+                { values = values, revision = revision, filename = filename, armed = armed, reset = sessionReset }
+        end,
+        commit = function(prepared)
+            local values, revision, filename = prepared.values, prepared.revision, prepared.filename
+            local armed, sessionReset = prepared.armed, prepared.reset
             control.attempts = control.attempts + 1
             assert(revision == document.revision and filename == document.modelFilename)
             if control.failure then
@@ -164,6 +171,9 @@ do
         ui.advance(c)
         assert(control.attempts == attempts, "normalization has its own grant")
         ui.advance(c)
+        assert(control.attempts == attempts, "preparing a save has its own grant")
+        assert(state.pending, "the write keeps input blocked")
+        ui.advance(c)
         assert(control.attempts == attempts + 1)
         assert(c.modelSettingsUi == state, "saving a field keeps the page open")
         assert(state.revision == document().revision, "each field uses the latest saved revision")
@@ -275,11 +285,13 @@ do
     assert(control.attempts == 0, "native callbacks defer filesystem work")
     ui.advance(c)
     ui.advance(c)
+    ui.advance(c)
     assert(state.values.motorSource == "ch3" and document().flight.motorSource == "ch3")
     assert(state.controls.motorSource.properties.get() == 103)
     assert(state.status.properties.text == control.failure and control.errors == 1)
     control.failure = nil
     state.controls.motorSource.properties.set(107)
+    ui.advance(c)
     ui.advance(c)
     ui.advance(c)
     assert(document().flight.motorSource == "ch7" and control.published == 1)
@@ -290,6 +302,7 @@ do
     assert(control.attempts == 2 and state.values.minMotorPercent < 100 and control.errors == 2)
     control.exception = true
     state.controls.motorReversed.properties.set(1)
+    ui.advance(c)
     ui.advance(c)
     ui.advance(c)
     assert(string.find(state.status.properties.text, "filesystem exception") and control.errors == 3)
@@ -309,6 +322,7 @@ do
     local c, state, control, document = fixture()
     state.controls.motorReversed.properties.set(1)
     state.dialog.properties.close()
+    ui.advance(c)
     ui.advance(c)
     ui.advance(c)
     ui.advance(c)

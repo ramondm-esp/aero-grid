@@ -101,7 +101,7 @@ for _, dashboard in ipairs({
             fixture.lvglMock.setFullScreen(fullscreen)
             definition.refresh(context)
             local guard = 0
-            while context.reflowIndex do
+            while context.reflowIndex or context.lifecycleRequest do
                 definition.refresh(context)
                 guard = guard + 1
                 assert(guard < 100, "reflow did not finish")

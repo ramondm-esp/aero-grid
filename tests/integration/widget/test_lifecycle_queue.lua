@@ -82,9 +82,14 @@ assert(loadTask.ready(loadTask, getTime(), false), "a due hold cannot block the 
 context.editorPress = nil
 local previousMenu = context.aerogridMenu
 context.aerogridMenu = { action = "probe" }
-assert(not loadTask.ready(loadTask, getTime(), false), "native menu intents must preempt continued loading")
+context.lifecycleRequest = "load"
+local stepsBefore = loadSteps
+definition.refresh(context)
+assert(loadSteps == stepsBefore, "native menu intents must preempt continued loading")
 context.aerogridMenu = previousMenu
-context.stage = nil
+definition.refresh(context)
+assert(loadSteps == stepsBefore + 1, "loading continues once the menu intent is gone")
+context.stage, context.lifecycleRequest = nil, nil
 
 context.dashboardLifecycle.beginReflow = function()
     record("reflow")
@@ -100,8 +105,6 @@ context.zone.w = 320
 context.lifecycleRequest = "reflow"
 definition.background(context)
 assert(reflowSteps == 0, "hidden callbacks must not advance reflow")
-definition.refresh(context)
-assert(context.lifecycleRequest == "reflow" and reflowSteps == 0)
 definition.refresh(context)
 assert(reflowSteps == 1 and context.scheduler.state(context.lifecycleTasks.reflow).pending)
 definition.refresh(context)

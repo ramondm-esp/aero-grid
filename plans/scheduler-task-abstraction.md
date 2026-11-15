@@ -417,6 +417,18 @@ down from twelve. The combined host exposed a 16,643-instruction chart reentry
 callback against its unchanged 16,000-instruction regression ceiling; bounding
 that paint batch leaves the remaining columns for later appends.
 
+Host work no longer has its own selection chain. Every host task joins the
+same ring as services and panels with a `ready` gate. Options, session reset,
+menus and input are checked first, so intent recorded before a transition is
+honored before the transition runs. Steps that change membership set
+`servicesHold`/`panelsHold` instead of excluding all dashboard work. Panels
+also wait while fullscreen input is queued, and only services with subscribers
+join the ring. Routing
+runs at the start of the callback, so a requested step usually starts in that
+callback rather than the next one. Model-settings saves prepare (validate and
+serialize) and commit (guarded write) in separate grants. The write guard
+rejects a commit if the file changed in between.
+
 ## No-grant checks and radio checkpoint
 
 The callback guard withholds every task and rejects script loading, file

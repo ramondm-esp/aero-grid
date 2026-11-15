@@ -974,10 +974,19 @@ local function update(context, widgetOptions)
     end
 end
 
+--- Stop dashboard services and panels for the rest of this callback. Host
+--- work that may replace or retire their owners calls this; they are enrolled
+--- afresh on the next callback.
+---@param context AeroGridContext
+local function closeDashboard(context)
+    context.dashboardClosed, context.servicesHold, context.panelsHold = true, true, true
+end
+
 local function optionsStep(task)
     local context = task.host
     local request = context.optionsRequest
     context.optionsRequest = nil
+    closeDashboard(context)
     local member = context.flightFactory.members[context]
     member.pending = true
     context.flightFactory.revision = (context.flightFactory.revision or 0) + 1
@@ -1129,20 +1138,99 @@ local function event(context, widgetEvent, touchState)
     return true
 end
 
---- Stop dashboard services and panels for the rest of this callback. Host
---- work that may replace or retire their owners calls this; they are enrolled
---- afresh on the next callback.
----@param context AeroGridContext
-local function closeDashboard(context)
-    context.scheduledServices, context.scheduledPanels = false, false
+local function editorWorkNeeded(state)
+    return state
+        and (
+            state.buildStage
+            or state.saving
+            or state.drawerBuild ~= nil
+            or state.drawerPending
+            or state.nativeInput
+            or state.exitCommand
+            or state.previewPending
+            or state.previewRefresh
+        )
+end
+
+--- Whether pending host work may replace the owners of services and panels:
+--- options, arming reloads, session resets, loading and reloading wait for no
+--- stale owner to run in between.
+local function servicesHeld(context, hidden)
+    return context.dashboardClosed
+        or context.optionsRequest ~= nil
+        or context.modelArmingReload
+        or context.sessionResetPending
+        or context.stage ~= nil
+        or context.reloadState ~= nil
+        or hidden and context.reflowIndex ~= nil
+end
+
+--- Panels also wait while their placement or previews change, stay behind a
+--- visible modal overlay, and yield callbacks with queued fullscreen input
+--- to the surface that input targets.
+local function panelsHeld(context, hidden)
+    return not hidden and context.inputPending
+        or context.lifecycleRequest ~= nil
+        or context.editorTransitionRequest ~= nil
+        or context.reflowIndex ~= nil
+        or context.appRebuild ~= nil
+        or editorWorkNeeded(context.editorUi)
+        or not hidden and (context.modelSettingsUi ~= nil or context.logViewer ~= nil)
+end
+
+--- A session reset waits for a load or reload to finish, then runs before other host work.
+local function sessionResetDue(context)
+    return context.sessionResetPending and not (context.stage or context.reloadState)
+end
+
+--- Lifecycle steps wait for arming reloads, due session resets, open modals
+--- and editors, and for the foreground surface to settle.
+local function lifecycleHeld(context, hidden)
+    if
+        context.modelArmingReload
+        or sessionResetDue(context)
+        or context.modelSettingsUi
+        or context.editorUi and (hidden and context.editorUi.saving or not hidden)
+    then
+        return true
+    end
+    if hidden then
+        return false
+    end
+    local menu = context.aerogridMenu
+    if menu and (menu.pending or menu.action or menu.dismiss or menu.selectionDirty) then
+        return true
+    end
+    local built = not context.reloadState
+        and (context.pageBuiltFullscreen or context.rootBuiltFullscreen or context.nativeDialogsCreated)
+    if not (context.locationDetails or context.logViewer or context.editorStash or built) then
+        return false
+    end
+    local fullscreen = isFullScreen()
+    return context.locationDetails and (not fullscreen or context.reloadState)
+        or context.logViewer and (not fullscreen or context.reloadState or context.logViewer.width ~= context.zone.w - 16 or context.logViewer.height ~= context.zone.h)
+        or context.editorStash and fullscreen and context.document and not (context.stage or context.reloadState)
+        or built and not fullscreen
+end
+
+--- Decide the holds once per callback and again after every step that may
+--- change them, so each task's readiness only reads a flag. `pruneRequests`
+--- decides the lifecycle barrier at callback start, so `runCallback` skips it.
+local function updateHolds(context, hidden, keepLifecycle)
+    local services = servicesHeld(context, hidden)
+    context.servicesHold = services
+    context.panelsHold = services or panelsHeld(context, hidden)
+    if not keepLifecycle then
+        context.lifecycleHold = context.lifecycleRequest ~= nil and lifecycleHeld(context, hidden)
+    end
 end
 
 --- Task steps that adapt the panel and service contracts to the scheduler.
 --- Each task's `owner` is the service instance or panel entry it runs for.
-local function serviceReady(task)
+local function serviceReady(task, _, hidden)
     local instance = task.owner
     task.cost, task.minCost = instance.updateCost, instance.updateMinCost
-    return task.host.scheduledServices and not instance.failed and instance.count ~= 0
+    return not task.host.servicesHold and not instance.failed and instance.count ~= 0
 end
 
 local function serviceStep(task, now, slots)
@@ -1178,18 +1266,18 @@ end
 
 local function refreshReady(task, _, hidden)
     local entry = task.owner
-    task.cost = instanceField(entry, "refreshCost") or rawget(entry.module, "refreshCost") or 1
-    task.minCost = instanceField(entry, "refreshMinCost") or rawget(entry.module, "refreshMinCost")
-    if not task.host.scheduledPanels or hidden or entry.failed then
+    if hidden or entry.failed or task.host.panelsHold then
         return false
     end
+    task.cost = instanceField(entry, "refreshCost") or rawget(entry.module, "refreshCost") or 1
+    task.minCost = instanceField(entry, "refreshMinCost") or rawget(entry.module, "refreshMinCost")
     local pending = finishPending(task.host, entry)
     return not entry.failed and not pending
 end
 
 local function finishReady(task, _, hidden)
     local entry = task.owner
-    if not (task.host.scheduledPanels and not hidden and not entry.failed) then
+    if hidden or entry.failed or task.host.panelsHold then
         return false
     end
     local pending = finishPending(task.host, entry)
@@ -1203,10 +1291,13 @@ end
 
 local function backgroundReady(task, _, hidden)
     local entry = task.owner
+    if not hidden or entry.failed or task.host.panelsHold then
+        return false
+    end
     -- A panel that declares a minimum is charged what it reports.
     local minimum = instanceField(entry, "backgroundMinCost") or rawget(entry.module, "backgroundMinCost")
     task.cost, task.minCost = minimum and "variable" or 1, minimum
-    return task.host.scheduledPanels and hidden and not task.owner.failed
+    return true
 end
 
 local function panelStep(task, now, granted)
@@ -1234,32 +1325,40 @@ local function panelStep(task, now, granted)
     return used, unfinished
 end
 
---- Enrol the live services and panels, in that order, for one run.
---- Membership is read from the host's own tables on every callback, so a panel
---- added, replaced or retired by the loader or editor needs no registration.
+local NONE = {}
+
+--- Enrol the services that have subscribers and the live panels, in that
+--- order, for one run. Membership is read from the host's own tables on every
+--- callback, so a panel added, replaced or retired by the loader or editor
+--- needs no registration, and a service gains its first subscriber's turn on
+--- the next callback.
+--- Held owners wait for the next callback; a hold that starts later in the
+--- callback is seen by the ready checks.
 ---@param context AeroGridContext
 local function enrolTasks(context, registry)
     local scheduler = context.scheduler
-    local order = registry.order
+    local order = context.servicesHold and NONE or registry.order
     for index = 1, #order do
         local instance = order[index]
-        local task = instance.task
-        if not task or task.registry ~= registry then
-            task = {
-                name = instance.id,
-                owner = instance,
-                onError = serviceError,
-                registry = registry,
-                host = context,
-                step = serviceStep,
-                ready = serviceReady,
-            }
-            instance.task = task
+        if instance.count ~= 0 then
+            local task = instance.task
+            if not task or task.registry ~= registry then
+                task = {
+                    name = instance.id,
+                    owner = instance,
+                    onError = serviceError,
+                    registry = registry,
+                    host = context,
+                    step = serviceStep,
+                    ready = serviceReady,
+                }
+                instance.task = task
+            end
+            task.due, task.failed = instance.due, instance.failed
+            scheduler.add(task)
         end
-        task.due, task.failed = instance.due, instance.failed
-        scheduler.add(task)
     end
-    local panels = context.panels
+    local panels = context.panelsHold and NONE or context.panels
     for index = 1, #panels do
         local entry = panels[index]
         local module = entry.module
@@ -1362,18 +1461,11 @@ local function runScheduled(context, hidden, segments)
     end
 end
 
---- Run flight, host work, services and panels in one fair queue.
-local function runTasks(context, hidden, flightTask, hostTask)
+--- Add services and panels after the tasks already enrolled, and run them
+--- all in one fair ring.
+local function runTasks(context, hidden)
     local registry, support = context.serviceRuntime, context.servicesModule
-    local scheduler = context.scheduler
-    scheduler.clear()
-    if flightTask then
-        scheduler.add(flightTask)
-    end
-    if hostTask then
-        scheduler.add(hostTask)
-    end
-    if (not hostTask or hostTask.settingsInput) and registry and support then
+    if registry and support then
         enrolTasks(context, registry)
     end
 
@@ -1532,6 +1624,14 @@ local function pumpFlight(task, now, granted)
     return
 end
 
+--- Flight may reset the model identity or request an arming reload or a
+--- session reset, which hold the dashboard for the rest of the callback.
+local function flightStep(task, now, granted, hidden)
+    local used, again = pumpFlight(task, now, granted)
+    updateHolds(task.host, hidden)
+    return used, again
+end
+
 local function openModelSettings(context)
     local owner = context.flightFactory.broker
     if not owner or not owner.documentLoaded or owner.loadError then
@@ -1604,14 +1704,17 @@ local function openModelSettings(context)
         smartStatus = function()
             return owner.view.smartStatus
         end,
-        save = function(values, revision, modelFilename, armedCondition, sessionReset)
+        prepare = function(values, revision, modelFilename, armedCondition, sessionReset)
             local ok, message = pcall(function()
                 owner:validateOutput(values.flightSwitch, armedCondition, sessionReset)
             end)
             if not ok then
                 return false, tostring(message)
             end
-            return owner.store:save(modelFilename, revision, values, armedCondition, sessionReset)
+            return owner.store:prepare(modelFilename, revision, values, armedCondition, sessionReset)
+        end,
+        commit = function(prepared)
+            return owner.store:commit(prepared)
         end,
         saved = function(saved)
             owner:setDocument(saved)
@@ -1782,11 +1885,7 @@ local function pumpSessionReset(context)
     return true
 end
 
---- A session reset waits for a load or reload to finish, then runs before other host work.
-local function sessionResetDue(context)
-    return context.sessionResetPending and not (context.stage or context.reloadState)
-end
-
+--- A session reset runs before other host work.
 local function sessionResetReady(task)
     local context = task.host
     return sessionResetDue(context) and not context.modelArmingReload
@@ -1794,6 +1893,7 @@ end
 
 local function sessionResetStep(task)
     local context = task.host
+    closeDashboard(context)
     pumpSessionReset(context)
     return nil, context.sessionResetPending == true
 end
@@ -1900,36 +2000,12 @@ local function routeHost(context, hidden)
     return false
 end
 
-local function editorWorkNeeded(state)
-    return state
-        and (
-            state.buildStage
-            or state.saving
-            or state.drawerBuild ~= nil
-            or state.drawerPending
-            or state.nativeInput
-            or state.exitCommand
-            or state.previewPending
-            or state.previewRefresh
-        )
-end
-
-local function advanceForeground(context)
-    if context.runtimeFailed then
-        context.root:set({ w = context.zone.w, h = context.zone.h })
-        context.page:set({ w = context.zone.w, h = context.zone.h })
-        context.canvas:set({ w = context.zone.w, h = context.zone.h })
-        context.reserved = reservedCorner(context.zone)
-        if context.errorLabel then
-            context.errorLabel:set({ y = errorTop(context), w = math.max(1, context.zone.w - 16) })
-        end
-        return
-    end
+--- Record the next host request from the current state. Routing only reads
+--- state and records intent; each request's task does the native work.
+local function routeForeground(context)
     if routeHost(context, false) then
         return
     end
-
-    context.dashboardLifecycle.updateEmptyHint(context)
 
     if not isFullScreen() then
         context.editorPress = nil
@@ -1993,12 +2069,47 @@ local function advanceForeground(context)
     end
 end
 
---- Keep panels updated while the dashboard screen is not visible.
---- Services keep running here too, so flight timers do not develop
---- a hole whenever the pilot looks at another screen.
----@param context AeroGridContext
-local function advanceHidden(context)
-    routeHost(context, true)
+--- Whether the empty-dashboard hint differs from what the page should show.
+local function emptyHintStale(context)
+    local hint = context.emptyHint
+    local show = context.document
+        and #context.document.panels == 0
+        and not context.stage
+        and not context.reloadState
+        and not context.editorUi
+        and #context.errors == 0
+    if show then
+        return not hint
+            or not hint.visible
+            or hint.w ~= context.zone.w
+            or hint.h ~= context.zone.h
+            or hint.fullscreen ~= isFullScreen()
+    end
+    return hint ~= nil and hint.visible
+end
+
+local function hintReady(task, _, hidden)
+    return not hidden and emptyHintStale(task.host)
+end
+
+local function hintStep(task)
+    task.host.dashboardLifecycle.updateEmptyHint(task.host)
+end
+
+--- Foreground work without a scheduler: only a failed runtime's error page.
+local function advanceForeground(context)
+    if context.runtimeFailed then
+        context.root:set({ w = context.zone.w, h = context.zone.h })
+        context.page:set({ w = context.zone.w, h = context.zone.h })
+        context.canvas:set({ w = context.zone.w, h = context.zone.h })
+        context.reserved = reservedCorner(context.zone)
+        if context.errorLabel then
+            context.errorLabel:set({ y = errorTop(context), w = math.max(1, context.zone.w - 16) })
+        end
+        return
+    end
+    routeForeground(context)
+    context.dashboardLifecycle.updateEmptyHint(context)
 end
 
 local function menuWorkNeeded(context, fullscreen)
@@ -2027,11 +2138,7 @@ local function menuWorkNeeded(context, fullscreen)
 end
 
 local function menuReady(task, _, hidden)
-    local context = task.host
-    return not hidden
-        and not context.modelArmingReload
-        and not context.sessionResetPending
-        and menuWorkNeeded(context, isFullScreen())
+    return not hidden and task.host.menuDue
 end
 
 local function menuStep(task)
@@ -2072,18 +2179,22 @@ local function editorContinues(state)
         and state.drawerBuild == nil
 end
 
+--- Queued input, or a held long press, that the input task has yet to handle.
+local function inputWaiting(context, hidden)
+    return not hidden
+        and (context.inputPending or context.editorPress and getTime() - context.editorPress.started >= 60)
+end
+
 local function inputReady(task, _, hidden)
     local context = task.host
     -- Settings input only records a close request; services share the rest.
-    task.cost = task.settingsInput and 1 or context.scheduler.budget.slots
-    return not hidden
+    task.cost = context.modelSettingsUi and 1 or context.scheduler.budget.slots
+    return inputWaiting(context, hidden)
         and isFullScreen()
         and not context.modelArmingReload
         and not sessionResetDue(context)
         and (context.modelSettingsUi or not context.stage and not context.reloadState)
         and not editorWorkNeeded(context.editorUi)
-        and (context.inputPending or context.editorPress and getTime() - context.editorPress.started >= 60)
-        and not menuWorkNeeded(context, true)
 end
 
 local function inputStep(task)
@@ -2159,6 +2270,10 @@ local function modelSettingsOpenStep(task)
     openModelSettings(context)
 end
 
+local function logOpenReady(task, _, hidden)
+    return not hidden and task.host.logOpenRequest ~= nil
+end
+
 local function logOpenStep(task)
     local context = task.host
     context.logOpenRequest = nil
@@ -2181,10 +2296,10 @@ local function logOpenStep(task)
     end
 end
 
-local function locationReady(task)
+local function locationReady(task, _, hidden)
     local request = task.host.locationRequest
     task.cost = request and request.kind == "close" and 1 or task.host.scheduler.budget.slots
-    return true
+    return not hidden and request ~= nil
 end
 
 local function locationStep(task)
@@ -2242,6 +2357,7 @@ local function editorTransitionStep(task)
     local context = task.host
     local request, state = context.editorTransitionRequest, context.editorUi
     context.editorTransitionRequest = nil
+    closeDashboard(context)
     if request == "open" then
         context.editorController.openEditor(context)
     else
@@ -2294,13 +2410,8 @@ local function uiReady(task, _, hidden)
         return not sessionResetDue(context)
             and not context.modelSettingsUi
             and (hidden and state.saving ~= nil or not hidden and (isFullScreen() or state.saving ~= nil))
-            and (hidden or not menuWorkNeeded(context, isFullScreen()))
     end
-    if
-        context.modelArmingReload
-        or sessionResetDue(context)
-        or not hidden and menuWorkNeeded(context, isFullScreen())
-    then
+    if context.modelArmingReload or sessionResetDue(context) then
         return false
     end
     if task.kind == "model settings" then
@@ -2372,45 +2483,7 @@ local LOAD_STAGE_COST = {
     ["theme-validate"] = 4,
 }
 
-local function loadCost(context)
-    local slots = context.scheduler.budget.slots
-    return math.min(LOAD_STAGE_COST[context.stage] or slots, slots)
-end
-
-local function lifecycleReady(task, _, hidden)
-    local context, kind = task.host, task.kind
-    if kind == "load" then
-        task.cost = loadCost(context)
-    elseif kind == "rebuild" then
-        task.cost = 1
-    else
-        task.cost = context.scheduler.budget.slots
-    end
-    if
-        context.modelArmingReload
-        or sessionResetDue(context)
-        or context.modelSettingsUi
-        or context.editorUi and (hidden and context.editorUi.saving or not hidden)
-        or not hidden
-            and not (context.stage or context.reloadState)
-            and (context.inputPending or context.editorPress and getTime() - context.editorPress.started >= 60)
-    then
-        return false
-    end
-    if not hidden then
-        local fullscreen, menu = isFullScreen(), context.aerogridMenu
-        if
-            menu and (menu.pending or menu.action or menu.dismiss or menu.selectionDirty)
-            or context.locationDetails and (not fullscreen or context.reloadState)
-            or context.logViewer and (not fullscreen or context.reloadState or context.logViewer.width ~= context.zone.w - 16 or context.logViewer.height ~= context.zone.h)
-            or context.editorStash and fullscreen and context.document and not (context.stage or context.reloadState)
-            or not fullscreen
-                and not context.reloadState
-                and (context.pageBuiltFullscreen or context.rootBuiltFullscreen or context.nativeDialogsCreated)
-        then
-            return false
-        end
-    end
+local function lifecycleWanted(context, kind, hidden)
     if kind == "retire" then
         return context.reloadState == "clear"
     elseif kind == "rebuild" then
@@ -2427,9 +2500,28 @@ local function lifecycleReady(task, _, hidden)
     return not hidden and not context.reloadState and not context.stage and context.appRebuild ~= nil
 end
 
+--- Each lifecycle step checks its own work, then the shared lifecycle hold
+--- and any input it must not run ahead of.
+local function lifecycleReady(task, _, hidden)
+    local context, kind = task.host, task.kind
+    if context.lifecycleHold or not lifecycleWanted(context, kind, hidden) then
+        return false
+    end
+    local slots = context.scheduler.budget.slots
+    if kind == "load" then
+        task.cost = math.min(LOAD_STAGE_COST[context.stage] or slots, slots)
+    elseif kind == "rebuild" then
+        task.cost = 1
+    else
+        task.cost = slots
+    end
+    return context.stage or context.reloadState or not inputWaiting(context, hidden)
+end
+
 local function lifecycleStep(task)
     local context, kind = task.host, task.kind
     context.lifecycleRequest = nil
+    closeDashboard(context)
     if kind == "retire" then
         context.dashboardLifecycle.retirePage(context)
         context.lifecycleRequest = "rebuild"
@@ -2472,97 +2564,257 @@ local function lifecycleStep(task)
     end
 end
 
---- Until individual host operations are split, reserve the whole callback for
---- their existing staged flow. Idle callbacks only inspect state here.
-local function hostWorkNeeded(context, hidden, widgetEvent, fullscreen)
-    if
-        context.optionsRequest
-        or context.modelSettingsRequest
-        or context.logOpenRequest
-        or context.locationRequest
-        or context.lifecycleRequest
-        or context.uiRequest
-        or context.editorTransitionRequest
-        or context.modelArmingReload
-        or sessionResetDue(context)
-        or context.reloadState
-        or context.stage
-    then
-        return true
+--- Every host task shares one ordering rule on top of its own readiness:
+--- one host step per callback (plus its own continuation), so native
+--- callback boundaries between host steps remain; pending options, then a
+--- due session reset, then menu work run before other host work; and steps
+--- that may move or replace what queued input targets wait for that input.
+local function hostReady(task, now, hidden)
+    local context = task.host
+    local turn = context.hostTurn
+    if turn and turn ~= task then
+        return false
     end
-    local editor = context.editorUi
-    if hidden then
-        return context.modelSettingsUi ~= nil or editor and editor.saving ~= nil
+    if context.optionsRequest and task ~= context.optionsTask then
+        return false
     end
     if
-        widgetEvent and widgetEvent ~= 0
-        or context.editorPress
-        or context.runtimeFailed
-        or context.reflowIndex
-        or context.appRebuild
-        or context.width ~= context.zone.w
-        or context.height ~= context.zone.h
-        or context.left ~= (context.zone.xabs or 0)
-        or context.top ~= (context.zone.yabs or 0)
-        or context.fullScreen ~= fullscreen
+        sessionResetDue(context)
+        and not context.modelArmingReload
+        and task ~= context.optionsTask
+        and task ~= context.sessionResetTask
     then
-        return true
+        return false
     end
-    if
-        context.locationDetails and not fullscreen
-        or context.logViewer and (not fullscreen or context.logViewer.prepareIndex or context.logViewer.closing or context.logViewer.width ~= context.zone.w - 16 or context.logViewer.height ~= context.zone.h)
-        or editor and (not fullscreen or editorWorkNeeded(editor))
-        or context.editorStash and not editor and fullscreen and context.document
-        or not fullscreen
-            and (context.pageBuiltFullscreen or context.rootBuiltFullscreen or context.nativeDialogsCreated)
-    then
-        return true
+    if context.menuDue and task ~= context.menuTask then
+        return false
     end
-    if context.modelSettingsUi then
-        local settings = context.modelSettingsUi
-        if
-            settings.build
-            or settings.pending
-            or settings.closing
-            or context.flightFactory and context.flightFactory.broker and context.flightFactory.broker.filename ~= settings.modelFilename
-            or not fullscreen
-        then
-            return true
+    local first = task.inputFirst
+    if first and (first == true or first(task)) and inputWaiting(context, hidden) then
+        return false
+    end
+    return task.gate(task, now, hidden)
+end
+
+local function hostStep(task, now, granted, hidden)
+    local context = task.host
+    context.hostTurn = task
+    local used, again = task.run(task, now, granted, hidden)
+    updateHolds(context, hidden)
+    return used, again
+end
+
+local function hostTask(context, field, name, gate, run, fields)
+    local task = context[field]
+    if not task then
+        task = {
+            name = name,
+            owner = name,
+            host = context,
+            onError = hostError,
+            cost = context.scheduler.budget.slots,
+            gate = gate,
+            run = run,
+            ready = hostReady,
+            step = hostStep,
+        }
+        for key, value in pairs(fields or {}) do
+            task[key] = value
         end
+        context[field] = task
     end
-    if menuWorkNeeded(context, fullscreen) then
-        return true
+    return task
+end
+
+local function kindTask(context, field, kind, gate, run, ui)
+    local tasks = context[field]
+    if not tasks then
+        tasks = {}
+        context[field] = tasks
     end
-    local hint = context.emptyHint
-    local show = context.document and #context.document.panels == 0 and not editor and #context.errors == 0
-    if
-        show
-            and (not hint or not hint.visible or hint.w ~= context.zone.w or hint.h ~= context.zone.h or hint.fullscreen ~= fullscreen)
-        or not show and hint and hint.visible
-    then
-        return true
+    local task = tasks[kind]
+    if not task or ui and task.ui ~= ui then
+        task = {
+            name = kind,
+            owner = kind,
+            kind = kind,
+            ui = ui,
+            host = context,
+            onError = hostError,
+            gate = gate,
+            run = run,
+            ready = hostReady,
+            step = hostStep,
+        }
+        if kind == "model settings" or kind == "log viewer" then
+            task.inputFirst = function(self)
+                return not (self.kind == "log viewer" and self.host.logViewer and self.host.logViewer.closing)
+            end
+        end
+        tasks[kind] = task
     end
-    if not fullscreen and not editor then
-        for _, entry in ipairs(context.panels) do
-            if entry.builtFullscreen then
-                return true
+    return task
+end
+
+local function optionsReady(task)
+    return task.host.optionsRequest ~= nil
+end
+
+local function editorOpening(task)
+    return task.host.editorTransitionRequest == "open"
+end
+
+local function locationOpening(task)
+    local request = task.host.locationRequest
+    return request ~= nil and request.kind == "open"
+end
+
+--- Drop requests whose target has gone, so routing can record new ones.
+local function pruneRequests(context, hidden, fullscreen)
+    local filename
+    if context.logOpenRequest or context.locationRequest then
+        local info = model and model.getInfo and model.getInfo()
+        filename = info and info.filename
+    end
+    if context.modelSettingsRequest then
+        local task = hostTask(
+            context,
+            "modelSettingsOpenTask",
+            "model settings open",
+            modelSettingsOpenReady,
+            modelSettingsOpenStep,
+            { inputFirst = true }
+        )
+        if not modelSettingsOpenReady(task, nil, hidden) then
+            if not hidden and (not fullscreen or context.modelSettingsUi) then
+                context.modelSettingsRequest = nil
+            elseif context.editorUi and context.editorUi.saving then
+                context.uiRequest = "editor"
             end
         end
     end
-    return false
+    if context.editorTransitionRequest and not hidden then
+        local task = hostTask(
+            context,
+            "editorTransitionTask",
+            "editor transition",
+            editorTransitionReady,
+            editorTransitionStep,
+            { inputFirst = editorOpening }
+        )
+        if not editorTransitionReady(task, nil, hidden) then
+            context.editorTransitionRequest = nil
+        end
+    end
+    local request = context.logOpenRequest
+    if
+        request
+        and (
+            request.page ~= context.page
+            or request.modelFilename ~= filename
+            or context.reloadState
+            or context.stage
+            or context.modelSettingsUi
+            or context.editorUi
+            or not hidden and not fullscreen
+        )
+    then
+        context.logOpenRequest = nil
+    end
+    request = context.locationRequest
+    if
+        request
+        and (
+            request.kind == "close" and context.locationDetails ~= request.state
+            or request.kind == "open"
+                and (request.page ~= context.page or request.modelFilename ~= filename or context.reloadState or context.stage or context.modelSettingsUi or context.editorUi or context.logViewer or not hidden and not fullscreen)
+        )
+    then
+        context.locationRequest = nil
+    end
+    local kind = context.lifecycleRequest
+    -- The cached barrier is from the previous callback; judge with a fresh one.
+    context.lifecycleHold = kind ~= nil and lifecycleHeld(context, hidden)
+    if
+        kind
+        and not lifecycleReady(kindTask(context, "lifecycleTasks", kind, lifecycleReady, lifecycleStep), nil, hidden)
+    then
+        context.lifecycleRequest = nil
+    end
+    kind = context.uiRequest
+    if kind then
+        local ui = context[uiField(kind)]
+        if not ui or not uiReady(kindTask(context, "uiTasks", kind, uiReady, uiStep, ui), nil, hidden) then
+            context.uiRequest = nil
+        end
+    end
 end
 
-local function advanceHost(task, _, _, hidden)
-    local context = task.host
-    -- Mutations may replace or retire enrolled owners; dashboard work resumes
-    -- with freshly enrolled tasks on the next callback.
-    closeDashboard(context)
-    if hidden then
-        advanceHidden(context)
-    else
-        advanceForeground(context)
+--- Enrol the host tasks with work outstanding, in a fixed order.
+local function enrolHost(context, hidden)
+    local add = context.scheduler.add
+    if context.optionsRequest then
+        add(hostTask(context, "optionsTask", "native options", optionsReady, optionsStep))
     end
-    closeDashboard(context)
+    if context.sessionResetPending then
+        add(hostTask(context, "sessionResetTask", "session reset", sessionResetReady, sessionResetStep))
+    end
+    if context.menuDue then
+        add(hostTask(context, "menuTask", "menu", menuReady, menuStep))
+    end
+    if context.inputPending or context.editorPress then
+        add(hostTask(context, "inputTask", "input", inputReady, inputStep))
+    end
+    if context.modelSettingsRequest then
+        add(
+            hostTask(
+                context,
+                "modelSettingsOpenTask",
+                "model settings open",
+                modelSettingsOpenReady,
+                modelSettingsOpenStep,
+                { inputFirst = true }
+            )
+        )
+    end
+    if context.editorTransitionRequest then
+        add(
+            hostTask(
+                context,
+                "editorTransitionTask",
+                "editor transition",
+                editorTransitionReady,
+                editorTransitionStep,
+                { inputFirst = editorOpening }
+            )
+        )
+    end
+    if context.logOpenRequest then
+        add(hostTask(context, "logOpenTask", "log open", logOpenReady, logOpenStep, { inputFirst = true }))
+    end
+    if context.locationRequest then
+        add(
+            hostTask(
+                context,
+                "locationTask",
+                "location details",
+                locationReady,
+                locationStep,
+                { inputFirst = locationOpening }
+            )
+        )
+    end
+    local kind = context.lifecycleRequest
+    if kind then
+        add(kindTask(context, "lifecycleTasks", kind, lifecycleReady, lifecycleStep))
+    end
+    kind = context.uiRequest
+    if kind then
+        add(kindTask(context, "uiTasks", kind, uiReady, uiStep, context[uiField(kind)]))
+    end
+    if not hidden and emptyHintStale(context) then
+        add(hostTask(context, "hostTask", "host", hintReady, hintStep, { inputFirst = true }))
+    end
 end
 
 local function runCallback(context, hidden, widgetEvent, touchState)
@@ -2582,9 +2834,8 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         end
         return
     end
-    local scheduler = context.scheduler
     local fullscreen = not hidden and isFullScreen()
-    context.inputHandled = nil
+    context.inputHandled, context.hostTurn, context.dashboardClosed = nil, nil, nil
     if not hidden then
         event(context, widgetEvent, touchState)
     end
@@ -2602,14 +2853,18 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         and not context.editorTransitionRequest
         and not context.locationRequest
     then
-        routeHost(context, hidden)
+        if hidden then
+            routeHost(context, true)
+        else
+            routeForeground(context)
+        end
     end
-    local hostNeeded = hostWorkNeeded(context, hidden, context.widgetEvent, fullscreen)
-    local settingsInput = not hidden and context.inputPending and context.modelSettingsUi ~= nil
-    context.scheduledServices = (not hostNeeded or settingsInput) and not (hidden and context.reflowIndex)
-    context.scheduledPanels = not hostNeeded
-        and not (hidden and context.reflowIndex)
-        and not (not hidden and (context.modelSettingsUi or context.logViewer))
+    pruneRequests(context, hidden, fullscreen)
+    context.menuDue = not hidden
+        and not context.modelArmingReload
+        and not context.sessionResetPending
+        and menuWorkNeeded(context, fullscreen)
+    updateHolds(context, hidden, true)
     local flightTask
     local owner = context.flightFactory and context.flightFactory.broker
     if owner then
@@ -2621,239 +2876,18 @@ local function runCallback(context, hidden, widgetEvent, touchState)
                 onError = flightError,
                 broker = owner,
                 host = context,
-                step = pumpFlight,
+                step = flightStep,
                 ready = flightReady,
             }
             context.flightTask = flightTask
         end
     end
-    local hostTask
-    if hostNeeded then
-        if context.optionsRequest then
-            hostTask = context.optionsTask
-            if not hostTask then
-                hostTask = {
-                    name = "native options",
-                    owner = "native options",
-                    host = context,
-                    onError = hostError,
-                    cost = scheduler.budget.slots,
-                    step = optionsStep,
-                }
-                context.optionsTask = hostTask
-            end
-        elseif sessionResetDue(context) and not context.modelArmingReload then
-            hostTask = context.sessionResetTask
-            if not hostTask then
-                hostTask = {
-                    name = "session reset",
-                    owner = "session reset",
-                    host = context,
-                    onError = hostError,
-                    cost = scheduler.budget.slots,
-                    step = sessionResetStep,
-                    ready = sessionResetReady,
-                }
-                context.sessionResetTask = hostTask
-            end
-        else
-            if not hidden and not context.modelArmingReload and menuWorkNeeded(context, fullscreen) then
-                hostTask = context.menuTask
-                if not hostTask then
-                    hostTask = {
-                        name = "menu",
-                        owner = "menu",
-                        host = context,
-                        onError = hostError,
-                        cost = scheduler.budget.slots,
-                        step = menuStep,
-                        ready = menuReady,
-                    }
-                    context.menuTask = hostTask
-                end
-            end
-            if not hostTask and (context.inputPending or context.editorPress) then
-                local task = context.inputTask
-                if not task then
-                    task = {
-                        name = "input",
-                        owner = "input",
-                        host = context,
-                        onError = hostError,
-                        step = inputStep,
-                        ready = inputReady,
-                    }
-                    context.inputTask = task
-                end
-                task.settingsInput = context.modelSettingsUi ~= nil
-                if inputReady(task, nil, hidden) then
-                    hostTask = task
-                end
-            end
-            if not hostTask and context.modelSettingsRequest then
-                local task = context.modelSettingsOpenTask
-                if not task then
-                    task = {
-                        name = "model settings open",
-                        owner = "model settings open",
-                        host = context,
-                        onError = hostError,
-                        cost = scheduler.budget.slots,
-                        step = modelSettingsOpenStep,
-                        ready = modelSettingsOpenReady,
-                    }
-                    context.modelSettingsOpenTask = task
-                end
-                if modelSettingsOpenReady(task, nil, hidden) then
-                    hostTask = task
-                elseif not hidden and (not fullscreen or context.modelSettingsUi) then
-                    context.modelSettingsRequest = nil
-                elseif context.editorUi and context.editorUi.saving then
-                    context.uiRequest = "editor"
-                end
-            end
-            if not hostTask and context.editorTransitionRequest then
-                local task = context.editorTransitionTask
-                if not task then
-                    task = {
-                        name = "editor transition",
-                        owner = "editor transition",
-                        host = context,
-                        onError = hostError,
-                        cost = scheduler.budget.slots,
-                        step = editorTransitionStep,
-                        ready = editorTransitionReady,
-                    }
-                    context.editorTransitionTask = task
-                end
-                if editorTransitionReady(task, nil, hidden) then
-                    hostTask = task
-                elseif not hidden then
-                    context.editorTransitionRequest = nil
-                end
-            end
-            if not hostTask and context.logOpenRequest then
-                local request = context.logOpenRequest
-                local info = model and model.getInfo and model.getInfo()
-                if
-                    request.page ~= context.page
-                    or request.modelFilename ~= (info and info.filename)
-                    or context.reloadState
-                    or context.stage
-                    or context.modelSettingsUi
-                    or context.editorUi
-                    or not hidden and not fullscreen
-                then
-                    context.logOpenRequest = nil
-                elseif not hidden then
-                    hostTask = context.logOpenTask
-                    if not hostTask then
-                        hostTask = {
-                            name = "log open",
-                            owner = "log open",
-                            host = context,
-                            onError = hostError,
-                            cost = scheduler.budget.slots,
-                            step = logOpenStep,
-                        }
-                        context.logOpenTask = hostTask
-                    end
-                end
-            end
-            if not hostTask and context.locationRequest then
-                local request = context.locationRequest
-                local info = model and model.getInfo and model.getInfo()
-                local stale = request.kind == "close" and context.locationDetails ~= request.state
-                    or request.kind == "open"
-                        and (request.page ~= context.page or request.modelFilename ~= (info and info.filename) or context.reloadState or context.stage or context.modelSettingsUi or context.editorUi or context.logViewer or not hidden and not fullscreen)
-                if stale then
-                    context.locationRequest = nil
-                elseif not hidden then
-                    hostTask = context.locationTask
-                    if not hostTask then
-                        hostTask = {
-                            name = "location details",
-                            owner = "location details",
-                            host = context,
-                            onError = hostError,
-                            step = locationStep,
-                            ready = locationReady,
-                        }
-                        context.locationTask = hostTask
-                    end
-                end
-            end
-            local kind = context.lifecycleRequest
-            if not hostTask and kind then
-                local tasks = context.lifecycleTasks
-                if not tasks then
-                    tasks = {}
-                    context.lifecycleTasks = tasks
-                end
-                local task = tasks[kind]
-                if not task then
-                    task = {
-                        name = kind,
-                        owner = kind,
-                        kind = kind,
-                        host = context,
-                        onError = hostError,
-                        step = lifecycleStep,
-                        ready = lifecycleReady,
-                    }
-                    tasks[kind] = task
-                end
-                if lifecycleReady(task, nil, hidden) then
-                    hostTask = task
-                else
-                    context.lifecycleRequest = nil
-                end
-            end
-            if not hostTask and context.uiRequest then
-                local kind = context.uiRequest
-                local tasks = context.uiTasks
-                if not tasks then
-                    tasks = {}
-                    context.uiTasks = tasks
-                end
-                local ui = context[uiField(kind)]
-                local task = tasks[kind]
-                if ui and (not task or task.ui ~= ui) then
-                    task = {
-                        name = kind,
-                        owner = kind,
-                        kind = kind,
-                        ui = ui,
-                        host = context,
-                        onError = hostError,
-                        step = uiStep,
-                        ready = uiReady,
-                    }
-                    tasks[kind] = task
-                elseif task and task.ui ~= ui then
-                    task.ui = nil
-                end
-                if ui and uiReady(task, nil, hidden) then
-                    hostTask = task
-                else
-                    context.uiRequest = nil
-                end
-            end
-            hostTask = hostTask or context.hostTask
-            if not hostTask then
-                hostTask = {
-                    name = "host",
-                    owner = "host",
-                    host = context,
-                    onError = hostError,
-                    cost = scheduler.budget.slots,
-                    step = advanceHost,
-                }
-                context.hostTask = hostTask
-            end
-        end
+    context.scheduler.clear()
+    if flightTask then
+        context.scheduler.add(flightTask)
     end
-    runTasks(context, hidden, flightTask, hostTask)
+    enrolHost(context, hidden)
+    runTasks(context, hidden)
     if context.uiTasks then
         for kind, task in pairs(context.uiTasks) do
             local ui = context[uiField(kind)]

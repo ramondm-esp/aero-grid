@@ -55,10 +55,12 @@ assert(enrolled.flight and dispatched == 0 and flights == 0, "idle service/panel
 assert(context.serviceRuntime.updates == updates)
 local services = 0
 for _, instance in ipairs(context.serviceRuntime.order) do
-    assert(enrolled[instance.id], "steady-state checks must enroll each live service")
-    services = services + 1
+    if instance.count ~= 0 then
+        assert(enrolled[instance.id], "steady-state checks must enroll each subscribed service")
+        services = services + 1
+    end
 end
-assert(services > 0, "steady-state checks need live services")
+assert(services > 0, "steady-state checks need subscribed services")
 local panelTasks = 0
 for name in pairs(enrolled) do
     if string.find(name, ": refresh", 1, true) or string.find(name, ": background", 1, true) then

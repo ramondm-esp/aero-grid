@@ -155,7 +155,7 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
         end
         return document, info
     end
-    local function save(self, filename, baseRevision, flight, armedCondition, sessionReset)
+    local function prepare(self, filename, baseRevision, flight, armedCondition, sessionReset)
         local matches, identityError = identity(filename)
         if not matches then
             return false, identityError
@@ -193,6 +193,18 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
         if not checked then
             return false, checkError
         end
+        return true,
+            {
+                filename = filename,
+                baseRevision = baseRevision,
+                serialized = serialized,
+                document = checked,
+                recovered = info.recovered,
+            }
+    end
+    -- The write guard rechecks identity and the live revision, so a commit may follow its prepare in a later callback.
+    local function commit(self, prepared)
+        local filename, baseRevision = prepared.filename, prepared.baseRevision
         local function guard(afterRotation)
             local current, currentError = identity(filename)
             if not current then
@@ -213,23 +225,43 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
             end
             return true
         end
-        local saved, saveError =
-            writer.write(assert(storeModule.path(widgetPath, filename)), serialized, operations, guard, info.recovered)
+        local saved, saveError = writer.write(
+            assert(storeModule.path(widgetPath, filename)),
+            prepared.serialized,
+            operations,
+            guard,
+            prepared.recovered
+        )
         if not saved then
             return false, saveError
         end
-        matches, identityError = identity(filename)
+        local matches, identityError = identity(filename)
         if not matches then
             return false, identityError
         end
-        return true, copy(checked)
+        return true, copy(prepared.document)
     end
-    function instance:save(filename, baseRevision, flight, armedCondition, sessionReset)
-        local ok, saved, result = pcall(save, self, filename, baseRevision, flight, armedCondition, sessionReset)
+    local function protected(step, ...)
+        local ok, saved, result = pcall(step, ...)
         if not ok then
             return false, "Cannot save model settings: " .. tostring(saved)
         end
         return saved, result
+    end
+    --- Validates and serializes a save; returns `true, prepared` or `false, message`.
+    function instance:prepare(filename, baseRevision, flight, armedCondition, sessionReset)
+        return protected(prepare, self, filename, baseRevision, flight, armedCondition, sessionReset)
+    end
+    --- Writes a prepared save; returns `true, document` or `false, message`.
+    function instance:commit(prepared)
+        return protected(commit, self, prepared)
+    end
+    function instance:save(filename, baseRevision, flight, armedCondition, sessionReset)
+        local prepared, result = self:prepare(filename, baseRevision, flight, armedCondition, sessionReset)
+        if not prepared then
+            return false, result
+        end
+        return self:commit(result)
     end
     return instance
 end
