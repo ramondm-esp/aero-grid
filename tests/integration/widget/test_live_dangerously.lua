@@ -8,6 +8,7 @@ fixture.pump(context, 12)
 local definition = fixture.module("main.lua")
 local broker = assert(context.flightFactory.broker)
 assert(broker.documentLoaded and broker.document)
+context.liveDangerouslyFailed = nil
 
 local function enable(value)
     broker.document.flight = context.flightConfig.resolve({ liveDangerously = value })

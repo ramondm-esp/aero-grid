@@ -1248,10 +1248,16 @@ end
 local EXTENDED_SEGMENTS = 4
 
 local function liveDangerously(context)
+    if context.liveDangerouslyFailed then
+        return false
+    end
     local owner = context.flightFactory and context.flightFactory.broker
-    local document = owner and owner.documentLoaded and owner.document
-    local flight = document and document.flight
-    return type(flight) == "table" and flight.liveDangerously == true and not context.liveDangerouslyFailed
+    -- Until the model's own setting is known, loading runs with the extended budget.
+    if not owner or not owner.documentLoaded then
+        return true
+    end
+    local flight = owner.document and owner.document.flight
+    return type(flight) == "table" and flight.liveDangerously == true
 end
 
 --- Run flight, host work, services and panels in one fair queue.

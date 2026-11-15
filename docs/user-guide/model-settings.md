@@ -140,6 +140,8 @@ session-dependent content is redrawn.
 **Live dangerously** is an experimental, per-model setting that is off by default.
 EdgeTX stops a widget callback after 20,000 Lua instructions. With the setting
 on, AeroGrid can use up to five times its usual work budget in a busy callback.
+Until a model's settings have loaded, AeroGrid uses the extended budget for
+every model so the dashboard loads faster.
 This relies on firmware behavior that EdgeTX does not document, so turn it off if
 the dashboard misbehaves.
 
