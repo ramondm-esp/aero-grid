@@ -16,6 +16,33 @@ At the start of this effort only panel refreshes and service updates were slotte
 settings, the log viewer, the editor and input handling run outside it, and
 nothing in the queue can run twice in one callback.
 
+## Current contract
+
+This section is normative. The rest of this document records how the design
+was reached; where it differs, this section wins.
+
+- A task is `{ name, step, cost?, minCost?, due?, ready?, failed?, onError? }`.
+  `ready(task, now, context)` is the only place a task updates its `cost` or
+  `minCost`; the scheduler reads them after `ready` on every turn.
+- `step(task, now, granted, context)` returns `used, again`. A fixed-cost step
+  that returns no `used` used its whole grant; a variable-cost step must report
+  it. No `again` means no further turn. The scheduler is the only validator:
+  an error, `used` that is not a whole number within the grant, or a
+  non-boolean `again` fails the task, charges the grant and calls the host's
+  `fail(task, message)`. The host passes that on to `task.onError`.
+- `run(now, slots, context, { segments, cross })` runs one callback: one
+  segment of `slots`, then up to `segments` further segments inside
+  `cross(fn)`, each continuing only pending or deferred work. It returns
+  `used, requested, denied, failure` and leaves the last segment's unused
+  slots in `remaining`. A turn never exceeds eight slots.
+- Bookkeeping stays inside the scheduler: `state(task)` reads a task's
+  `spent`, `pending`, `refused`, `denied`, `spun` and `ran`; `stats()` returns
+  cumulative `callbacks`, `used`, `available`, `requested` and `denied`.
+  Readers take differences and never write either.
+- Panels see the budget only through the read-only `budget` description
+  (`capacity`, `slots`, `instructionsPerSlot`). Crossing EdgeTX's
+  per-callback instruction limit is `lib/native_budget.lua`'s job.
+
 ## Decision: a new scheduler module, keeping the slot semantics
 
 Extending `dispatchDue` in place is rejected. It hard-codes two kinds of work
@@ -128,7 +155,7 @@ cursor = deferred or cursor
 - The scheduler reports `used, requested` (eligible tasks with non-zero cost)
   and `denied` (refused for lack of slots, once per task per callback) from
   each run, and calls `charge(task, spent)` for every non-zero charge. Per-task
-  totals are `task.spent`.
+  totals are `scheduler.state(task).spent`.
 
 ## Input
 

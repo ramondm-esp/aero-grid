@@ -1501,7 +1501,6 @@ local function pumpFlight(task, now, granted)
     -- still needs its own slice, with a fair turn for each widget's UI work.
     local reserved = false
     if owner.smartRuntime then
-        context.flightPolled = true
         owner.nextPumpAt = now + 10
         reserved = not not (
             context.stage
@@ -2619,7 +2618,6 @@ local function runCallback(context, hidden, widgetEvent, touchState)
     context.widgetEvent, context.touchState = input and input.event, input and input.touch
     context.inputTime = input and input.now
     context.inputPending = not not input
-    context.flightPolled = nil
     if
         not context.optionsRequest
         and not context.lifecycleRequest

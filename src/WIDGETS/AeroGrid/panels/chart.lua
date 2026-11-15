@@ -1753,8 +1753,6 @@ end
 local PAINT_COST = 120
 -- Estimated work per extra slot; per-call overhead brings the measured cost to about one slot.
 local BACKGROUND_ALLOWANCE = 1100
--- Estimated cost of appending one queued sample, without and with painting.
-local APPEND_COST, HIDDEN_APPEND_COST = 150, 250
 -- Preparation still advances while a backlog is appended, so it always finishes.
 local MIN_PREPARATION = 300
 

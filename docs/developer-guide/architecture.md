@@ -329,7 +329,7 @@ Use `panels/flight-mode.lua` as a small working example and
 | `id`, `apiVersion`, `supportedSpans` | Identify the module, check compatibility, and advertise valid grid sizes. |
 | `settings` | Typed fields, defaults, bounds, and choices used by validation and the editor. |
 | `refreshInterval` | Desired foreground interval in 10 ms ticks; work still shares the host budget. |
-| `refreshCost` | Number of nominal slots, 0–scheduler capacity (default 1), or `"variable"` to receive the remaining allowance. |
+| `refreshCost` | Number of nominal slots, 0–8 (default 1), or `"variable"` to receive the remaining allowance. |
 | `create(parent, rect, settings, services)` | Build LVGL objects, subscribe to data, and return private instance state. |
 | `refresh(context, creating, slots)` | Optional callback to update existing objects from snapshots; scheduled calls pass `false` for `creating`. May return a whole-number interval of 1–6000 ticks; nil preserves the current interval. A second result of `true` reserves subsequent turns among panels of the same type until the update completes; other panel types and services continue running. Variable tasks return consumed slots (0–grant) as a third result. |
 | `update(context, rect, settings, detailsOnly, placement)` | Optional geometry/configuration update. Host reflows and editor resizes pass the current grid placement as the fifth argument, leaving the internal `detailsOnly` argument unset. |
