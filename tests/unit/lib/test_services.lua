@@ -5,17 +5,6 @@ local root = (... and ... ~= "" and ...) or "."
 local assertions = assert(loadfile(root .. "/tests/support/assertions.lua"))()
 local services = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/services.lua"))()
 
-local function testSnapshotIsReadOnly()
-    local snapshot = services.snapshot({ value = 42 })
-    assertions.assertEqual(snapshot.value, 42)
-
-    local ok, err = pcall(function()
-        snapshot.newValue = 1
-    end)
-    assert(ok == false, "snapshot should reject writes")
-    assert(string.match(err or "", "read-only") or true)
-end
-
 local function testEnvironmentAndRuntime()
     local env = services.environment({
         getValue = function()
@@ -81,7 +70,6 @@ local function testRoundRobin()
 end
 
 local function run()
-    testSnapshotIsReadOnly()
     testEnvironmentAndRuntime()
     testRoundRobin()
     testSubscriptionOwnership()

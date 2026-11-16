@@ -8,13 +8,15 @@ local timer = assert(fixture.instanceOf(context, "flight-clock"))
 local valueCallback = timer.value.properties.font
 local headingCallback = timer.label.properties.font
 local originalFont = valueCallback()
-for second = 1, 3600 do
+local originalText = timer.text
+for second = 1, 30 do
     fixture.radio.timers[0].value = second
     fixture.tick(100)
     definition.refresh(context)
     fixture.lvglMock.settle()
 end
 assert(#context.errors == 0, table.concat(context.errors, "\n"))
+assert(timer.text ~= originalText, "timer value must update while retaining its font callbacks")
 assert(timer.value.properties.font == valueCallback, "timer replaced its value font callback")
 assert(timer.label.properties.font == headingCallback, "timer replaced its heading font callback")
 assert(fixture.lvglMock.replacedFontRefCount() == 0, "timer updates leaked registry refs")

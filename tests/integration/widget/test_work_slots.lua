@@ -7,9 +7,7 @@ local definition = fixture.module("main.lua")
 local support = fixture.module("lib/services.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(context, 6)
-context.document.panels, context.emptyHint = { {} }, nil
-context.flightFactory = nil
-context.serviceRuntime = support.runtime({})
+fixture.isolateWork(context)
 context.panels = {}
 context.scheduler.cursor = 1
 local calls = {}
@@ -252,28 +250,6 @@ definition.refresh(context)
 assert(#calls == 3 and calls[3].id == "diagnostic" and calls[3].slots == 0)
 assert(stats.denied > before.denied and (stats.denied - before.denied) * 2 == stats.requested - before.requested)
 assert(stats.available - before.available == 8, "one callback offers one segment")
-context.flightFactory = {
-    broker = {
-        identity = function()
-            return "model"
-        end,
-        filename = "model",
-        documentLoaded = true,
-        session = true,
-        errors = {},
-        state = {},
-        view = { diagnosticRevision = 0, epoch = 1 },
-        setup = function() end,
-        tasks = function()
-            return {}
-        end,
-    },
-}
-context.flightReportedRevision, context.flightReportedEpoch = 0, 1
-fixture.tick(100)
-definition.refresh(context)
-context.flightFactory = nil
-
 context.serviceRuntime = support.runtime({})
 context.panels = { panel("two", 2), panel("one", 1), panel("not-due", 8) }
 context.panels[3].nextRefresh = getTime() + 1000

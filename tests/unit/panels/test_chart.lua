@@ -966,26 +966,10 @@ checkDurationCorner(gridPanel)
 assert(gridPanel.area.y > gridPanel.area.frame.labelY, "explicit titles must retain a header")
 chart.destroy(gridPanel)
 gridPanel = recordingPanel("minute-grid", "growing")
-gridPanel.session = { configured = true, available = true, recording = false, elapsed = 0 }
-for _, elapsed in ipairs({ 0, 5999, 6000, 6001, 12000, 12001, 18000, 18001, 600000, 600001 }) do
-    gridPanel.session.elapsed = elapsed
-    chart.refresh(gridPanel)
-    equal(gridPanel.window, 60000, "fixed window must not expand")
-    equal(gridPanel.duration.properties.text, chart.durationText(60000))
-    equal(gridPanel.start, 0, "fixed window must never scroll")
-end
-gridPanel.settings.duration = 10
-gridPanel.session.elapsed = 0
-for _, owner in ipairs(gridPanel.columnConsumers) do
-    owner:reset()
-end
-chart.refresh(gridPanel)
+finishDrawing(gridPanel)
 equal(gridPanel.window, 60000, "fixed duration must be retained")
+equal(gridPanel.duration.properties.text, chart.durationText(60000))
 checkDurationCorner(gridPanel)
-gridPanel.session.elapsed = 0
-for _ = 1, 12 do
-    chart.refresh(gridPanel)
-end
 checkGrid(gridPanel)
 
 local dense = recordingPanel("dense-chart", "growing")

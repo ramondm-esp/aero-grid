@@ -12,18 +12,6 @@ local primitives = loadModule("lib/primitives.lua")
 local yaml = loadModule("lib/yaml.lua")
 assert(theme.setCatalog(assert(loadfile(root .. "/tests/support/theme_catalog.lua"))()(root, yaml)))
 
-local function definedIn(callback, filename)
-    local source = debug.getinfo(callback, "S").source
-    assert(string.sub(source, -#filename) == filename, source .. " should end with " .. filename)
-end
-
-definedIn(theme.build, "theme.lua")
-definedIn(theme.measureText, "typography.lua")
-definedIn(theme.panel, "panel_layout.lua")
-definedIn(primitives.value, "primitives.lua")
-definedIn(primitives.centreReading, "reading.lua")
-definedIn(primitives.changed, "reading.lua")
-
 -- Fresh composition must not share mutable vocabulary or font state.
 local otherTheme = loadModule("lib/theme.lua")
 theme.BADGES.stale = "OLD"

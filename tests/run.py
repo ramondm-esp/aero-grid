@@ -42,10 +42,16 @@ def run_test(path: Path) -> None:
         raise
 
 
+def discover_tests(root: Path = ROOT) -> list[Path]:
+    tests = root / "tests"
+    return [
+        path for path in sorted(tests.rglob("test_*.lua"))
+        if "support" not in path.relative_to(tests).parts
+    ]
+
+
 def main() -> None:
-    for test_path in sorted((ROOT / "tests").rglob("test_*.lua")):
-        if "support" in test_path.relative_to(ROOT).parts:
-            continue
+    for test_path in discover_tests():
         run_test(test_path)
 
 

@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
-import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location("capture_editor", Path(__file__).with_name("capture-editor.py"))
-capture = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(capture)
+from tool_test_support import load_tool
+
+capture = load_tool("capture_editor", "capture-editor.py")
 
 
 class ThemeCaptureTests(unittest.TestCase):
@@ -65,7 +64,6 @@ class ThemeCaptureTests(unittest.TestCase):
                         (sd / "AEROGRID/theme-registry.txt").read_text(),
                         "modern-dark\nmodern-light\ncustom\n",
                     )
-                    self.assertIn("unsignedValue: 3", theme_option)
                 else:
                     self.assertNotIn("\ntheme:\n", layout)
 

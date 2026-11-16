@@ -23,11 +23,13 @@ local function testSnapshotsAreImmutable()
     assertEqual(view.value, 1)
     assertEqual(view.name, "RxBt")
 
-    local ok, err = pcall(function()
-        view.value = 2
-    end)
-    assertEqual(ok, false, "a snapshot accepted a write")
-    assert(string.match(tostring(err), "read%-only"), tostring(err))
+    for _, key in ipairs({ "value", "newValue" }) do
+        local ok, err = pcall(function()
+            view[key] = 2
+        end)
+        assertEqual(ok, false, "a snapshot accepted a write to " .. key)
+        assert(string.match(tostring(err), "read%-only"), tostring(err))
+    end
 
     -- The mutable state stays reachable to the service and invisible to callers.
     state.value = 7
@@ -345,6 +347,7 @@ local function testModelService()
 
     local service = modelService.new(env, services)
     local identity = service:identity()
+    assertEqual(identity.name, "", "model identity must be empty until its first poll")
     local flightMode = service:flightMode()
     local voltage = service:txVoltage()
     local countdown = service:timer(0)

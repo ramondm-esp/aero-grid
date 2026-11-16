@@ -17,17 +17,17 @@ WIDGET_SOURCE := src/WIDGETS/AeroGrid
 WIDGET_DESTINATION := $(SDCARD_DIR)/WIDGETS/AeroGrid
 LUA_FILES := $(shell find src/WIDGETS tests -type f -name '*.lua' | sort)
 LUA_COMPILER ?= $(shell command -v edgetx-luac 2>/dev/null || command -v luac5.3 2>/dev/null || command -v luac 2>/dev/null)
-LUACHECK ?= $(shell command -v luacheck 2>/dev/null)
 LUA_LS ?= $(shell command -v lua-language-server 2>/dev/null)
 STYLUA ?= $(shell command -v stylua 2>/dev/null)
 
-.PHONY: help setup test test-installer check build clean lint format docs docs-serve capture-setup video-setup release-package
+.PHONY: help setup test test-artwork test-installer check build clean lint format docs docs-serve capture-setup video-setup release-package
 
 help:
 	@printf '%s\n' \
 	  'make help    List the supported Make targets' \
 	  'make setup   Install development dependencies into build/venv' \
 	  'make test    Run pure Lua and mocked EdgeTX behavior tests' \
+	  'make test-artwork Test native menu icon and tile artwork' \
 	  'make test-installer Test browser installer and release mirroring' \
 	  'make check   Run behavior tests and syntax validation' \
 	  'make lint    Lint Lua files with lua-language-server' \
@@ -79,9 +79,12 @@ $(VENV_STAMP): requirements-dev.txt
 	@"$(VENV_DIR)/bin/python" -m pip install -r requirements-dev.txt
 	@touch "$@"
 
-test: $(VENV_STAMP)
+test: $(VENV_STAMP) test-artwork
 	@"$(VENV_DIR)/bin/python" -m unittest discover -s tests -p 'test_*.py'
 	@"$(VENV_DIR)/bin/python" tests/run.py
+
+test-artwork:
+	@"$(PYTHON)" -m unittest discover -s tools -p 'test_menu_*.py'
 
 test-installer:
 	@"$(PYTHON)" -m unittest discover -s tools -p 'test_installer_*.py'
@@ -93,7 +96,7 @@ check: test
 	  exit 1; \
 	}
 	@for file in $(LUA_FILES); do \
-	  "$(LUA_COMPILER)" -p "$$file"; \
+	  "$(LUA_COMPILER)" -p "$$file" || exit $$?; \
 	done
 
 lint:

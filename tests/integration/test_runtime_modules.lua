@@ -19,7 +19,13 @@ for _, relative in ipairs({
     "lib/panel_layout.lua",
     "lib/reading.lua",
 }) do
-    for _, failure in ipairs({ "missing", "incompatible", "no-constructor", "constructor-error", "no-operations" }) do
+    local installer = relative == "lib/typography.lua"
+        or relative == "lib/panel_layout.lua"
+        or relative == "lib/reading.lua"
+    local failures = installer and { "missing", "incompatible", "no-installer", "constructor-error" }
+        or { "missing", "incompatible", "no-constructor", "constructor-error", "no-operations" }
+    for _, failure in ipairs(failures) do
+        logs = {}
         loadScript = function(filename)
             if string.sub(filename, -#relative) == relative then
                 if failure == "missing" then
@@ -36,8 +42,6 @@ for _, relative in ipairs({
                         module.new = function()
                             return {}
                         end
-                        -- Visual dependency installers are checked by module execution.
-                        module.install = nil
                     end
                     return module
                 end
@@ -80,6 +84,7 @@ definition = fixture.module("main.lua")
 
 for _, relative in ipairs({ "lib/chart_columns.lua", "lib/chart_columns_renderer.lua" }) do
     for _, failure in ipairs({ "missing", "incompatible" }) do
+        logs = {}
         loadScript = function(filename)
             if string.sub(filename, -#relative) == relative then
                 if failure == "missing" then

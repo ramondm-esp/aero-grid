@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
 import copy
-import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,13 +7,12 @@ import unittest
 import yaml
 from capture_recipes import (PANELS, RECIPE_DIR, configure_model, config_yaml,
                             fixture_inputs, load_recipe, readiness)
+from tool_test_support import load_tool
 
 
 class CaptureRecipeTests(unittest.TestCase):
     def test_modern_light_capture_uses_native_choice_two(self):
-        spec = importlib.util.spec_from_file_location("capture_panels", Path(__file__).with_name("capture-panels.py"))
-        capture = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(capture)
+        capture = load_tool("capture_panels", "capture-panels.py")
         recipe = load_recipe(RECIPE_DIR / "metric.yaml")
         recipe["theme"] = "modern-light"
         recipe = self.load(recipe)
@@ -34,10 +32,7 @@ class CaptureRecipeTests(unittest.TestCase):
             self.load(recipe)
 
     def test_prepared_captures_use_panel_contract(self):
-        path = Path(__file__).with_name("capture-panels.py")
-        spec = importlib.util.spec_from_file_location("capture_panels", path)
-        capture = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(capture)
+        capture = load_tool("capture_panels", "capture-panels.py")
         for recipe_path in RECIPE_DIR.glob("*.yaml"):
             with self.subTest(panel=recipe_path.stem), tempfile.TemporaryDirectory() as directory:
                 recipe = load_recipe(recipe_path)
@@ -71,10 +66,7 @@ class CaptureRecipeTests(unittest.TestCase):
                 self.assertEqual(names[position - 1], "capture-panels")
 
     def test_editor_preparation_uses_isolated_default_screen(self):
-        path = Path(__file__).with_name("capture-editor.py")
-        spec = importlib.util.spec_from_file_location("capture_editor", path)
-        capture = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(capture)
+        capture = load_tool("capture_editor", "capture-editor.py")
         for scene in capture.SCENES + tuple(capture.SETUP_SCENES) + ("model-settings",):
             with self.subTest(scene=scene), tempfile.TemporaryDirectory() as directory:
                 sd = Path(directory) / "sdcard"
@@ -95,8 +87,8 @@ class CaptureRecipeTests(unittest.TestCase):
                     self.assertEqual(document["armed"], "SFv", "drawer examples must use model-wide arming")
                 if scene == "model-settings":
                     self.assertIn(scene, capture.STITCHED_SCENES)
-                    source = (sd / "WIDGETS/AeroGrid/lib/model_settings_ui.lua").read_text()
-                    self.assertIn("state.captureNodes = {}", source)
+                    source = (sd / "WIDGETS/AeroGrid/lib/settings_ui.lua").read_text()
+                    self.assertIn("view.captureNodes = {}", source)
                     self.assertNotIn("CAPTURE_SHIFT", source)
                 for number in range(2, 7):
                     self.assertEqual(
@@ -105,10 +97,7 @@ class CaptureRecipeTests(unittest.TestCase):
                     )
 
     def test_chart_drawers_use_chart_settings_and_native_source(self):
-        path = Path(__file__).with_name("capture-editor.py")
-        spec = importlib.util.spec_from_file_location("capture_editor", path)
-        capture = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(capture)
+        capture = load_tool("capture_editor", "capture-editor.py")
         for scene in ("chart-settings", "chart-metric-entry"):
             with self.subTest(scene=scene), tempfile.TemporaryDirectory() as directory:
                 self.assertIn(scene, capture.SCENES)
@@ -134,10 +123,7 @@ class CaptureRecipeTests(unittest.TestCase):
                                  (capture.ROOT / "src/WIDGETS/AeroGrid/panels/chart.lua").read_bytes())
 
     def test_drawer_pages_stitch_into_one_dialog(self):
-        path = Path(__file__).with_name("capture-editor.py")
-        spec = importlib.util.spec_from_file_location("capture_editor", path)
-        capture = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(capture)
+        capture = load_tool("capture_editor", "capture-editor.py")
         dark, title, light = b"\x08\x10\x10", b"\x10\x5d\x9c", b"\xe6\xee\xf6"
         left, right, top, body, bottom = 48, 432, 29, 58, 243
         content = 400

@@ -8,9 +8,7 @@ fixture.lvglMock.setFullScreen(true)
 local definition = fixture.module("main.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(context, 20)
-context.flightFactory = nil
-context.document.panels, context.emptyHint = { {} }, nil
-context.serviceRuntime = context.servicesModule.runtime({})
+fixture.isolateWork(context)
 
 local steps, inputs = 0, 0
 context.modelSettingsUi = { build = 3 }
@@ -89,11 +87,12 @@ context.modelSettingsUiModule = {
 definition.refresh(context, 992)
 assert(not context.uiRequest, "ordinary modal input must not schedule a no-op UI turn")
 assert(serviceUpdates > 0, "ordinary modal input must leave slots for subscribed services")
+local updatesBeforeIdle = serviceUpdates
 for _ = 1, 5 do
     fixture.tick(10)
     definition.refresh(context)
 end
-assert(serviceUpdates > 0, "an idle foreground settings modal must not starve subscribed services")
+assert(serviceUpdates > updatesBeforeIdle, "an idle foreground settings modal must not starve subscribed services")
 assert(idleUiAdvances == 0, "an idle modal must not reserve a host turn")
 context.modelSettingsUi, context.modelSettingsUiModule = nil, settingsUiModule
 

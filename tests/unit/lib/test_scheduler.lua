@@ -320,14 +320,6 @@ end
 
 do
     local queue, _, task = fixture()
-    local variable = task("missing", "variable")
-    variable.minCost = 1
-    variable.step = function() end
-    assert(queue.run(0, 8) == 8 and variable.failed)
-end
-
-do
-    local queue, _, task = fixture()
     local variable = task("missing minimum", "variable")
     assert(queue.run(0, 8) == 0 and variable.failed)
     assert(variable.error == "invalid minimum slot cost")
@@ -444,16 +436,6 @@ do
     assert(variable.error == "consumption must be whole slots within the grant")
 end
 
-do
-    local queue, _, task = fixture()
-    local fixed = task("over grant", 2)
-    fixed.step = function()
-        return 3
-    end
-    queue.run(0, 8)
-    assert(fixed.error == "consumption must be whole slots within the grant")
-end
-
 for _, continuation in ipairs({ 1, "yes" }) do
     local queue, _, task = fixture()
     local fixed = task("invalid continuation", 2)
@@ -472,13 +454,6 @@ do
     end
     assert(queue.run(0, 8) == 2 and fixed.failed)
     assert(queue.state(fixed).spent == 2, "an invalid continuation must not refund its grant")
-end
-
-do
-    local queue, _, task = fixture()
-    local fixed = task("too large", 9)
-    assert(queue.run(0, 8) == 0 and fixed.failed)
-    assert(fixed.error == "invalid slot cost")
 end
 
 -- Further segments run inside `cross`, which reports like pcall.

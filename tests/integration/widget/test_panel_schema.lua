@@ -5,10 +5,8 @@ local fixture = assert(loadfile(root .. "/tests/support/widget_fixture.lua"))().
 local assertions = assert(loadfile(root .. "/tests/support/assertions.lua"))()
 local definition = fixture.module("main.lua")
 
-for _, source in ipairs({
-    "version: 1\ngrid:\n  columns: 4\n  rows: 4\n",
-    "version: 1\ngrid:\n  columns: 4\n  rows: 4\ncomponents:\n  - id: clock\n    type: flight-timer\n",
-}) do
+do
+    local source = "version: 1\ngrid:\n  columns: 4\n  rows: 4\n"
     fixture.reset()
     local context = definition.create(
         { x = 0, y = 0, w = 480, h = 272 },

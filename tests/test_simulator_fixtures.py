@@ -42,6 +42,31 @@ class SimulatorFixtureTests(unittest.TestCase):
                     ROOT / "src/WIDGETS/AeroGrid/layouts",
                     ROOT / "tests/fixtures/layouts/development",
                 )))
+        layouts = {
+            path.stem
+            for directory in (
+                ROOT / "src/WIDGETS/AeroGrid/layouts",
+                ROOT / "tests/fixtures/layouts/development",
+            )
+            for path in directory.glob("*.yaml")
+        }
+        self.assertLessEqual(layouts, set(REGISTRY))
+
+    def test_panel_reviews_cover_each_user_facing_type(self):
+        excluded = {"host-diagnostics", "service-probe", "theme-showcase"}
+        panels = ROOT / "src/WIDGETS/AeroGrid/panels"
+        for panel in panels.glob("*.lua"):
+            if panel.stem in excluded:
+                continue
+            with self.subTest(panel=panel.stem):
+                name = f"review-{panel.stem}"
+                self.assertIn(name, REGISTRY)
+                path = ROOT / "tests/fixtures/layouts/development" / f"{name}.yaml"
+                placements = re.findall(r"(?m)^    type: ([\w-]+)$", path.read_text())
+                self.assertTrue(placements)
+                self.assertEqual(set(placements), {panel.stem})
+                if panel.stem == "flight-counter":
+                    self.assertEqual(len(placements), 1)
 
     def test_exact_category_screen_order_and_complete_coverage(self):
         models = FIXTURE / "MODELS"
@@ -54,6 +79,8 @@ class SimulatorFixtureTests(unittest.TestCase):
                          [f"model{number}.yml" for number in range(1, 7)])
         for number, (name, expected) in enumerate(EXPECTED, 1):
             with self.subTest(model=name):
+                self.assertLessEqual(len(name), 15)
+                self.assertLessEqual(len(expected), 10)
                 model = (models / f"model{number}.yml").read_text()
                 self.assertIn(f'header:\n   name: "{name}"\n', model)
                 self.assertIn(f'  model{number}.yml:\n    name: "{name}"\n', labels)
@@ -72,6 +99,7 @@ class SimulatorFixtureTests(unittest.TestCase):
         self.assertCountEqual(seen, REGISTRY)
         radio = (FIXTURE / "RADIO/radio.yml").read_text()
         self.assertIn('currModelFilename: "model1.yml"', radio)
+        self.assertIn("manuallyEdited: 1", radio)
 
     def test_all_models_share_setup_and_telemetry(self):
         common = None
