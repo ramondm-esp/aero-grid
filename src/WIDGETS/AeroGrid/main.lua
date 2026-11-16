@@ -2862,6 +2862,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
     end
     pruneRequests(context, hidden, fullscreen)
     context.menuDue = not hidden
+        and not context.optionsRequest
         and not context.modelArmingReload
         and not context.sessionResetPending
         and menuWorkNeeded(context, fullscreen)
