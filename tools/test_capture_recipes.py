@@ -87,8 +87,8 @@ class CaptureRecipeTests(unittest.TestCase):
                     self.assertEqual(document["armed"], "SFv", "drawer examples must use model-wide arming")
                 if scene == "model-settings":
                     self.assertIn(scene, capture.STITCHED_SCENES)
-                    source = (sd / "WIDGETS/AeroGrid/lib/model_settings_ui.lua").read_text()
-                    self.assertIn("state.captureNodes = {}", source)
+                    source = (sd / "WIDGETS/AeroGrid/lib/settings_ui.lua").read_text()
+                    self.assertIn("view.captureNodes = {}", source)
                     self.assertNotIn("CAPTURE_SHIFT", source)
                 for number in range(2, 7):
                     self.assertEqual(

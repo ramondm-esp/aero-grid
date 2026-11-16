@@ -17,7 +17,14 @@ local entryById = fixture.entryById
 local pump = fixture.pump
 local definition = fixture.module("main.lua")
 local function createLoaded(zone, options, path)
-    return fixture.createLoaded(zone, options, path, definition)
+    local context = fixture.createLoaded(zone, options, path, definition)
+    assert(
+        fixture.pumpUntil(context, function()
+            return not context.theme or context.runtimeFailed or context.aerogridMenu
+        end),
+        "menu icon preparation never finished"
+    )
+    return context
 end
 assert(
     themeModule.setCatalog(
