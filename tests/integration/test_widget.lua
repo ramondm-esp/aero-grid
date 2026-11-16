@@ -192,11 +192,18 @@ local function reflowDone(context)
         and not context.reflowIndex
 end
 
---- Create a host and pump refresh until the staged loader finishes.
+--- Create a host and pump refresh until the dashboard and icon are built.
 --- EdgeTX budgets instructions per callback, so loading is spread over
 --- consecutive refreshes rather than completed inside create().
 local function createLoaded(zone, options, path)
-    return widgetHelpers.createLoaded(definition, zone, options or DEFAULT_OPTIONS, path)
+    local context = widgetHelpers.createLoaded(definition, zone, options or DEFAULT_OPTIONS, path)
+    local guard = 0
+    while context.theme and not context.runtimeFailed and not context.aerogridMenu do
+        definition.refresh(context)
+        guard = guard + 1
+        assert(guard < 100, "menu icon preparation never finished")
+    end
+    return context
 end
 
 --- Find a loaded panel entry by its layout id.
@@ -1947,13 +1954,18 @@ local function testReflowAndLifecycle()
     zone.w = 320
     zone.h = 240
 
-    -- Reflow is batched across callbacks, so drain it before asserting.
+    -- Drain panel reflow and hidden icon preparation before measuring steady-state refreshes.
     local passes = 0
     repeat
         definition.refresh(appContext)
         passes = passes + 1
         assert(passes < 100, "reflow never finished")
-    until appContext.width == zone.w and appContext.height == zone.h and not appContext.reflowIndex
+    until appContext.width == zone.w
+        and appContext.height == zone.h
+        and not appContext.reflowIndex
+        and appContext.aerogridMenu
+        and appContext.aeroMenuWidth == zone.w
+        and appContext.aeroMenuZoneHeight == zone.h
 
     assertEqual(appContext.root.properties.w, 320)
     assertEqual(appContext.root.properties.h, 240)

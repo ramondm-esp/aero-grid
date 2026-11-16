@@ -84,6 +84,13 @@ local panel = assert(fixture.instanceOf(context, "outputs"))
 local outputEntry = assert(fixture.entryById(context, "outputs"))
 equal(outputEntry.refreshTask.cost, 1, "output refresh uses one nominal scheduler slot per step")
 local originalRefresh = outputEntry.module.refresh
+for _ = 1, 100 do
+    if panel.phase == "idle" then
+        break
+    end
+    originalRefresh(panel)
+end
+assert(panel.phase == "idle", "start a complete output refresh cycle before measuring scheduler continuation")
 local refreshSteps = 0
 outputEntry.module.refresh = function(instance, ...)
     refreshSteps = refreshSteps + 1
