@@ -105,7 +105,7 @@ for _, span in ipairs({ { 1, 1 }, { 2, 1 }, { 2, 2 }, { 4, 2 } }) do
     equal(panel.text, "39")
     fixture.radio.values[305], fixture.radio.values[306] = 1024, 0
     backgroundUntil(context, function()
-        return panel.flight.phase == "active"
+        return panel.flight.phase == "active" and panel.value.properties.text == "40" and panel.stateName == "active"
     end)
     equal(model.getGlobalVariable(8, 0), 40)
     equal(panel.value.properties.text, "40")
@@ -130,7 +130,7 @@ for _, span in ipairs({ { 1, 1 }, { 2, 1 }, { 2, 2 }, { 4, 2 } }) do
     equal(recorded(), 0, "flight detection must not access CSV files")
     equal(panel.stateName, "active", "the pending end retains active styling")
     backgroundUntil(context, function()
-        return panel.flight.phase == "ground"
+        return panel.flight.phase == "ground" and panel.stateName == "normal"
     end)
     equal(recorded(), 0, "completed flights must not access CSV files")
     equal(panel.stateName, "normal")
@@ -228,7 +228,7 @@ backgroundUntil(context, function()
 end)
 values[12], values[49] = 4, 11
 backgroundUntil(context, function()
-    return panel.flight.phase == "active"
+    return panel.flight.phase == "active" and panel.value.properties.text == "40"
 end)
 equal(owner.view.reason, "smart-altitude")
 equal(panel.value.properties.text, "40")

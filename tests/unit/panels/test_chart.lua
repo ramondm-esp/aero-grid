@@ -659,6 +659,7 @@ local altitudeId = getFieldInfo("Alt").id
 local altitude = fixture.radio.values[altitudeId]
 fixture.radio.values[altitudeId] = 123456789012345678901234
 fixture.pump(context, 60)
+chart.render(single)
 chart.refresh(single)
 assert(
     single.themeBuilder.fontHeight(single.legendFont) < initialFontHeight,
