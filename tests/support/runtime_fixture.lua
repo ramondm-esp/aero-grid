@@ -44,6 +44,7 @@ local yaml = loadModule("lib/yaml.lua")
 local layout = loadModule("lib/layout.lua")
 local layoutStore = loadModule("lib/layout_store.lua")
 local panelHost = loadModule("lib/panel_host.lua")
+panelHost.SLOTS = loadModule("lib/scheduler.lua").SLOTS
 local theme = loadModule("lib/theme.lua")
 local themeDocument = assert(loadfile(root .. "/tests/support/theme_catalog.lua"))()(root, yaml)
 assert(theme.setCatalog(themeDocument))

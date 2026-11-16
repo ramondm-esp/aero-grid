@@ -128,9 +128,12 @@ function details.open(context, view, accent)
     label(math.floor((rect.w - hintWidth) / 2), rect.h - 24, hintWidth, hint, theme.color.textFaint, SMLSIZE)
 end
 
-function details.handle(context, event)
-    if event == _G.EVT_VIRTUAL_EXIT or event == _G.EVT_EXIT_BREAK or event == _G.EVT_TOUCH_TAP then
-        details.close(context)
+function details.handle(context, event, touch)
+    local tap
+    context.locationPress, tap = context.gesture.track(context.locationPress, event, touch)
+    if event == _G.EVT_VIRTUAL_EXIT or event == _G.EVT_EXIT_BREAK or tap then
+        context.locationPress = nil
+        context.locationRequest = { kind = "close", state = context.locationDetails }
     end
     return true
 end

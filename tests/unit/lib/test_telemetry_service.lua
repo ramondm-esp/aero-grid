@@ -3,6 +3,7 @@
 local root = (... and ... ~= "" and ...) or "."
 
 local assertions = assert(loadfile(root .. "/tests/support/assertions.lua"))()
+local scheduler = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/scheduler.lua"))()
 local services = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/services.lua"))()
 local telemetryService = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/telemetry_service.lua"))()
 
@@ -77,8 +78,9 @@ local function testHostPollingBudgetKeepsRoundRobinProgress()
     end
     service.pollCap = 4
     for step = 1, 6 do
-        service:update(step * 10)
+        local _, again = service:update(step * 10)
         assertions.assertEqual(service.cursor, step * 4 % 24 + 1)
+        assertions.assertEqual(again, step < 6, "only an unfinished round asks to continue")
     end
     for index = 1, 24 do
         assertions.assertEqual(reads[index], 1, "a reduced budget must still visit every source")
@@ -101,8 +103,99 @@ local function testHostPollingBudgetKeepsRoundRobinProgress()
     assertions.assertEqual(observed, 2, "one slot must bound polling and synchronous observers")
     assertions.assertEqual(service.cursor, 19, "slot grants preserve the polling cursor")
     consumed = service:update(100, 8)
-    assertions.assertEqual(consumed, 4, "a capped poll batch returns unused slots")
-    assertions.assertEqual(observed, 10)
+    assertions.assertEqual(consumed, 3, "the current round returns its unused slots")
+    assertions.assertEqual(observed, 8)
+end
+
+local function testContinuationPollsEachSourceOncePerRound()
+    local reads = {}
+    local service = telemetryService.new(
+        services.environment({
+            getRSSI = function()
+                return 42
+            end,
+            getFieldInfo = function(name)
+                return { id = tonumber(name), name = name, unit = 0 }
+            end,
+            getValue = function(id)
+                reads[id] = (reads[id] or 0) + 1
+                return id
+            end,
+        }),
+        services
+    )
+    for index = 1, 12 do
+        service:subscribe(tostring(index))
+    end
+    local turns, again = 0, true
+    while again do
+        _, again = service:update(10, 8)
+        turns = turns + 1
+    end
+    assertions.assertEqual(turns, 2, "twelve sources need two turns of at most eight")
+    for index = 1, 12 do
+        assertions.assertEqual(reads[index], 1, "a continuation must not poll a source twice in one callback")
+    end
+end
+
+local function testContendedRoundSurvivesCallbacksAndSubscriptionChanges()
+    local reads = {}
+    local service = telemetryService.new(
+        services.environment({
+            getRSSI = function()
+                return 42
+            end,
+            getFieldInfo = function(name)
+                return { id = tonumber(name), name = name, unit = 0 }
+            end,
+            getValue = function(id)
+                reads[id] = (reads[id] or 0) + 1
+                return id
+            end,
+        }),
+        services
+    )
+    for index = 1, 8 do
+        service:subscribe(tostring(index))
+    end
+    local queue = scheduler.new()
+    local task = {
+        name = "telemetry",
+        cost = 1,
+        due = 0,
+        step = function(self, now, slots)
+            local used, again = service:update(now, slots)
+            self.due = now + 20
+            return used, again
+        end,
+    }
+    local competing = {
+        name = "competing",
+        cost = 7,
+        step = function(_, _, slots)
+            return slots, false
+        end,
+    }
+    local function tick(now)
+        queue.clear()
+        queue.add(task)
+        queue.add(competing)
+        queue.run(now, 8)
+    end
+
+    tick(50)
+    assert(queue.state(task).pending, "telemetry keeps its unfinished round pending")
+    service:subscribe("9")
+    for _, now in ipairs({ 70, 90, 110 }) do
+        tick(now)
+    end
+    assert(not queue.state(task).pending, "the round must finish as callback time and subscriptions change")
+    for index = 1, 8 do
+        assertions.assertEqual(reads[index], 1, "an in-progress round polls each original source once")
+    end
+    assertions.assertEqual(reads[9], nil, "a new subscription joins the next periodic round")
+    tick(120)
+    assertions.assertEqual(reads[9], nil, "a completed round still observes its periodic due time")
 end
 
 local function testPrecisionSearchesResumeAfterIdle()
@@ -184,6 +277,8 @@ local function run()
     testLinkSubscriptionExists()
     testTransmitterLocalSourceIsNotLinkEvidence()
     testHostPollingBudgetKeepsRoundRobinProgress()
+    testContinuationPollsEachSourceOncePerRound()
+    testContendedRoundSurvivesCallbacksAndSubscriptionChanges()
     testPrecisionSearchesResumeAfterIdle()
 end
 

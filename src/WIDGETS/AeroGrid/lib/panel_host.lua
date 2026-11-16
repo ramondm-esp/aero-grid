@@ -18,16 +18,22 @@
 ---  means every frame. Telemetry rarely needs more than a few hertz, and the
 ---  host pays every panel's cost inside one instruction budget.
 ---@field refreshCost? integer|"variable" Nominal 2000-instruction slots, 0 to 8; defaults to 1.
---- An instance may override refreshCost; zero-cost refreshes run when due even without remaining slots.
+--- An instance may override refreshCost and refreshMinCost; zero-cost refreshes
+--- run when due even without remaining slots.
+---@field refreshMinCost? integer Minimum grant for a variable-cost refresh, 1 to 8.
 ---@field settings? AeroGridPanelSetting[]
 ---@field create fun(parent: any, rect: table, settings: table, services: table): any
 ---@field update? fun(instance: any, rect: table, settings: table)
 ---@field refresh? fun(instance: any)
 --- A numeric refresh result selects the next interval in 10ms ticks.
---- A second result of true requests consecutive turns until this update finishes.
---- Variable refreshes receive (instance, false, slots) and return consumed slots
---- as a third result.
----@field background? fun(instance: any)
+--- A second result of true requests another turn in the same callback.
+--- Refreshes receive (instance, false, slots) and may return consumed slots as
+--- a third result. Variable refreshes must declare a minimum and report consumption.
+---@field finish? fun(instance: any, creating: boolean, slots: integer) Finishing work after a refresh. Its own variable-cost task, ready while `finishPending` is true; may return the ticks until the next refresh is due, whether it requests another turn now, and slots consumed.
+---@field finishPending? fun(instance: any): boolean, integer? While true the finishing task runs and refreshes wait. A second result sets the next stage's minimum grant.
+---@field finishMinCost? integer Minimum grant for finishing, 1 to 8, when `finishPending` reports none.
+---@field background? fun(instance: any, creating: boolean, slots: integer) While the dashboard is hidden. A fixed one-slot task unless `backgroundMinCost` is declared.
+---@field backgroundMinCost? integer Makes background a variable-cost task with this minimum grant, 1 to 8; an instance may override it. It then reports consumed slots as a third result.
 ---@field resetSession? fun(instance: any, now: integer) Second result true requests another reset turn.
 ---@field event? fun(instance: any, event: any): boolean
 ---@field destroy? fun(instance: any)
@@ -43,12 +49,12 @@
 ---@field error? string First lifecycle failure message.
 
 local panelHost = { RUNTIME_API = 1 }
-
 --- Host-side panel API version. Modules declaring anything else are rejected.
 panelHost.API_VERSION = 1
 
 --- Optional lifecycle callbacks, in a fixed order so errors stay deterministic.
-local OPTIONAL_CALLBACKS = { "update", "refresh", "background", "resetSession", "event", "destroy" }
+local OPTIONAL_CALLBACKS =
+    { "update", "refresh", "finish", "finishPending", "background", "resetSession", "event", "destroy" }
 
 --- Restrict module identifiers to the same path-safe characters as layout types.
 ---@param value any
@@ -80,6 +86,7 @@ end
 ---@return boolean valid
 ---@return string? error
 function panelHost.validateModule(module, typeName)
+    local maxSlots = assert(panelHost.SLOTS, "panel slot limit must be configured by the scheduler")
     if type(module) ~= "table" then
         return false, "panel module must return a table"
     end
@@ -123,11 +130,47 @@ function panelHost.validateModule(module, typeName)
     if
         cost ~= nil
         and cost ~= "variable"
-        and (type(cost) ~= "number" or cost < 0 or cost > 8 or cost ~= math.floor(cost))
+        and (type(cost) ~= "number" or cost < 0 or cost > maxSlots or cost ~= math.floor(cost))
     then
-        return false, "refreshCost must be a whole number from 0 to 8 or variable"
+        return false, "refreshCost must be a whole number from 0 to " .. maxSlots .. " or variable"
     end
-
+    local minimum = field(module, "refreshMinCost")
+    if
+        minimum ~= nil
+        and (type(minimum) ~= "number" or minimum < 1 or minimum > maxSlots or minimum ~= math.floor(minimum))
+    then
+        return false, "refreshMinCost must be a whole number from 1 to " .. maxSlots
+    end
+    if cost == "variable" and minimum == nil then
+        return false, "variable refreshCost requires refreshMinCost"
+    end
+    local backgroundMinimum = field(module, "backgroundMinCost")
+    if
+        backgroundMinimum ~= nil
+        and (
+            type(backgroundMinimum) ~= "number"
+            or backgroundMinimum < 1
+            or backgroundMinimum > maxSlots
+            or backgroundMinimum ~= math.floor(backgroundMinimum)
+        )
+    then
+        return false, "backgroundMinCost must be a whole number from 1 to " .. maxSlots
+    end
+    local finishMinimum = field(module, "finishMinCost")
+    if
+        finishMinimum ~= nil
+        and (
+            type(finishMinimum) ~= "number"
+            or finishMinimum < 1
+            or finishMinimum > maxSlots
+            or finishMinimum ~= math.floor(finishMinimum)
+        )
+    then
+        return false, "finishMinCost must be a whole number from 1 to " .. maxSlots
+    end
+    if field(module, "finish") ~= nil and (finishMinimum == nil or field(module, "finishPending") == nil) then
+        return false, "finish requires finishMinCost and finishPending"
+    end
     return true
 end
 
@@ -284,9 +327,10 @@ end
 ---@return boolean ok
 ---@return string? error Set only on the call that first fails.
 ---@return any result First value returned by the callback.
----@return boolean? unfinished Whether this staged refresh needs another turn.
----@return integer? consumed Nominal slots consumed by a variable refresh.
+---@return boolean? again Whether the task requests another turn in the same callback.
+---@return integer? consumed Nominal slots consumed by the refresh.
 function panelHost.dispatch(entry, event, ...)
+    local maxSlots = assert(panelHost.SLOTS, "panel slot limit must be configured by the scheduler")
     if type(entry) ~= "table" or entry.failed then
         return false
     end
@@ -296,8 +340,18 @@ function panelHost.dispatch(entry, event, ...)
         return true
     end
 
-    local ok, resultOrError, unfinished, consumed = pcall(callback, entry.instance, ...)
-    if ok and event == "refresh" and type(resultOrError) == "number" then
+    local ok, resultOrError, again, consumed = pcall(callback, entry.instance, ...)
+    if ok and event == "finishPending" then
+        if type(resultOrError) ~= "boolean" then
+            ok, resultOrError = false, "finishPending must return a boolean"
+        elseif
+            again ~= nil
+            and (type(again) ~= "number" or again < 1 or again > maxSlots or again ~= math.floor(again))
+        then
+            ok, resultOrError = false, "finishPending minimum must be a whole number from 1 to " .. maxSlots
+        end
+    end
+    if ok and (event == "refresh" or event == "finish") and type(resultOrError) == "number" then
         if resultOrError < 1 or resultOrError > 6000 or resultOrError ~= math.floor(resultOrError) then
             ok, resultOrError = false, "refresh interval must be a whole number from 1 to 6000 ticks"
         else
@@ -305,7 +359,7 @@ function panelHost.dispatch(entry, event, ...)
         end
     end
     if ok then
-        return true, nil, resultOrError, unfinished, consumed
+        return true, nil, resultOrError, again, consumed
     end
 
     entry.failed = true

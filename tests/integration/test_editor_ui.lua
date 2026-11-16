@@ -90,7 +90,7 @@ end
 local definition = widget.module("main.lua")
 local context
 local worst = 0
-local function refresh(event, touch)
+local function refresh(event, touch, draining)
     widget.lvglMock.setPropertyValidation(false)
     widget.lvglMock.setCallCounting(false)
     widget.lcdMock.setTextMeasurement(false)
@@ -118,6 +118,30 @@ local function refresh(event, touch)
             .. tostring(context.stage)
     )
     widget.lvglMock.settle()
+    if not draining then
+        for _ = 1, 10 do
+            local lifecycleTask = context.lifecycleTasks and context.lifecycleTasks[context.lifecycleRequest]
+            local uiTask = context.uiTasks and context.uiTasks[context.uiRequest]
+            if
+                not context.inputQueue
+                and not context.editorTransitionRequest
+                and not (context.inputTask and context.scheduler.state(context.inputTask).refused == context.scheduler.callbacks)
+                and not (context.hostTask and context.scheduler.state(context.hostTask).refused == context.scheduler.callbacks)
+                and not (context.menuTask and (context.scheduler.state(context.menuTask).ran == context.scheduler.callbacks or context.scheduler.state(
+                    context.menuTask
+                ).refused == context.scheduler.callbacks))
+                and not (context.lifecycleRequest and (not lifecycleTask or context.scheduler.state(lifecycleTask).ran ~= context.scheduler.callbacks))
+                and not (
+                    context.uiRequest
+                    and (not uiTask or context.scheduler.state(uiTask).ran ~= context.scheduler.callbacks)
+                )
+            then
+                break
+            end
+            refresh(nil, nil, true)
+        end
+        assert(not context.inputQueue, "queued input did not receive a grant")
+    end
 end
 local function settle()
     for _ = 1, 60 do
@@ -150,6 +174,13 @@ local function exitWith(choice)
         if value == choice then
             menu.set(index)
             refresh()
+            for _ = 1, 20 do
+                if not state.exitCommand then
+                    break
+                end
+                refresh(nil, nil, true)
+            end
+            assert(not state.exitCommand, "editor exit command did not receive a grant")
             return
         end
     end
@@ -158,7 +189,11 @@ end
 local function tap(x, y)
     refresh(EVT_TOUCH_FIRST, { x = x, y = y })
     refresh(EVT_TOUCH_BREAK, { x = x, y = y })
-    refresh(EVT_TOUCH_TAP, { x = x, y = y })
+    -- A release that already opened a drawer leaves its tap queued behind the build.
+    local editor = context.editorUi
+    if not (editor and (editor.drawerPending or editor.drawerBuild ~= nil)) then
+        refresh(EVT_TOUCH_TAP, { x = x, y = y })
+    end
 end
 local function settleDrawer()
     for _ = 1, 150 do
@@ -166,6 +201,7 @@ local function settleDrawer()
         assert(context.editorUi, "drawer failed: " .. table.concat(context.errors, "; "))
         if
             not context.editorUi.drawerPending
+            and not context.editorUi.nativeInput
             and context.editorUi.drawerBuild == nil
             and not context.editorUi.previewPending
             and not context.editorUi.previewRefresh
@@ -426,7 +462,15 @@ equal(state.controls[1].gear.parent, state.controls[1].gearBackground, "gear mov
 tap(rect.x + 12, rect.y + 12)
 equal(#context.editorSession.draft.panels, 1, "old top-left X target does not remove panel")
 equal(state.mode, "menu", "top-left panel tap does not configure")
-tap(rect.x + rect.w - 12, rect.y + 12)
+local gearX, gearY = rect.x + rect.w - 12, rect.y + 12
+refresh(EVT_TOUCH_FIRST, { x = gearX, y = gearY })
+refresh(EVT_TOUCH_SLIDE, { x = gearX - 11, y = gearY })
+refresh(EVT_TOUCH_BREAK, { x = 0, y = 0 })
+equal(state.mode, "menu", "a slide off the gear does not open settings")
+-- A press longer than the tap time sends no TAP, and BREAK reports (0, 0).
+refresh(EVT_TOUCH_FIRST, { x = gearX, y = gearY })
+refresh(EVT_TOUCH_SLIDE, { x = gearX + 4, y = gearY })
+refresh(EVT_TOUCH_BREAK, { x = 0, y = 0 })
 settleDrawer()
 equal(state.mode, "configure", "gear opens settings")
 equal(state.drag, nil, "gear press must not start drag")
@@ -582,6 +626,7 @@ equal(pickSource(UNREADABLE_SOURCE), "RSSI", "a source Lua cannot read leaves th
 assert(string.find(state.status, "Lua cannot read source SW1", 1, true), "unreadable source explains why")
 local legacy = context.editorSession.draft.panels[1].config.metrics[1]
 legacy.source = "GV1"
+state.drawerControls[errorIndex].readNative()
 equal(control("metrics", "source").properties.get(), 330, "a menu-name source still reopens on its entry")
 legacy.source = "RSSI"
 pickSource(getFieldInfo(validSource).id)
@@ -1766,7 +1811,10 @@ for _, mode in ipairs({ "battery", "bar", "none" }) do
     assert(entry and entry.instance, "new RX battery preview was not built")
     assert(editor.resize(context.editorSession, 1, 1))
     assert(context.editorUi.handlers.preview(context.editorSession.draft))
+    -- Real callbacks arrive every 50 ms; the fair ring may refresh the panel
+    -- before its newly subscribed service's first update.
     for _ = 1, 40 do
+        widget.tick(5)
         refresh()
     end
     equal(context.panels[1], entry, "resizing must update the existing preview")

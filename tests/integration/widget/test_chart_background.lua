@@ -44,10 +44,24 @@ local function pump(count, hidden)
         for index = 1, 3 do
             fixture.radio.values[5100 + index] = (getTime() * index * 7) % 997 - 400
         end
-        local counted = 0
-        debug.sethook(function()
-            counted = counted + 1
-        end, "", 1)
+        -- Count real code only: the mock LVGL stands in for native functions that
+        -- cost the radio no Lua instructions.
+        local counted, stack, top = 0, {}, "code"
+        debug.sethook(function(event)
+            if event == "count" then
+                if top == "code" then
+                    counted = counted + 1
+                end
+            elseif event == "return" then
+                top = stack[#stack] or "code"
+                stack[#stack] = nil
+            else
+                if event == "call" then
+                    stack[#stack + 1] = top
+                end
+                top = string.find(debug.getinfo(2, "S").short_src, "tests/support", 1, true) and "mock" or "code"
+            end
+        end, "cr", 1)
         if hidden then
             definition.background(context)
         else
@@ -86,14 +100,16 @@ for _, object in pairs(renderer.objects) do
         return original(self, values)
     end
 end
-local host = panel.host
-panel.host = { editorUi = {} }
+local editing = panel.editing
+panel.editing = function()
+    return true
+end
 pump(200)
 equal(set, 0, "charts must not redraw while the editor is open")
 for _, owner in ipairs(panel.columnConsumers) do
     assert(#owner.pending <= 6, "edited charts must keep consuming telemetry")
 end
-panel.host = host
+panel.editing = editing
 worst = 0
 pump(80)
 assert(worst < 16000, string.format("leaving the editor cost %d Lua instructions in one callback", worst))

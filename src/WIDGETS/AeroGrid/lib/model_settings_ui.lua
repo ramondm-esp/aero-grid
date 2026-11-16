@@ -42,6 +42,13 @@ local fields = {
         section = "Session reset",
         description = "Clears session data across all dashboards. Keeps flight totals and radio data.",
     },
+    {
+        key = "liveDangerously",
+        label = "Pre-release features",
+        kind = "toggle",
+        section = "Pre-release",
+        description = "Enable pre-release features that are not fully validated yet.",
+    },
 }
 
 local function outputAvailable(index)
@@ -120,6 +127,7 @@ local function dialog(context, state)
         end,
     })
     if not attempted then
+        attempted = true
         retireHost(state)
         context.nativeDialogsCreated = true
         result = lvgl.dialog(properties)
@@ -270,14 +278,14 @@ local function buildField(context, state, field)
             return value
         end,
         set = function(value)
-            if not active(context, state) then
-                return
+            local function commit(command)
+                state.pending = command
             end
             if field.kind == "switch" then
                 local ok, name = pcall(state.armedConfig.name, value, state.armControl)
                 if ok then
-                    queue(context, state, { key = field.key, value = name })
-                else
+                    commit({ key = field.key, value = name })
+                elseif state.dialog then
                     state.status:set({ text = "Choose a physical switch position or logical switch (L01-L64)" })
                 end
                 return
@@ -292,7 +300,9 @@ local function buildField(context, state, field)
                     or value > 65
                     or not outputAvailable(value)
                 then
-                    state.status:set({ text = "Choose a configured logical switch (L01-L64), or None" })
+                    if state.dialog then
+                        state.status:set({ text = "Choose a configured logical switch (L01-L64), or None" })
+                    end
                     return
                 end
                 value = value == 1 and "" or string.format("L%02d", value - 1)
@@ -307,14 +317,16 @@ local function buildField(context, state, field)
                     end
                 end
                 if not name then
-                    state.status:set({ text = "Cannot resolve selected motor channel" })
+                    if state.dialog then
+                        state.status:set({ text = "Cannot resolve selected motor channel" })
+                    end
                     return
                 end
                 value = string.lower(name)
             elseif field.kind == "numberEdit" then
                 value = math.floor(value + 0.5)
             end
-            queue(context, state, { key = field.key, value = value })
+            commit({ key = field.key, value = value })
         end,
     }
     if field.kind == "source" then
@@ -323,13 +335,45 @@ local function buildField(context, state, field)
         -- EdgeTX's switch toolbar overlaps on short lists; outputs need no inversion.
         properties.title = field.label
         properties.values = { "None" }
+        local available = { true }
         for number = 1, 64 do
             properties.values[number + 1] = string.format("L%02d", number)
+            available[number + 1] = outputAvailable(number + 1)
         end
-        properties.filter = outputAvailable
+        properties.filter = function(index)
+            return available[index] == true
+        end
+    end
+    local apply = properties.set
+    properties.set = function(value)
+        queue(context, state, { apply = apply, value = value })
+    end
+    local getValue = properties.get
+    local value = getValue()
+    properties.get = function()
+        return value
+    end
+    state.readControls = state.readControls or {}
+    state.readControls[field.key] = function()
+        value = getValue()
     end
     state.controls[field.key] = lvgl[field.kind](row, properties)
     state.nextY = state.nextY + state.height + 6
+end
+
+function ui.cost(context)
+    local state, capacity = context.modelSettingsUi, context.scheduler.budget.slots
+    local field = state and state.build and fields[state.build]
+    -- Switch controls resolve firmware names; the output list also builds 65 choices.
+    if
+        state
+        and state.build
+        and not state.closing
+        and not (field and (field.kind == "switch" or field.key == "flightSwitch"))
+    then
+        return math.min(3, capacity)
+    end
+    return capacity
 end
 
 function ui.advance(context)
@@ -376,35 +420,46 @@ function ui.advance(context)
     if not command then
         return false
     end
-    state.pending = nil
-    local values, armed, sessionReset = state.config.resolve(state.values), state.armed, state.sessionReset
-    if command.key == "sessionReset" then
-        sessionReset = command.value
-    elseif command.key == "armed" then
-        armed = command.value
-    else
-        values[command.key] = command.value
-    end
-    local errors = state.config.validate(values)
-    if #errors > 0 then
-        local message = table.concat(errors, "; ")
-        if state.dialog then
-            state.status:set({ text = message })
-        end
-        if state.handlers.error then
-            state.handlers.error(message)
-        end
+    if command.apply then
+        state.pending = nil
+        command.apply(command.value)
         return true
     end
-    local ok, saved, result =
-        pcall(state.handlers.save, values, state.revision, state.modelFilename, armed, sessionReset)
+    -- Preparing and writing a save each take a callback; pending blocks input between them.
+    local ok, saved, result
+    if not command.prepared then
+        local values, armed, sessionReset = state.config.resolve(state.values), state.armed, state.sessionReset
+        if command.key == "sessionReset" then
+            sessionReset = command.value
+        elseif command.key == "armed" then
+            armed = command.value
+        else
+            values[command.key] = command.value
+        end
+        local errors = state.config.validate(values)
+        if #errors > 0 then
+            ok, saved, result = true, false, table.concat(errors, "; ")
+        else
+            ok, saved, result =
+                pcall(state.handlers.prepare, values, state.revision, state.modelFilename, armed, sessionReset)
+            if ok and saved then
+                command.prepared, command.values, command.armed, command.sessionReset =
+                    result, values, armed, sessionReset
+                return true
+            end
+        end
+    else
+        ok, saved, result = pcall(state.handlers.commit, command.prepared)
+    end
+    state.pending = nil
     if not ok then
         saved, result = false, saved
     end
     if saved then
         state.values, state.armed, state.revision =
-            state.config.resolve(result.flight or values), armed, result.revision
-        state.sessionReset = sessionReset
+            state.config.resolve(result.flight or command.values), command.armed, result.revision
+        state.sessionReset = command.sessionReset
+        state.readControls[command.key]()
         if state.dialog then
             state.status:set({ text = "" })
         end

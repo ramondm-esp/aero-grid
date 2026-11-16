@@ -47,13 +47,28 @@ local function matches(event, name)
     return _G[name] ~= nil and event == _G[name]
 end
 
-local function enabled(context, state)
-    return state.handlers.fullscreen()
+--- The button shows in fullscreen unless an overlay covers the dashboard.
+--- The layout editor keeps it in place.
+local function shown(context, state)
+    return not context.stage
+        and not context.reloadState
+        and state.handlers.fullscreen()
         and not (state.handlers.modal and state.handlers.modal())
         and not context.modelSettingsUi
         and not context.runtimeFailed
-        and not context.stage
-        and not context.reloadState
+end
+
+--- While editing the button stays visible but passes touches to the editor.
+local function enabled(context, state)
+    return shown(context, state) and not (state.handlers.editing and state.handlers.editing())
+end
+
+local function setVisible(state, visible)
+    if visible then
+        lvgl.show(state.root)
+    else
+        lvgl.hide(state.root)
+    end
 end
 
 local function valid(context, state, generation)
@@ -71,11 +86,11 @@ function menu.close(context)
     end
     state.generation = state.generation + 1
     state.pending, state.action, state.dismiss, state.open = nil, nil, nil, false
-    state.tapConsumed = true
+    state.press = context.gesture.cancel(state.press)
     if state.screen then
         lvgl.hide(state.screen)
     end
-    lvgl.hide(state.root)
+    setVisible(state, false)
 end
 
 local function inside(touch, rectangle)
@@ -302,12 +317,16 @@ function menu.ensure(context, dimensions, handlers)
         menu.close(context)
         state.modelFilename = filename
     end
-    if enabled(context, state) then
-        lvgl.show(state.root)
-    else
-        lvgl.hide(state.root)
-    end
+    setVisible(state, shown(context, state))
     return state, created
+end
+
+--- Show or hide the button for the current screen.
+function menu.sync(context)
+    local state = context.aerogridMenu
+    if state then
+        setVisible(state, shown(context, state))
+    end
 end
 
 function menu.handle(context, event, touch)
@@ -335,54 +354,37 @@ function menu.handle(context, event, touch)
             state.selected = 3 - state.selected
             state.selectionDirty = true
         elseif matches(event, "EVT_TOUCH_FIRST") then
-            state.captured, state.tapConsumed, state.slid = true, false, false
-            state.pressed = tileAt(state, touch)
+            state.press = context.gesture.track(nil, event, touch)
+            local pressed = tileAt(state, touch)
             if not inside(touch, state.bounds) then
                 state.dismiss = true
-            elseif state.pressed then
-                state.selected, state.selectionDirty = state.pressed, true
+            elseif pressed then
+                state.selected, state.selectionDirty = pressed, true
             end
-        elseif matches(event, "EVT_TOUCH_SLIDE") or matches(event, "EVT_TOUCH_LONG") then
-            state.slid = true
-        elseif matches(event, "EVT_TOUCH_BREAK") and state.captured and not state.tapConsumed then
-            -- EdgeTX can release without a TAP; BREAK coordinates are (0, 0).
-            -- Use the captured tile, not those synthetic release coordinates.
-            state.tapConsumed = true
-            if not state.slid and state.pressed then
-                state.action = TILES[state.pressed].action
-            end
-        elseif matches(event, "EVT_TOUCH_TAP") and not state.tapConsumed then
-            state.tapConsumed = true
-            local index = tileAt(state, touch)
-            if not state.slid and index and (not state.captured or state.pressed == index) then
+        elseif context.gesture.touch(event) then
+            local tap
+            state.press, tap = context.gesture.track(state.press, event, touch)
+            local index = tap and tileAt(state, tap)
+            if index and (not state.press.x or tileAt(state, state.press) == index) then
                 state.action = TILES[index].action
-            elseif not inside(touch, state.bounds) then
+            elseif tap and not inside(tap, state.bounds) then
                 state.dismiss = true
             end
         end
         return true
     end
-    local hit = touch and touch.x >= 0 and touch.y >= 0 and touch.x < state.w and touch.y < state.h
+    local function hit(point)
+        return point and point.x >= 0 and point.y >= 0 and point.x < state.w and point.y < state.h
+    end
     if matches(event, "EVT_TOUCH_FIRST") then
-        state.captured, state.tapConsumed, state.slid = hit == true, false, false
-        return state.captured
+        state.press = hit(touch) and context.gesture.track(nil, event, touch) or nil
+        return state.press ~= nil
     end
-    local touchEvent = matches(event, "EVT_TOUCH_TAP")
-        or matches(event, "EVT_TOUCH_SLIDE")
-        or matches(event, "EVT_TOUCH_BREAK")
-        or matches(event, "EVT_TOUCH_LONG")
-    if state.captured and touchEvent then
-        if matches(event, "EVT_TOUCH_SLIDE") or matches(event, "EVT_TOUCH_LONG") then
-            state.slid = true
-        end
-        if matches(event, "EVT_TOUCH_TAP") and not state.tapConsumed then
-            state.pending, state.tapConsumed = not state.slid and hit or nil, true
-        end
-        return true
-    end
-    if matches(event, "EVT_TOUCH_TAP") and hit then
-        if not state.tapConsumed then
-            state.pending, state.tapConsumed = true, true
+    if context.gesture.touch(event) and (state.press or matches(event, "EVT_TOUCH_TAP") and hit(touch)) then
+        local tap
+        state.press, tap = context.gesture.track(state.press, event, touch)
+        if tap then
+            state.pending = hit(tap) or nil
         end
         return true
     end
@@ -398,16 +400,15 @@ function menu.advance(context)
     if state.modelFilename ~= filename then
         menu.close(context)
         state.modelFilename = filename
-        if enabled(context, state) then
-            lvgl.show(state.root)
-        end
+        setVisible(state, shown(context, state))
         return false
     end
     if not valid(context, state, state.generation) then
         menu.close(context)
+        setVisible(state, shown(context, state))
         return false
     end
-    lvgl.show(state.root)
+    setVisible(state, true)
     if state.action then
         local action = state.action
         menu.close(context)
@@ -416,7 +417,7 @@ function menu.advance(context)
     end
     if state.dismiss then
         menu.close(context)
-        lvgl.show(state.root)
+        setVisible(state, true)
         return true
     end
     if state.open then

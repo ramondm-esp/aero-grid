@@ -10,117 +10,93 @@ local panel = diagnostics.create(dashboard.page, { x = 0, y = 0, w = 238, h = 13
     section = "scheduler",
     accent = "cyan",
 }, services)
-assert(panel.refreshCost == 0 and dashboard.schedulerStats)
-local stats, graph = dashboard.schedulerStats, panel.graph
+assert(panel.refreshCost == 1)
+local stats, graph = dashboard.scheduler.stats(), panel.graph
 assert(graph.cursor.properties.w == 1, "native vertical line width is its stroke thickness")
 for _, object in ipairs(fixture.lvglMock.objects) do
     if object.kind == "hline" then
         assert(object.properties.h == 1, "native horizontal line height is its stroke thickness")
     end
 end
-local function sample(utilization, deferred, consumers)
-    stats.revision = stats.revision + 1
-    stats.utilization, stats.deferrals = utilization, deferred
-    stats.consumers, stats.capacity, stats.seconds = consumers, 160, 1
+assert(panel.rows[1].properties.text == "Slots used" and panel.rows[2].properties.text == "Requests deferred")
+
+-- The panel reads differences of the scheduler's cumulative counters; a
+-- second with 100 available slots and 100 requests makes percentages direct.
+local function advance(utilization, deferred)
+    stats.used, stats.available = stats.used + utilization, stats.available + 100
+    stats.requested, stats.denied = stats.requested + 100, stats.denied + deferred
+end
+local function sample(utilization, deferred)
+    fixture.tick(100)
+    advance(utilization, deferred)
     diagnostics.refresh(panel)
 end
+diagnostics.refresh(panel)
+assert(graph.index == 0, "the first refresh only takes a baseline")
 local bottom = graph.y + graph.height
 sample(100, 0)
 assert(graph.index == 1)
-local other = graph.columns[1][6]
-assert(other.properties.y == graph.y and other.properties.h == graph.height, "unattributed slots form the top layer")
-assert(graph.lines[1].properties.pts[2][2] == bottom)
-local saved = graph.lines[1].properties.pts
+assert(graph.usage[1].properties.pts[2][2] == graph.y, "full use reaches the top")
+assert(graph.lines[1].properties.pts[2][2] == bottom, "no deferrals stay at the bottom")
+local saved = graph.usage[1].properties.pts
 diagnostics.refresh(panel)
-assert(graph.index == 1 and graph.lines[1].properties.pts == saved, "unchanged samples must not redraw")
+assert(graph.index == 1 and graph.usage[1].properties.pts == saved, "unchanged statistics must not redraw")
+
+-- At most one point a second, however much work arrives.
+advance(100, 0)
+diagnostics.refresh(panel)
+assert(graph.index == 1, "a point is added at most once a second")
+stats.used, stats.available, stats.requested = stats.used - 100, stats.available - 100, stats.requested - 100
+
 sample(0, 100)
-local points = graph.lines[2].properties.pts
-assert(points[1][1] == graph.x and points[2][1] == graph.x + 1)
+local points = graph.usage[2].properties.pts
+assert(points[1][1] == graph.x and points[2][1] == graph.x + 1, "consecutive seconds connect")
+assert(points[1][2] == graph.y and points[2][2] == bottom)
+points = graph.lines[2].properties.pts
 assert(points[1][2] == bottom and points[2][2] == graph.y)
-assert(next(graph.columns[2]) == nil, "idle seconds draw no stack")
 
--- Consumers stack from the bottom in a stable color each.
-local chart = { placement = { id = "c1", type = "chart" } }
-local telemetry = { id = "telemetry" }
-sample(70, 0, { [chart] = 80, [telemetry] = 16, flight = 8 })
-local column = graph.columns[3]
-local function boundary(percent)
-    return graph.y + math.floor((100 - percent) * graph.height / 100 + 0.5)
-end
-assert(graph.owners[1] == chart and graph.owners[2] == telemetry and graph.owners[3] == "flight")
-assert(column[1].properties.y == boundary(50) and column[1].properties.h == bottom - boundary(50))
-assert(column[2].properties.y == boundary(60) and column[3].properties.y == boundary(65))
-assert(column[6].properties.y == boundary(70) and column[6].properties.h == boundary(65) - boundary(70))
-assert(column[1].properties.color == graph.colors[1] and column[6].properties.color == graph.colors[6])
-assert(
-    graph.legend >= 3 and panel.rows[2].properties.text == "80.0 c1 chart",
-    "the legend shows measured slots per second"
-)
-assert(panel.rows[3].properties.text == "16.0 telemetry service")
-for _ = 1, 10 do
-    sample(70, 0, { [chart] = 8, [telemetry] = 104 })
-end
-assert(graph.owners[1] == chart and graph.owners[2] == telemetry, "ranking changes must not recolor consumers")
-assert(panel.rows[2].properties.text == "8.0 c1 chart" and panel.rows[3].properties.text == "104.0 telemetry service")
-stats.revision = stats.revision + 1
-stats.utilization, stats.deferrals = 70, 0
-stats.consumers, stats.capacity, stats.seconds = { [chart] = 16, [telemetry] = 30 }, 320, 2
+-- A gap in the measurements starts a new segment instead of drawing across it.
+fixture.tick(500)
+advance(250, 250)
+stats.available, stats.requested = stats.available + 400, stats.requested + 400
 diagnostics.refresh(panel)
-assert(panel.rows[2].properties.text == "8.0 c1 chart", "rates divide by the measured interval")
-local crowd = {}
-for index = 1, 6 do
-    crowd[{ id = "s" .. index }] = 20
-end
-for _ = 1, 30 do
-    sample(75, 0, crowd)
-end
-local named = 0
-for slot = 1, 5 do
-    assert(crowd[graph.owners[slot]], "faded consumers give way to busier ones")
-    named = named + 1
-end
-assert(named == 5)
-column = graph.columns[graph.index]
-assert(column[5].properties.y == boundary(62.5) and column[6].properties.y == boundary(75))
+points = graph.usage[3].properties.pts
+assert(points[2][1] == graph.x + 2 and points[1][2] == points[2][2], "a gap must not be bridged")
 
-for _ = graph.index + 1, graph.width do
-    sample(50, 25)
-end
-assert(graph.index == 0)
-local first = graph.lines[1]
-sample(25, 50)
-assert(graph.lines[1] == first, "wrap must reuse native objects")
-points = first.properties.pts
-assert(points[1][1] == graph.x and points[2][1] == graph.x, "wrap must never connect right edge to left")
-assert(graph.lines[2].hidden, "cursor must separate new samples from old data")
-sample(25, 50)
-for _, segment in ipairs(graph.columns[3]) do
-    assert(segment.hidden, "cursor must clear the next stacked column")
-end
+-- Out-of-range percentages stay inside the graph.
+sample(250, -5)
+assert(graph.usage[4].properties.pts[2][2] == graph.y and graph.lines[4].properties.pts[2][2] == bottom)
+
+-- The sweep wraps without creating objects or connecting the right edge to the left.
 for _ = 1, graph.width do
-    sample(75, 0, crowd)
+    sample(75, 0)
 end
 local count = #fixture.lvglMock.objects
+local first = graph.lines[1]
 for _ = 1, graph.width * 2 do
-    sample(75, 0, crowd)
+    sample(75, 0)
 end
 assert(#fixture.lvglMock.objects == count, "graph storage must stay bounded across wraps")
+assert(graph.lines[1] == first, "wrap must reuse native objects")
 diagnostics.update(panel, { x = 0, y = 0, w = 320, h = 180 })
 assert(panel.graph.index == 0 and panel.graph.previous == nil, "resize starts a new sweep")
 assert(panel.graph.lines[1] == first and first.hidden, "resize hides and reuses existing lines")
 sample(25, 50)
 assert(panel.graph.lines[1] == first and not first.hidden, "resized sweep reuses native objects")
-diagnostics.destroy(panel)
-assert(dashboard.schedulerStats == nil)
+
 services.preview = true
 local preview = diagnostics.create(dashboard.page, { x = 0, y = 0, w = 238, h = 132 }, {
     section = "scheduler",
     accent = "cyan",
 }, services)
 diagnostics.refresh(preview)
-assert(dashboard.schedulerStats == nil, "previews must not enable measurement")
+fixture.tick(100)
+advance(50, 0)
+diagnostics.refresh(preview)
+assert(preview.graph.index == 0 and preview.graph.sample == nil, "previews do not measure")
 preview.preview = false
 diagnostics.refresh(preview)
-assert(dashboard.schedulerStats, "saving a preview must enable live measurement")
-diagnostics.destroy(preview)
-assert(dashboard.schedulerStats == nil)
+fixture.tick(100)
+advance(50, 0)
+diagnostics.refresh(preview)
+assert(preview.graph.index == 1, "a saved preview measures the live scheduler")

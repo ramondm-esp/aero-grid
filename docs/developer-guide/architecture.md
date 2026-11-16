@@ -56,6 +56,7 @@ Host coordination has three boundaries:
 | --- | --- |
 | `dashboard_loader.lua` | Layout recovery, staged parsing, service/panel construction, and placement-local services. |
 | `dashboard_lifecycle.lua` | Empty-page decoration, batched reflow, fullscreen-to-App rebuilds, and page retirement/replacement. |
+| `scheduler.lua` | Generic fair slot scheduling, due checks, continuations, and charged-slot validation. It knows tasks only through their common contract. |
 | `editor_controller.lua` | Editor activation, staged advancement, dashboard previews, draft restoration, and adoption after saving. |
 
 Their `new` functions bind host operations once per widget. They do not capture
@@ -95,15 +96,53 @@ They do not each poll EdgeTX or maintain their own telemetry cache.
 Subscriptions to the same source share polling, and an unsubscribed service
 does not consume scheduled work.
 
-Due services and panels share eight nominal 2,000-instruction slots in round-robin
-order. Ordinary tasks default to one slot. Variable tasks receive the remaining
-slots and report consumption, leaving unused slots available to later tasks.
-History and control declare zero slots: they retain their due intervals and
-run at most once per callback, even when charged work exhausts the allowance.
-Flight polling runs first and consumes one slot when it ticks. Slot costs are
+Due services, panels and host work (flight, input, menus, modals, loading and
+editor transitions) share nominal slots in one round-robin ring. Host readiness
+keeps domain-specific eligibility outside the scheduler. Options changes and
+due session resets preempt unrelated host work; actionable menu changes precede
+dependent host work; queued input precedes work that could replace its target;
+and page reconstruction waits for the native callback after retirement. Other
+independent host tasks share the ring without a separate one-host-step rule. A
+host transition that changes dashboard membership holds services or panels
+until it completes. The default
+callback capacity is eight 2,000-instruction slots, configured by `SLOTS` and
+`INSTRUCTIONS_PER_SLOT` in `lib/scheduler.lua`. Every task turn is capped at
+eight slots, even if a callback has a larger capacity. Fixed tasks reserve
+their declared cost; variable tasks declare a minimum and receive between that
+minimum and eight slots when enough remain. Each task turn reports its charged
+slots and whether it requests another turn in the same callback. A panel refresh
+returns its next interval, that same continuation boolean, and optionally its
+charged slots; there is no separate module or instance opt-in. Work that should
+wait for its next due time returns false. A panel may split work into further
+tasks: `finish`, ready while `finishPending` is true and declaring
+`finishMinCost`, runs after a refresh while refreshes wait; `finishPending` may
+also return the next stage's minimum. An unfinished service polling round keeps
+its remainder across callbacks, so a changing callback time does not restart
+the round. `background` becomes variable-cost when it declares
+`backgroundMinCost`. An instance may override the refresh and background
+minimums for the stage it needs next. Unused slots are released to later
+tasks, and pending work remains subject to the scheduler's fair rotation. A
+task's `due` time controls its next eligibility independently of same-callback
+continuation. With the per-model **Pre-release features** setting, and for every
+model until its settings document has loaded, work still pending
+or deferred after the first eight slots continues in four more eight-slot
+segments of the same callback. `scheduler.cross` first burns instructions under
+`xpcall` until EdgeTX raises its "CPU limit" error; the message handler runs with
+hooks disabled, so the extra segments are not counted. If the burn finishes
+without the error (simulator, debug firmware), the segments run directly. Slot costs are
 initial approximations, not live instruction measurements; the whole callback
 has a nominal target below 16,000 instructions; regression tests enforce the
 stricter 15,000-instruction ceiling. Callback/scheduler overhead is not separately charged.
+
+The chart uses two named cost models with one conversion to charged slots:
+`PIPELINE` keeps 20% of each slot plus 900 instructions for surrounding work,
+and `END_TO_END` uses the full slot plus 400 instructions for finishing stages.
+It limits each step to its allowance: a live append takes only the samples and
+columns that fit and leaves the rest queued, and a step that cannot fit its
+smallest unit declares a larger minimum instead of overrunning. Charts refresh
+at most four times a second. Their appends continue within one callback while
+readings are waiting; readouts, overlays and the next rescale layer are prepared
+by other turns.
 
 | Service module | Responsibility |
 | --- | --- |
@@ -203,7 +242,10 @@ incompatible subscriptions require a rebuild.
 ## Shared flight tracking
 
 The factory-scoped broker in `flight_service.lua` owns a separate non-UI
-Control/Telemetry runtime and optional Smart sensor poller. Any live widget callback can pump it. Dashboard
+Control/Telemetry runtime and optional Smart sensor poller. Each live widget
+enrols the broker's setup, one task per polled service and a decision task in
+its ring. These tasks are shared, so each runs at most once per tick, whichever
+widget reaches it first. Dashboard
 registrations are weakly held; rebuilds mark proposals pending before replacing
 them. Unanimous effective arm/configuration proposals are required, not the
 first caller's settings. Saved model Armed overrides every declaration. A qualified session
@@ -303,9 +345,9 @@ Use `panels/flight-mode.lua` as a small working example and
 | `id`, `apiVersion`, `supportedSpans` | Identify the module, check compatibility, and advertise valid grid sizes. |
 | `settings` | Typed fields, defaults, bounds, and choices used by validation and the editor. |
 | `refreshInterval` | Desired foreground interval in 10 ms ticks; work still shares the host budget. |
-| `refreshCost` | Number of nominal 2,000-instruction slots, 1–8 (default 1), or `"variable"` to receive the remaining allowance. |
+| `refreshCost` | Number of nominal slots, 0–8 (default 1), or `"variable"` to receive the remaining allowance. |
 | `create(parent, rect, settings, services)` | Build LVGL objects, subscribe to data, and return private instance state. |
-| `refresh(context, creating, slots)` | Optional callback to update existing objects from snapshots; scheduled calls pass `false` for `creating`. May return a whole-number interval of 1–6000 ticks; nil preserves the current interval. A second result of `true` reserves subsequent turns among panels of the same type until the update completes; other panel types and services continue running. Variable tasks return consumed slots (0–grant) as a third result. |
+| `refresh(context, creating, slots)` | Optional callback to update existing objects from snapshots; scheduled calls pass `false` for `creating`. May return a whole-number interval of 1–6000 ticks; nil preserves the current interval. A second result of `true` marks the update unfinished; it resumes in the same callback only with `refreshContinuation`, otherwise at its next due time. Other panels, including panels of the same type, keep their turns. Variable tasks return consumed slots (0–grant) as a third result. |
 | `update(context, rect, settings, detailsOnly, placement)` | Optional geometry/configuration update. Host reflows and editor resizes pass the current grid placement as the fifth argument, leaving the internal `detailsOnly` argument unset. |
 | `background(context)` | Optional work when the dashboard is not visible. |
 | `resetSession(context, now)` | Optional session-data reset without rebuilding the panel. A second result of `true` requests another bounded reset turn. |

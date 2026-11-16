@@ -52,6 +52,7 @@
 local telemetryService = { RUNTIME_API = 1 }
 telemetryService.__index = telemetryService
 telemetryService.updateCost = "variable"
+telemetryService.updateMinCost = 1
 
 --- Ticks of 10ms between polls. Faster than any panel's refresh so a
 --- panel never renders a reading older than its own interval.
@@ -457,14 +458,20 @@ function telemetryService:update(now, slots)
 
     local entries = self.entries
     if #entries == 0 then
+        self.unpolled = nil
         return 1
     end
+    -- Keep an in-progress round across callbacks; only completed rounds restart.
+    local left = math.min(self.unpolled or #entries, #entries)
     local polls = math.min(
-        #entries,
+        left,
         telemetryService.POLL_CAP,
         slots and slots * telemetryService.SOURCES_PER_SLOT or self.pollCap or telemetryService.POLL_CAP
     )
     local consumed = math.max(1, math.ceil(polls / telemetryService.SOURCES_PER_SLOT))
+    local unpolled = left - polls
+    self.unpolled = unpolled > 0 and unpolled or nil
+    local again = unpolled > 0
     self.cursor = self.support.roundRobin(entries, self.cursor, polls, pollEntry, self, now)
 
     -- Republished after the polls, because a live reading can prove the
@@ -480,7 +487,7 @@ function telemetryService:update(now, slots)
     end
     if self.precisionScans == 0 then
         self.scanCursor = scan
-        return consumed
+        return consumed, again
     end
     for _ = 1, total do
         local entry = entries[scan]
@@ -491,7 +498,7 @@ function telemetryService:update(now, slots)
         end
     end
     self.scanCursor = scan
-    return consumed
+    return consumed, again
 end
 
 --- Format a reading for display, honoring its precision.

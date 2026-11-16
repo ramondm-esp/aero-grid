@@ -128,7 +128,10 @@ function viewer.open(host)
         h = 30,
         text = "Close",
         press = function()
-            viewer.close(host)
+            if host.logViewer == state then
+                state.closing = true
+                host.uiRequest = "log viewer"
+            end
         end,
     })
     for index = 1, math.max(1, math.floor((height - 40) / state.lineHeight)) do
@@ -175,30 +178,31 @@ function viewer.advance(host)
     end
 end
 
-function viewer.handle(host, event, touch)
+local function applyInput(host, event, touch)
     local state = host.logViewer
     if matches(event, "EVT_VIRTUAL_EXIT") or matches(event, "EVT_EXIT_BREAK") then
         viewer.close(host)
     elseif state.prepareIndex then
         return true
-    elseif matches(event, "EVT_TOUCH_FIRST") and touch then
-        state.dragY, state.slid = touch.y, false
-    elseif matches(event, "EVT_TOUCH_SLIDE") and touch and state.dragY then
-        local delta = state.dragY - touch.y
-        local steps = math.floor(math.abs(delta) / state.lineHeight)
-        if steps > 0 then
-            state.slid = true
-            local direction = delta > 0 and 1 or -1
-            move(state, direction)
-            state.dragY = touch.y
-            render(state)
+    elseif host.gesture.touch(event) then
+        local tap
+        state.press, tap = host.gesture.track(state.press, event, touch)
+        if matches(event, "EVT_TOUCH_FIRST") then
+            state.dragY = touch and touch.y
+        elseif matches(event, "EVT_TOUCH_SLIDE") and touch and state.dragY then
+            local delta = state.dragY - touch.y
+            local steps = math.floor(math.abs(delta) / state.lineHeight)
+            if steps > 0 then
+                move(state, delta > 0 and 1 or -1)
+                state.dragY = touch.y
+                render(state)
+            end
+        elseif matches(event, "EVT_TOUCH_BREAK") then
+            state.dragY = nil
         end
-    elseif matches(event, "EVT_TOUCH_TAP") and touch and not state.slid then
-        if touch.x >= host.zone.w - 80 and touch.y < 32 then
+        if tap and tap.x >= host.zone.w - 80 and tap.y < 32 then
             viewer.close(host)
         end
-    elseif matches(event, "EVT_TOUCH_BREAK") then
-        state.dragY = nil
     elseif matches(event, "EVT_ROT_LEFT") or matches(event, "EVT_VIRTUAL_PREV") then
         move(state, -1)
         render(state)
@@ -207,6 +211,14 @@ function viewer.handle(host, event, touch)
         render(state)
     end
     return true
+end
+
+--- Apply one input the host has already granted a scheduler turn.
+function viewer.handle(host, event, touch)
+    if not host.logViewer then
+        return false
+    end
+    return applyInput(host, event, touch)
 end
 
 return viewer

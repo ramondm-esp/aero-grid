@@ -15,6 +15,22 @@ local function loadModule(relative)
     if relative == "lib/primitives.lua" then
         return chunk(loadModule("lib/reading.lua"))
     end
+    if relative == "panels/chart.lua" then
+        return chunk(loadModule("lib/scheduler.lua").new().budget)
+    end
+    if relative == "main.lua" then
+        -- Instruction-budget tests measure one 8-slot segment per callback, so
+        -- widgets start without the extended callback budget. A test that wants
+        -- it clears `liveDangerouslyFailed`.
+        local definition = chunk()
+        local create = definition.create
+        definition.create = function(...)
+            local context = create(...)
+            context.liveDangerouslyFailed = true
+            return context
+        end
+        return definition
+    end
     return chunk()
 end
 

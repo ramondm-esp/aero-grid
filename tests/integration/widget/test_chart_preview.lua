@@ -18,8 +18,6 @@ local subscriptions = history.count
 local telemetry = context.serviceRuntime.byId.telemetry
 local controls = context.serviceRuntime.byId.control
 local telemetryCount, controlCount = telemetry.count, controls.count
-local retiredOwner = fixture.entryById(context, "power")
-context.refreshOwner = retiredOwner
 
 local function preview(edit)
     context.editorController.openEditor(context)
@@ -55,7 +53,6 @@ local draft, handlers = preview(function(config)
 end)
 local compatible = fixture.instanceOf(context, "power")
 assert(compatible.preview and not compatible.previewMissing)
-assert(context.refreshOwner ~= retiredOwner, "retiring a preview chart must release its dispatcher ownership")
 equal(compatible.series[1].feed, feed)
 assert(
     fixture.pumpUntil(context, function()

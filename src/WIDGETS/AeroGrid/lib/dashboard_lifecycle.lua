@@ -13,6 +13,7 @@ function module.new(dependencies)
     local reservedCorner = dependencies.reservedCorner
     local errorTop = dependencies.errorTop
     local panelRect = dependencies.panelRect
+    local reservedFor = dependencies.reservedFor
     local buildPanel = dependencies.buildPanel
 
     --- Empty-state decoration belongs to the page, never the layout document.
@@ -133,7 +134,21 @@ function module.new(dependencies)
         context.reflowIndex = 1
     end
 
+    --- Whether a panel is already laid out for this rectangle and reserved corner.
+    local function sameFrame(entry, rect, reserved)
+        local old, oldReserved = entry.rect, entry.reserved
+        if not old or old.x ~= rect.x or old.y ~= rect.y or old.w ~= rect.w or old.h ~= rect.h then
+            return false
+        end
+        if oldReserved == nil or reserved == nil then
+            return oldReserved == reserved
+        end
+        return oldReserved.w == reserved.w and oldReserved.h == reserved.h and oldReserved.side == reserved.side
+    end
+
     --- Reposition the next batch of panels.
+    --- A panel whose frame did not change is left alone: entering or leaving
+    --- fullscreen usually keeps the zone, and an update would make panels redraw.
     ---@param context AeroGridContext
     ---@return boolean busy True while more panels remain.
     local function advanceReflow(context)
@@ -144,7 +159,9 @@ function module.new(dependencies)
             local entry = context.panels[position]
             if entry and not entry.failed then
                 local rect = panelRect(context, entry.placement)
-                if rect then
+                local reserved = rect and reservedFor(context, entry.placement, rect)
+                if rect and not sameFrame(entry, rect, reserved) then
+                    entry.rect, entry.reserved = rect, reserved
                     entry.container:set({ x = rect.x, y = rect.y, w = rect.w, h = rect.h })
                     local ok, dispatchError = context.panelHost.dispatch(
                         entry,
@@ -194,9 +211,6 @@ function module.new(dependencies)
             end
             for index, current in ipairs(context.panels) do
                 if current == entry then
-                    if context.refreshOwner == entry then
-                        context.refreshOwner = nil
-                    end
                     table.remove(context.panels, index)
                     job.index = index
                     break
@@ -253,7 +267,6 @@ function module.new(dependencies)
         context.canvas = nil
         context.emptyHint = nil
         context.panels = {}
-        context.refreshOwner = nil
         context.rejected = {}
         context.errors = {}
         context.notices = {}

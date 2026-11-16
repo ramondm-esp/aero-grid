@@ -55,6 +55,7 @@
 ---@field tokens? table Tokens held between the tokenize and parse steps.
 ---@field pending? table[] Validated placements still awaiting construction.
 ---@field pendingIndex? integer Next placement to build.
+---@field scheduler table Slot scheduler that runs panels and services.
 ---@field dashboardLoader table Staged layout and panel construction.
 ---@field dashboardLifecycle table Page retirement, reflow, and rebuild.
 ---@field editorController table Dashboard preview and editor coordination.
@@ -547,7 +548,82 @@ end
 
 local sharedDiagnosticsLog
 local flightFactories = {}
-local pumpFlight
+
+--- Failure handlers: each task's `onError` records a failure on its owner.
+local function hostError(task)
+    task.host.runtimeFailed = true
+end
+
+local function initializeError(task, message)
+    local context = task.host
+    context.runtimeFailed = true
+    local member = context.flightFactory.members[context]
+    if member then
+        member.pending, member.error = false, message
+        context.flightFactory.revision = (context.flightFactory.revision or 0) + 1
+    end
+end
+
+local function flightError(task, message)
+    task.broker:error("detection", message)
+end
+
+local function serviceError(task)
+    task.owner.failed = true
+end
+
+local function panelError(task, message)
+    local context, entry = task.host, task.owner
+    if not entry.failed then
+        entry.failed, entry.error = true, message
+    end
+end
+
+local function newScheduler(context, schedulerModule)
+    local ok, scheduler = pcall(schedulerModule.new, {
+        fail = function(task, message)
+            task.onError(task, message)
+            addError(context, task.name .. ": " .. message)
+            context.schedulerFailed = true
+        end,
+    })
+    if not ok or type(scheduler) ~= "table" then
+        addError(context, "lib/scheduler.lua: " .. tostring(ok and "constructor did not return a table" or scheduler))
+        return nil
+    end
+    for _, operation in ipairs({ "add", "clear", "run", "state", "stats" }) do
+        if type(rawget(scheduler, operation)) ~= "function" then
+            addError(context, "lib/scheduler.lua: missing operation " .. operation)
+            return nil
+        end
+    end
+    return scheduler
+end
+
+local initialize
+
+--- Build whatever part of the bare page shell is missing, so errors have
+--- somewhere to be shown.
+---@param context AeroGridContext
+local function ensureShell(context)
+    local zone = context.zone
+    if not context.root then
+        context.root = lvgl.box({ x = 0, y = 0, w = zone.w, h = zone.h })
+    end
+    if not context.page then
+        context.page = lvgl.box(context.root, { x = 0, y = 0, w = zone.w, h = zone.h })
+    end
+    if not context.canvas then
+        context.canvas = lvgl.rectangle(context.page, {
+            x = 0,
+            y = 0,
+            w = zone.w,
+            h = zone.h,
+            color = lcd.RGB(0x101316),
+            filled = true,
+        })
+    end
+end
 
 --- Create one AeroGrid host instance for an EdgeTX custom-screen zone.
 ---@param zone AeroGridZone
@@ -585,6 +661,121 @@ local function create(zone, widgetOptions, path)
         fullScreen = isFullScreen(),
     }
 
+    local schedulerModule, schedulerError = loadModule(path, "lib/scheduler.lua", 1)
+    if schedulerModule and type(rawget(schedulerModule, "new")) == "function" then
+        context.scheduler = newScheduler(context, schedulerModule)
+    else
+        addError(context, "lib/scheduler.lua: " .. tostring(schedulerError or "module has no constructor"))
+    end
+    if context.scheduler then
+        -- Construct the presentation shell before firmware paints its own menu.
+        -- Runtime loading remains deferred, but this bounded work is still charged.
+        context.scheduler.add({
+            name = "startup background",
+            owner = "startup background",
+            host = context,
+            onError = hostError,
+            cost = 1,
+            step = function()
+                context.root = lvgl.box({ x = 0, y = 0, w = zone.w, h = zone.h })
+                context.rootBuiltFullscreen = isFullScreen()
+                context.page = lvgl.box(context.root, { x = 0, y = 0, w = zone.w, h = zone.h })
+                context.pageBuiltFullscreen = isFullScreen()
+                context.canvas = lvgl.rectangle(context.page, {
+                    x = 0,
+                    y = 0,
+                    w = zone.w,
+                    h = zone.h,
+                    color = lcd.RGB(0x101316),
+                    filled = true,
+                })
+            end,
+        })
+        context.scheduler.run(getTime(), context.scheduler.budget.capacity, false)
+        context.scheduler.clear()
+    end
+    if not context.scheduler then
+        context.runtimeFailed = true
+        ensureShell(context)
+        showErrors(context)
+        return context
+    end
+    context.initializing, context.stage = true, "initialize"
+    context.initializationTask = {
+        name = "initialize",
+        owner = "initialize",
+        host = context,
+        onError = initializeError,
+        cost = context.scheduler.budget.slots,
+        step = function()
+            context.initializing = nil
+            initialize(context)
+        end,
+    }
+    return context
+end
+
+--- Whether the model's settings are already known, so the layout can load
+--- under the right callback budget.
+local function modelSettingsKnown(context)
+    local factory = context.flightFactory
+    local member = factory and factory.members[context]
+    if not member or not member.modelFilename then
+        return true
+    end
+    local owner, preload = factory.broker, factory.preload
+    return (owner and owner.documentLoaded) or (preload and preload.modelFilename == member.modelFilename) or false
+end
+
+--- Read the model's settings document ahead of the layout: one callback builds
+--- the store and the next parses the file. Failures are ignored here because the
+--- flight broker reports them when it loads the document itself.
+local function advanceModelSettings(context)
+    local factory, path = context.flightFactory, context.path
+    local filename = factory.members[context].modelFilename
+    local store = context.modelSettingsPreload
+    if not store then
+        local ok, created = pcall(function()
+            local storeModule = assert(loadModule(path, "lib/model_settings_store.lua", 1))
+            return storeModule.new(path, context.yaml, {
+                modelFilename = function()
+                    return filename
+                end,
+                flightConfig = context.flightConfig,
+            })
+        end)
+        if ok and created then
+            context.modelSettingsPreload = created
+            return
+        end
+    else
+        local ok, document, info = pcall(store.load, store, filename)
+        if ok and document then
+            local flight = document.flight
+            factory.preload = {
+                modelFilename = filename,
+                document = document,
+                info = info,
+                liveDangerously = type(flight) == "table" and flight.liveDangerously == true,
+            }
+        end
+    end
+    context.modelSettingsPreload = nil
+    context.stage = "theme-read"
+end
+
+--- Begin a staged load, first reading the model's settings if they are unknown.
+local function startLoad(context)
+    context.dashboardLoader.beginLoad(context)
+    context.modelSettingsPreload = nil
+    if not modelSettingsKnown(context) then
+        context.stage = "model-settings"
+    end
+end
+
+initialize = function(context)
+    local path, flightFactory = context.path, context.flightFactory
+    context.stage = nil
     local package, packageError = loadModule(path, "lib/package.lua")
     if
         package
@@ -625,7 +816,9 @@ local function create(zone, widgetOptions, path)
         context.layoutValidator = runtimeModule("lib/layout.lua")
         context.layoutStore = runtimeModule("lib/layout_store.lua")
         context.flightConfig = runtimeModule("lib/flight_config.lua")
+        context.nativeBudget = runtimeModule("lib/native_budget.lua")
         context.aeroMenuModule = runtimeModule("lib/aerogrid_menu.lua")
+        context.gesture = runtimeModule("lib/gesture.lua")
         local flightRegistration = runtimeModule("lib/flight_registration.lua")
         if flightRegistration then
             context.configureFlight = function(host)
@@ -635,12 +828,13 @@ local function create(zone, widgetOptions, path)
                     member.pending, member.error = false, tostring(message)
                     host.flightFactory.revision = (host.flightFactory.revision or 0) + 1
                     addError(host, "flight: " .. tostring(message))
-                else
-                    pumpFlight(host)
                 end
             end
         end
         context.panelHost = runtimeModule("lib/panel_host.lua")
+        if context.panelHost and context.scheduler then
+            context.panelHost.SLOTS = context.scheduler.budget.slots
+        end
         context.chartColumns = runtimeModule("lib/chart_columns.lua")
         context.chartColumnsRenderer = runtimeModule("lib/chart_columns_renderer.lua")
         local typography = runtimeModule("lib/typography.lua")
@@ -682,7 +876,7 @@ local function create(zone, widgetOptions, path)
                 loadModule = loadModule,
                 isFullScreen = isFullScreen,
                 readThemeDefinition = readThemeDefinition,
-            }, { "beginLoad", "advanceLoad", "panelRect", "buildPanel" })
+            }, { "beginLoad", "advanceLoad", "panelRect", "reservedFor", "buildPanel" })
         end
         if context.dashboardLoader then
             context.dashboardLifecycle = bindHost(lifecycle, "lib/dashboard_lifecycle.lua", {
@@ -693,6 +887,7 @@ local function create(zone, widgetOptions, path)
                 reservedCorner = reservedCorner,
                 errorTop = errorTop,
                 panelRect = context.dashboardLoader.panelRect,
+                reservedFor = context.dashboardLoader.reservedFor,
                 buildPanel = context.dashboardLoader.buildPanel,
             }, {
                 "updateEmptyHint",
@@ -720,13 +915,6 @@ local function create(zone, widgetOptions, path)
         end
     end
 
-    context.root = lvgl.box({
-        x = 0,
-        y = 0,
-        w = zone.w,
-        h = zone.h,
-    })
-    context.rootBuiltFullscreen = isFullScreen()
     local info = model and model.getInfo and model.getInfo()
     flightFactory.members[context] = {
         modelFilename = info and info.filename,
@@ -740,20 +928,9 @@ local function create(zone, widgetOptions, path)
     -- Everything the dashboard draws lives inside a page, so a reload can
     -- discard the page wholesale and build the next one somewhere the discarded
     -- one's deferred cleanup cannot reach. The root is normally retained.
-    context.page = lvgl.box(context.root, { x = 0, y = 0, w = zone.w, h = zone.h })
-    context.pageBuiltFullscreen = isFullScreen()
-
-    context.canvas = lvgl.rectangle(context.page, {
-        x = 0,
-        y = 0,
-        w = zone.w,
-        h = zone.h,
-        color = lcd.RGB(0x101316),
-        filled = true,
-    })
-
     if
-        not context.packageInfo
+        context.runtimeFailed
+        or not context.packageInfo
         or not context.grid
         or not context.yaml
         or not context.layoutValidator
@@ -761,7 +938,9 @@ local function create(zone, widgetOptions, path)
         or not context.flightConfig
         or not context.configureFlight
         or not context.aeroMenuModule
+        or not context.gesture
         or not context.panelHost
+        or not context.scheduler
         or not context.themeBuilder
         or not context.primitives
         or not context.dashboardLoader
@@ -778,10 +957,8 @@ local function create(zone, widgetOptions, path)
         addError(context, "AeroGrid runtime module failed to load")
         showErrors(context)
     else
-        context.dashboardLoader.beginLoad(context)
+        startLoad(context)
     end
-
-    return context
 end
 
 --- Apply native host options; changing Layout or Theme rebuilds safely.
@@ -795,21 +972,50 @@ local function update(context, widgetOptions)
     if context.runtimeFailed then
         return
     end
+    -- EdgeTX calls update as it enters fullscreen, before it redraws without
+    -- its own icon. Showing the built button here, outside the scheduler,
+    -- is the one native call update makes, and only on that entry.
+    if context.aerogridMenu and context.chromeRoot and isFullScreen() and context.menuVisibleFullscreen ~= true then
+        lvgl.show(context.chromeRoot)
+        context.aeroMenuModule.sync(context)
+        context.menuVisibleFullscreen = true
+    end
 
     if name ~= context.layoutName or themeMode ~= context.themeMode then
-        local member = context.flightFactory.members[context]
-        member.pending = true
-        context.flightFactory.revision = (context.flightFactory.revision or 0) + 1
-        context.editorStash = nil
-        if context.editorUi then
-            context.editorUiModule.close(context, true)
-            context.editorController.restorePreview(context)
-            context.editorSession = nil
-        end
-        context.layoutName = name
-        context.themeMode = themeMode
-        context.reloadState = "clear"
+        context.optionsRequest = { layoutName = name, themeMode = themeMode }
+    else
+        context.optionsRequest = nil
     end
+end
+
+--- Stop dashboard services and panels for the rest of this callback. Host
+--- work that may replace or retire their owners calls this; they are enrolled
+--- afresh on the next callback.
+---@param context AeroGridContext
+local function closeDashboard(context)
+    context.dashboardClosed, context.servicesHold, context.panelsHold = true, true, true
+end
+
+local function optionsStep(task)
+    local context = task.host
+    local request = context.optionsRequest
+    context.optionsRequest = nil
+    closeDashboard(context)
+    local member = context.flightFactory.members[context]
+    member.pending = true
+    context.flightFactory.revision = (context.flightFactory.revision or 0) + 1
+    context.editorStash, context.editorTransitionRequest, context.modelSettingsRequest = nil, nil, nil
+    context.logOpenRequest = nil
+    if context.locationRequest and context.locationRequest.kind == "open" then
+        context.locationRequest = nil
+    end
+    if context.editorUi then
+        context.editorUiModule.close(context, true)
+        context.editorController.restorePreview(context)
+        context.editorSession = nil
+    end
+    context.layoutName, context.themeMode = request.layoutName, request.themeMode
+    context.reloadState = "clear"
 end
 --- Translate compact native option keys into user-facing labels.
 ---@param name string
@@ -828,35 +1034,28 @@ end
 ---@param context AeroGridContext
 ---@param widgetEvent any
 ---@return boolean consumed
-local function event(context, widgetEvent, touchState)
+local function handleEvent(context, widgetEvent, touchState)
     if context.runtimeFailed then
         return false
-    end
-    if context.modelSettingsUi then
-        return context.modelSettingsUiModule.handle(context, widgetEvent, touchState)
-    end
-    if context.aeroMenuModule and context.aeroMenuModule.handle(context, widgetEvent, touchState) then
-        return true
     end
     if context.editorUi then
         return context.editorUiModule.handle(context, widgetEvent, touchState)
     end
     if context.locationDetails then
-        return context.locationDetailsModule.handle(context, widgetEvent)
+        return context.locationDetailsModule.handle(context, widgetEvent, touchState)
     end
     if context.logViewer then
         return context.logViewerModule.handle(context, widgetEvent, touchState)
     end
     if context.editorController.editorEntryHit(context, widgetEvent, touchState) then
-        context.editorController.openEditor(context)
+        context.editorTransitionRequest = "open"
         return true
     end
 
-    if widgetEvent == _G.EVT_TOUCH_FIRST then
-        context.panelTouchSlid = false
-    elseif widgetEvent == _G.EVT_TOUCH_SLIDE then
-        context.panelTouchSlid = true
-    elseif widgetEvent == _G.EVT_TOUCH_TAP and touchState and not context.panelTouchSlid and isFullScreen() then
+    local tap
+    context.panelPress, tap = context.gesture.track(context.panelPress, widgetEvent, touchState)
+    if tap and isFullScreen() then
+        local touchState = tap
         for _, entry in ipairs(context.panels) do
             local logPanel = entry.placement.type == "host-diagnostics" and entry.settings.section == "log"
             if not entry.failed and (entry.placement.type == "navigation" or logPanel) then
@@ -869,45 +1068,27 @@ local function event(context, widgetEvent, touchState)
                     and touchState.y < rect.y + rect.h
                 then
                     if logPanel then
-                        local module = context.logViewerModule
-                        local moduleError
-                        if not module then
-                            module, moduleError = loadModule(context.path, "lib/log_viewer.lua", 1)
-                        end
-                        if not module then
-                            addError(context, "diagnostics log: " .. tostring(moduleError))
-                            showErrors(context)
-                        else
-                            context.logViewerModule = module
-                            local ok, openError = pcall(module.open, context)
-                            if not ok then
-                                module.close(context)
-                                addError(context, "diagnostics log: " .. tostring(openError))
-                                showErrors(context)
-                            end
-                        end
+                        local info = model and model.getInfo and model.getInfo()
+                        context.logOpenRequest = { page = context.page, modelFilename = info and info.filename }
                         return true
                     end
                     if not entry.instance.feed or not entry.instance.feed.fix then
                         return true
                     end
-                    local module = context.locationDetailsModule
-                    local moduleError
-                    if not module then
-                        module, moduleError = loadModule(context.path, "lib/location_details.lua", 1)
-                    end
-                    if not module then
-                        addError(context, moduleError)
-                        showErrors(context)
-                    else
-                        context.locationDetailsModule = module
-                        local ok, openError = pcall(module.open, context, entry.instance.feed, entry.settings.accent)
-                        if not ok then
-                            module.close(context)
-                            addError(context, "location details: " .. tostring(openError))
-                            showErrors(context)
-                        end
-                    end
+                    local view = entry.instance.feed
+                    local info = model and model.getInfo and model.getInfo()
+                    context.locationRequest = {
+                        kind = "open",
+                        page = context.page,
+                        modelFilename = info and info.filename,
+                        accent = entry.settings.accent,
+                        view = {
+                            fix = view.fix,
+                            state = view.state,
+                            latitude = view.latitude,
+                            longitude = view.longitude,
+                        },
+                    }
                     return true
                 end
             end
@@ -929,178 +1110,364 @@ local function event(context, widgetEvent, touchState)
     return false
 end
 
---- Dispatch due services and panels in one round-robin work queue.
---- Returns the number dispatched so tests can observe the scheduling.
+--- Accept input, not synchronous consumption; EdgeTX supplies it through refresh.
+local function event(context, widgetEvent, touchState)
+    if context.runtimeFailed or not isFullScreen() or widgetEvent == nil or widgetEvent == 0 then
+        return false
+    end
+    local input = { event = widgetEvent, now = getTime() }
+    if touchState then
+        input.touch = {
+            x = touchState.x,
+            y = touchState.y,
+            startX = touchState.startX,
+            startY = touchState.startY,
+            slideX = touchState.slideX,
+            slideY = touchState.slideY,
+            tapCount = touchState.tapCount,
+            swipeLeft = touchState.swipeLeft,
+            swipeRight = touchState.swipeRight,
+            swipeUp = touchState.swipeUp,
+            swipeDown = touchState.swipeDown,
+        }
+    end
+    context.inputQueue = context.inputQueue or {}
+    context.inputQueue[#context.inputQueue + 1] = input
+    return true
+end
+
+local function editorWorkNeeded(state)
+    return state
+        and (
+            state.buildStage
+            or state.saving
+            or state.drawerBuild ~= nil
+            or state.drawerPending
+            or state.nativeInput
+            or state.exitCommand
+            or state.previewPending
+            or state.previewRefresh
+        )
+end
+
+--- Whether pending host work may replace the owners of services and panels:
+--- options, arming reloads, session resets, loading and reloading wait for no
+--- stale owner to run in between.
+local function servicesHeld(context, hidden)
+    return context.dashboardClosed
+        or context.optionsRequest ~= nil
+        or context.modelArmingReload
+        or context.sessionResetPending
+        or context.stage ~= nil
+        or context.reloadState ~= nil
+        or hidden and context.reflowIndex ~= nil
+end
+
+--- Panels also wait while their placement or previews change, stay behind a
+--- visible modal overlay, and yield callbacks with queued fullscreen input
+--- to the surface that input targets.
+local function panelsHeld(context, hidden)
+    return not hidden and context.inputPending
+        or context.lifecycleRequest ~= nil
+        or context.editorTransitionRequest ~= nil
+        or context.reflowIndex ~= nil
+        or context.appRebuild ~= nil
+        or editorWorkNeeded(context.editorUi)
+        or not hidden and (context.modelSettingsUi ~= nil or context.logViewer ~= nil)
+end
+
+--- A session reset waits for a load or reload to finish, then runs before other host work.
+local function sessionResetDue(context)
+    return context.sessionResetPending and not (context.stage or context.reloadState)
+end
+
+--- Lifecycle steps wait for arming reloads, due session resets, open modals
+--- and editors, and for the foreground surface to settle.
+local function lifecycleHeld(context, hidden)
+    if
+        context.modelArmingReload
+        or sessionResetDue(context)
+        or context.modelSettingsUi
+        or context.editorUi and (hidden and context.editorUi.saving or not hidden)
+    then
+        return true
+    end
+    if hidden then
+        return false
+    end
+    local menu = context.aerogridMenu
+    if menu and (menu.pending or menu.action or menu.dismiss or menu.selectionDirty) then
+        return true
+    end
+    local built = not context.reloadState
+        and (context.pageBuiltFullscreen or context.rootBuiltFullscreen or context.nativeDialogsCreated)
+    if not (context.locationDetails or context.logViewer or context.editorStash or built) then
+        return false
+    end
+    local fullscreen = isFullScreen()
+    return context.locationDetails and (not fullscreen or context.reloadState)
+        or context.logViewer and (not fullscreen or context.reloadState or context.logViewer.width ~= context.zone.w - 16 or context.logViewer.height ~= context.zone.h)
+        or context.editorStash and fullscreen and context.document and not (context.stage or context.reloadState)
+        or built and not fullscreen
+end
+
+--- Decide the holds once per callback and again after every step that may
+--- change them, so each task's readiness only reads a flag. `pruneRequests`
+--- decides the lifecycle barrier at callback start, so `runCallback` skips it.
+local function updateHolds(context, hidden, keepLifecycle)
+    local services = servicesHeld(context, hidden)
+    context.servicesHold = services
+    context.panelsHold = services or panelsHeld(context, hidden)
+    if not keepLifecycle then
+        context.lifecycleHold = context.lifecycleRequest ~= nil and lifecycleHeld(context, hidden)
+    end
+end
+
+--- Task steps that adapt the panel and service contracts to the scheduler.
+--- Each task's `owner` is the service instance or panel entry it runs for.
+local function serviceReady(task, _, hidden)
+    local instance = task.owner
+    task.cost, task.minCost = instance.updateCost, instance.updateMinCost
+    return not task.host.servicesHold and not instance.failed and instance.count ~= 0
+end
+
+--- Whether a panel's finishing work is ready now; it then runs before refreshes resume.
+local function finishPending(context, entry)
+    local module = entry.module
+    local pending = rawget(module, "finishPending")
+    if type(pending) ~= "function" then
+        return false
+    end
+    local ok, message, result, minimum = context.panelHost.dispatch(entry, "finishPending")
+    if not ok then
+        addError(context, entry.placement.id .. ": finishPending: " .. tostring(message))
+        context.schedulerFailed = true
+        return false
+    end
+    return result, minimum
+end
+
+local function instanceField(entry, key)
+    if type(entry.instance) == "table" then
+        return rawget(entry.instance, key)
+    end
+end
+
+local function refreshReady(task, _, hidden)
+    local entry = task.owner
+    if hidden or entry.failed or task.host.panelsHold then
+        return false
+    end
+    task.cost = instanceField(entry, "refreshCost") or rawget(entry.module, "refreshCost") or 1
+    task.minCost = instanceField(entry, "refreshMinCost") or rawget(entry.module, "refreshMinCost")
+    local pending = finishPending(task.host, entry)
+    return not entry.failed and not pending
+end
+
+local function finishReady(task, _, hidden)
+    local entry = task.owner
+    if hidden or entry.failed or task.host.panelsHold then
+        return false
+    end
+    local pending, minimum = finishPending(task.host, entry)
+    if entry.failed or not pending then
+        return false
+    end
+    -- The next stage may need more than the module's default minimum.
+    task.minCost = minimum or rawget(entry.module, "finishMinCost")
+    return true
+end
+
+local function backgroundReady(task, _, hidden)
+    local entry = task.owner
+    if not hidden or entry.failed or task.host.panelsHold then
+        return false
+    end
+    -- A panel that declares a minimum is charged what it reports.
+    local minimum = instanceField(entry, "backgroundMinCost") or rawget(entry.module, "backgroundMinCost")
+    task.cost, task.minCost = minimum and "variable" or 1, minimum
+    return true
+end
+
+local function panelStep(task, now, granted)
+    local context, entry, eventName = task.host, task.owner, task.event
+    local ok, message, interval, again, used = context.panelHost.dispatch(entry, eventName, false, granted)
+    if eventName == "finish" then
+        -- Ending a cycle sets when the next refresh is due.
+        if ok and type(interval) == "number" then
+            entry.nextRefresh = now + entry.interval
+            if entry.refreshTask then
+                entry.refreshTask.due = entry.nextRefresh
+            end
+        end
+    elseif eventName == "refresh" then
+        entry.nextRefresh = now + entry.interval
+    end
+    if not ok then
+        error(message or "panel failed", 0)
+    end
+    return used, again
+end
+
+local NONE = {}
+
+--- Enrol the services that have subscribers and the live panels, in that
+--- order, for one run. Membership is read from the host's own tables on every
+--- callback, so a panel added, replaced or retired by the loader or editor
+--- needs no registration, and a service gains its first subscriber's turn on
+--- the next callback.
+--- Held owners wait for the next callback; a hold that starts later in the
+--- callback is seen by the ready checks.
 ---@param context AeroGridContext
----@return integer dispatched
-local function dispatchDue(context, hidden)
-    local panels = context.panels
+local function enrolTasks(context, registry, support)
+    local scheduler = context.scheduler
+    local order = context.servicesHold and NONE or registry.order
+    for index = 1, #order do
+        local instance = order[index]
+        if instance.count ~= 0 then
+            local task = instance.task
+            if not task or task.registry ~= registry then
+                task = {
+                    name = instance.id,
+                    owner = instance,
+                    onError = serviceError,
+                    registry = registry,
+                    host = context,
+                    step = support.step,
+                    ready = serviceReady,
+                }
+                instance.task = task
+            end
+            task.due, task.failed = instance.due, instance.failed
+            scheduler.add(task)
+        end
+    end
+    local panels = context.panelsHold and NONE or context.panels
+    for index = 1, #panels do
+        local entry = panels[index]
+        local module = entry.module
+        if type(rawget(module, "refresh")) == "function" then
+            local task = entry.refreshTask
+            if not task then
+                task = {
+                    name = entry.placement.id .. ": refresh",
+                    owner = entry,
+                    onError = panelError,
+                    host = context,
+                    event = "refresh",
+                    step = panelStep,
+                    ready = refreshReady,
+                }
+                entry.refreshTask = task
+            end
+            task.due, task.failed = entry.nextRefresh or 0, entry.failed
+            scheduler.add(task)
+        end
+        if type(rawget(module, "finish")) == "function" then
+            local task = entry.finishTask
+            if not task then
+                task = {
+                    name = entry.placement.id .. ": finish",
+                    owner = entry,
+                    onError = panelError,
+                    host = context,
+                    event = "finish",
+                    cost = "variable",
+                    step = panelStep,
+                    ready = finishReady,
+                }
+                entry.finishTask = task
+            end
+            task.failed = entry.failed
+            scheduler.add(task)
+        end
+        if type(rawget(module, "background")) == "function" then
+            local task = entry.backgroundTask
+            if not task then
+                task = {
+                    name = entry.placement.id .. ": background",
+                    owner = entry,
+                    onError = panelError,
+                    host = context,
+                    event = "background",
+                    step = panelStep,
+                    ready = backgroundReady,
+                }
+                entry.backgroundTask = task
+            end
+            task.failed = entry.failed
+            scheduler.add(task)
+        end
+    end
+end
+
+-- Further segments of scheduler capacity a callback may run past EdgeTX's
+-- 20000-instruction limit when the model enables "Pre-release features".
+local EXTENDED_SEGMENTS = 4
+
+local function liveDangerously(context)
+    if context.liveDangerouslyFailed or not context.nativeBudget then
+        return false
+    end
+    local factory = context.flightFactory
+    local owner = factory and factory.broker
+    if owner and owner.documentLoaded then
+        local flight = owner.document and owner.document.flight
+        return type(flight) == "table" and flight.liveDangerously == true
+    end
+    -- Before the flight broker has its document, use the copy read ahead of the layout.
+    local preload, member = factory and factory.preload, factory and factory.members[context]
+    return preload ~= nil
+        and member ~= nil
+        and preload.modelFilename == member.modelFilename
+        and preload.liveDangerously == true
+end
+
+--- Run the enrolled tasks for one callback in `1 + segments` segments, then
+--- release them and show any failure.
+local function runScheduled(context, hidden, segments)
+    local scheduler = context.scheduler
+    local _, _, _, failure = scheduler.run(getTime(), scheduler.budget.capacity, hidden or false, {
+        segments = segments,
+        cross = context.nativeBudget and context.nativeBudget.cross,
+    })
+    context.remainingSlots = scheduler.remaining
+    if failure then
+        context.liveDangerouslyFailed = true
+        addError(context, "extended callback budget: " .. failure)
+        context.schedulerFailed = true
+    end
+    scheduler.clear()
+    if context.schedulerFailed then
+        context.schedulerFailed = nil
+        ensureShell(context)
+        showErrors(context)
+    end
+end
+
+--- Add services and panels after the tasks already enrolled, and run them
+--- all in one fair ring.
+local function runTasks(context, hidden)
     local registry, support = context.serviceRuntime, context.servicesModule
-    if not registry or not support then
-        return 0
-    end
-    local serviceCount = #registry.order
-    local count = serviceCount + #panels
-    if count == 0 then
-        return 0
+    if registry and support then
+        enrolTasks(context, registry, support)
     end
 
-    local now = getTime()
-    local cursor = context.workCursor or 1
-    if cursor > count then
-        cursor = 1
-    end
-
-    local dispatched, failures, examined, deferred = 0, false, 0, nil
-    local stats = context.schedulerStats
-    local requested, denied = 0, 0
-    local window = stats and stats.window
-    if stats and not window then
-        window = {}
-        stats.window = window
-    end
-    -- Slots already spent this callback belong to the flight detector.
-    local flight = window and support.SLOTS - context.remainingSlots
-    if flight and flight > 0 then
-        window.flight = (window.flight or 0) + flight
-    end
-
-    while examined < count do
-        examined = examined + 1
-        if cursor <= serviceCount then
-            local service = registry.order[cursor]
-            local due = stats and not service.failed and service.count ~= 0 and now >= service.due
-            local allowance = deferred and 0 or context.remainingSlots
-            local id, message, used = support.dispatch(registry, service, now, allowance)
-            if due and service.updateCost ~= 0 then
-                requested = requested + 1
-                if not id and used == 0 then
-                    denied = denied + 1
-                end
-            end
-            if not id and used == 0 then
-                deferred = deferred or cursor
-            end
-            if id then
-                context.remainingSlots = context.remainingSlots - used
-                if window and used > 0 then
-                    window[service] = (window[service] or 0) + used
-                end
-                if message then
-                    addError(context, id .. ": " .. message)
-                    failures = true
-                end
-            end
-        else
-            local entry = panels[cursor - serviceCount]
-            local owner = context.refreshOwner
-            local waiting = not hidden and owner and entry ~= owner and entry.module.id == owner.module.id
-            local eventName = hidden and "background" or "refresh"
-            if
-                entry
-                and not entry.failed
-                and not waiting
-                and (hidden or now >= (entry.nextRefresh or 0))
-                and type(rawget(entry.module, eventName)) == "function"
-            then
-                local cost = hidden and 1
-                    or rawget(entry.instance, "refreshCost")
-                    or rawget(entry.module, "refreshCost")
-                    or 1
-                local granted = support.grant(cost, deferred and 0 or context.remainingSlots)
-                if stats and cost ~= 0 then
-                    requested = requested + 1
-                    if granted == 0 then
-                        denied = denied + 1
-                    end
-                end
-                if granted == 0 and cost ~= 0 then
-                    deferred = deferred or cursor
-                else
-                    local ok, message, _, unfinished, used =
-                        context.panelHost.dispatch(entry, eventName, false, granted)
-                    if cost ~= "variable" then
-                        used = granted
-                    end
-                    if ok and not support.consumption(used, granted) then
-                        ok, message = false, "refresh consumption must be whole slots within the grant"
-                        entry.failed, entry.error = true, message
-                    end
-                    local spent = ok and used or granted
-                    context.remainingSlots = context.remainingSlots - spent
-                    if window and spent > 0 then
-                        window[entry] = (window[entry] or 0) + spent
-                    end
-                    dispatched = dispatched + 1
-                    if not hidden then
-                        entry.nextRefresh = now + entry.interval
-                    end
-                    if not ok and message then
-                        addError(context, entry.placement.id .. ": " .. eventName .. ": " .. message)
-                        failures = true
-                    end
-                    if not hidden then
-                        if ok and unfinished and not rawget(entry.module, "independentRefresh") then
-                            context.refreshOwner = entry
-                        elseif context.refreshOwner == entry then
-                            context.refreshOwner = nil
-                        end
-                    end
-                end
-            end
-        end
-
-        cursor = cursor % count + 1
-    end
-
-    -- Resume from where we stopped so every panel is served in turn.
-    context.workCursor = deferred or cursor
-    if stats then
-        stats.callbacks = stats.callbacks + 1
-        stats.used = stats.used + support.SLOTS - context.remainingSlots
-        stats.requested, stats.denied = stats.requested + requested, stats.denied + denied
-        if now - stats.started >= 100 then
-            stats.utilization = stats.used * 100 / (stats.callbacks * support.SLOTS)
-            stats.deferrals = stats.requested > 0 and stats.denied * 100 / stats.requested or 0
-            stats.revision = stats.revision + 1
-            stats.consumers, stats.window = window, nil
-            stats.capacity, stats.seconds = stats.callbacks * support.SLOTS, (now - stats.started) / 100
-            stats.started, stats.callbacks, stats.used, stats.requested, stats.denied = now, 0, 0, 0, 0
-        end
-    end
-    if failures then
-        showErrors(context)
-    end
-
-    return dispatched
+    -- Extra segments run past EdgeTX's per-callback limit in the same
+    -- callback; only pending and deferred work continues.
+    runScheduled(context, hidden, liveDangerously(context) and EXTENDED_SEGMENTS or 0)
 end
 
---- Give one due service the remaining allowance during modal UI work.
----@param context AeroGridContext
----@return string? id Service updated, for tests and error reporting.
-local function updateServices(context)
-    local registry = context.serviceRuntime
-    if not registry then
-        return nil
-    end
-
-    local id, serviceError, used = context.servicesModule.update(registry, getTime(), context.remainingSlots)
-    if used then
-        context.remainingSlots = context.remainingSlots - used
-    end
-    if serviceError then
-        addError(context, id .. ": " .. serviceError)
-        showErrors(context)
-    end
-
-    return id
+local function flightReady(task)
+    task.cost = task.broker.documentLoaded and 1 or task.host.scheduler.budget.slots
+    return true
 end
 
-pumpFlight = function(context, inputPending)
-    context.flightPolled = nil
+local function pumpFlight(task, now, granted)
+    local context = task.host
     local owner = context.flightFactory and context.flightFactory.broker
     if not owner then
-        return false
+        return
     end
     local identityOk, filename = pcall(owner.identity, owner)
     if not identityOk then
@@ -1111,17 +1478,22 @@ pumpFlight = function(context, inputPending)
             showErrors(context)
         end
         context.flightReportedRevision = nil
-        return false
+        return
     end
     if filename ~= owner.filename then
         owner:reset(filename)
+        closeDashboard(context)
+        if granted < context.scheduler.budget.slots then
+            return nil, true
+        end
     end
     if not owner.documentLoaded then
         if not owner.store then
             local storeModule, storeError = loadModule(context.path, "lib/model_settings_store.lua", 1)
             if not storeModule then
                 owner.loadError, owner.documentLoaded = storeError, true
-                return true
+                closeDashboard(context)
+                return nil, true
             end
             local created, store = pcall(storeModule.new, context.path, context.yaml, {
                 modelFilename = function()
@@ -1132,11 +1504,20 @@ pumpFlight = function(context, inputPending)
             })
             if not created then
                 owner.loadError, owner.documentLoaded = tostring(store), true
-                return true
+                closeDashboard(context)
+                return nil, true
             end
             owner.store = store
         end
-        local document, info = owner.store:load(filename)
+        local preload = context.flightFactory.preload
+        local document, info
+        if preload and preload.document and preload.modelFilename == filename then
+            -- Already parsed ahead of the layout; reuse it once.
+            document, info = preload.document, preload.info
+            preload.document, preload.info = nil, nil
+        else
+            document, info = owner.store:load(filename)
+        end
         if document then
             owner:setDocument(document)
             if type(info) == "table" and info.recovered then
@@ -1145,63 +1526,21 @@ pumpFlight = function(context, inputPending)
         else
             owner.loadError, owner.documentLoaded = tostring(info), true
         end
-        return true
+        closeDashboard(context)
+        return nil, true
     end
     local resetConfigured = owner.document and owner.document.sessionReset and owner.document.sessionReset ~= ""
     if (context.stage or context.reloadState) and not owner.session and not resetConfigured then
-        return false
+        return
     end
-    local now = getTime()
-    if resetConfigured or owner.resetRuntime or owner.errors.reset then
-        local resetOk, resetError = pcall(owner.pollReset, owner, now)
-        if not resetOk then
-            owner:error("reset", resetError)
-        end
-    end
-    if not owner.session and owner.dormantRevision == context.flightFactory.revision then
-        if not owner.state.resetError and not context.flightErrorText then
-            return false
-        end
-    end
-    if owner.smartRuntime then
-        if inputPending or context.flightDashboardDue then
-            context.flightDashboardDue = nil
-            return false
-        end
-        if owner.lastTick and now >= owner.lastTick and now < (owner.nextPumpAt or 0) then
-            return false
-        end
-    end
-    local ok, message = pcall(owner.tick, owner, now, filename)
-    if context.remainingSlots then
-        context.remainingSlots = math.max(0, context.remainingSlots - 1)
-    end
-    if not ok then
-        owner:error("detection", message)
-    end
-    -- Share ordinary polling capacity, not whole chart callbacks. Construction
-    -- still needs its own slice, with a fair turn for each widget's UI work.
-    local reserved = false
-    if owner.smartRuntime then
-        context.flightPolled = true
-        owner.nextPumpAt = now + 10
-        reserved = not not (
-            context.stage
-            or context.reloadState
-            or context.editorUi
-            or context.modelSettingsUi
-            or context.logViewer
-            or context.appRebuild
-            or context.reflowIndex
-        )
-        context.flightDashboardDue = reserved or nil
-    end
+    -- The broker's own tasks poll and decide after this setup.
+    owner:setup(now, owner.session or owner.dormantRevision ~= context.flightFactory.revision)
     local state = owner.view
     if
         context.flightReportedRevision == (state.diagnosticRevision or 0)
         and context.flightReportedEpoch == state.epoch
     then
-        return reserved
+        return
     end
     context.flightReportedRevision, context.flightReportedEpoch = state.diagnosticRevision or 0, state.epoch
     local messages = {}
@@ -1225,7 +1564,15 @@ pumpFlight = function(context, inputPending)
         end
         showErrors(context)
     end
-    return reserved
+    return
+end
+
+--- Flight may reset the model identity or request an arming reload or a
+--- session reset, which hold the dashboard for the rest of the callback.
+local function flightStep(task, now, granted, hidden)
+    local used, again = pumpFlight(task, now, granted)
+    updateHolds(task.host, hidden)
+    return used, again
 end
 
 local function openModelSettings(context)
@@ -1300,14 +1647,17 @@ local function openModelSettings(context)
         smartStatus = function()
             return owner.view.smartStatus
         end,
-        save = function(values, revision, modelFilename, armedCondition, sessionReset)
+        prepare = function(values, revision, modelFilename, armedCondition, sessionReset)
             local ok, message = pcall(function()
                 owner:validateOutput(values.flightSwitch, armedCondition, sessionReset)
             end)
             if not ok then
                 return false, tostring(message)
             end
-            return owner.store:save(modelFilename, revision, values, armedCondition, sessionReset)
+            return owner.store:prepare(modelFilename, revision, values, armedCondition, sessionReset)
+        end,
+        commit = function(prepared)
+            return owner.store:commit(prepared)
         end,
         saved = function(saved)
             owner:setDocument(saved)
@@ -1325,16 +1675,21 @@ local function openModelSettings(context)
     end
 end
 
-local function prepareAeroMenu(context, widgetEvent)
+local function syncChrome(context, fullscreen)
+    if fullscreen then
+        lvgl.show(context.chromeRoot)
+        context.aeroMenuModule.sync(context)
+    else
+        lvgl.hide(context.chromeRoot)
+    end
+end
+
+local function prepareAeroMenu(context)
     if context.editorUi and context.aeroMenuModal == true and isFullScreen() then
         return false
     end
     if context.chromeRoot then
-        if isFullScreen() then
-            lvgl.show(context.chromeRoot)
-        else
-            lvgl.hide(context.chromeRoot)
-        end
+        syncChrome(context, isFullScreen())
     end
     if not context.theme or context.runtimeFailed or context.stage or context.reloadState then
         return false
@@ -1360,16 +1715,16 @@ local function prepareAeroMenu(context, widgetEvent)
                 return info and info.filename
             end,
             modelSettings = function()
-                openModelSettings(context)
+                context.modelSettingsRequest = { modelFilename = context.aeroMenuHandlers.modelFilename() }
             end,
             uiSetup = function()
-                context.editorController.openEditor(context)
+                context.editorTransitionRequest = "open"
             end,
             modal = function()
-                return context.modelSettingsUi ~= nil
-                    or context.locationDetails ~= nil
-                    or context.logViewer ~= nil
-                    or context.editorUi ~= nil
+                return context.modelSettingsUi ~= nil or context.locationDetails ~= nil or context.logViewer ~= nil
+            end,
+            editing = function()
+                return context.editorUi ~= nil
             end,
         }
     end
@@ -1378,7 +1733,8 @@ local function prepareAeroMenu(context, widgetEvent)
         context.aeroMenuParent = nil
     end
     context.aeroMenuHandlers.parent = context.chromeRoot
-    local fullscreen, modal = isFullScreen(), context.aeroMenuHandlers.modal()
+    local handlers = context.aeroMenuHandlers
+    local fullscreen, modal = isFullScreen(), handlers.modal() or handlers.editing()
     if
         context.aeroMenuParent ~= context.root
         or context.aeroMenuHeight ~= height
@@ -1397,7 +1753,7 @@ local function prepareAeroMenu(context, widgetEvent)
         context.aeroMenuFullscreen, context.aeroMenuModal = fullscreen, modal
         context.chromeRoot:set({ w = context.zone.w, h = context.zone.h })
         -- Keep mask construction separate from idle reload work without dropping input.
-        if created and (not widgetEvent or widgetEvent == 0) then
+        if created then
             return true
         end
     end
@@ -1411,16 +1767,11 @@ end
 local function suspendArmingEditor(context)
     if context.modelArmingReload then
         if context.editorUi and context.editorUi.saving then
-            context.editorController.advanceEditor(context)
+            context.uiRequest = "editor"
             return true
         end
-        context.modelArmingReload = nil
-        if context.editorUi then
-            context.editorStash = context.editorSession
-            context.editorUiModule.close(context, false)
-            context.editorController.restorePreview(context)
-            context.editorSession = nil
-        end
+        context.editorTransitionRequest = "suspend"
+        return true
     end
     return false
 end
@@ -1436,7 +1787,6 @@ local function pumpSessionReset(context)
     if not job then
         job = { service = 1, item = 1, panel = 1, now = getTime() }
         context.sessionResetJob = job
-        context.refreshOwner = nil
     end
     local runtime = context.serviceRuntime
     local service = runtime and runtime.order[job.service]
@@ -1484,50 +1834,53 @@ local function pumpSessionReset(context)
     return true
 end
 
---- Advance the staged loader, then keep geometry and panels synchronized.
---- At most one loading step runs per call, so the instruction budget is never
---- exceeded no matter how large the layout is.
----@param context AeroGridContext
----@param widgetEvent? number Fullscreen input supplied by EdgeTX.
----@param touchState? table
-local function refresh(context, widgetEvent, touchState)
-    context.remainingSlots = 8
-    if pumpFlight(context, widgetEvent ~= nil and widgetEvent ~= 0) then
-        return
-    end
+--- A session reset runs before other host work.
+local function sessionResetReady(task)
+    local context = task.host
+    return sessionResetDue(context) and not context.modelArmingReload
+end
+
+local function sessionResetStep(task)
+    local context = task.host
+    closeDashboard(context)
+    pumpSessionReset(context)
+    return nil, context.sessionResetPending == true
+end
+
+-- Routing records intent only; native work still needs its own task grant.
+local function routeHost(context, hidden)
     if suspendArmingEditor(context) then
-        return
-    end
-    if pumpSessionReset(context) then
-        return
-    end
-    if prepareAeroMenu(context, widgetEvent) then
-        return
+        return true
     end
     if context.modelSettingsUi then
-        context.modelSettingsUiModule.handle(context, widgetEvent, touchState)
-        if not context.modelSettingsUiModule.advance(context) then
-            updateServices(context)
+        local state = context.modelSettingsUi
+        local broker = context.flightFactory and context.flightFactory.broker
+        if
+            state.build
+            or state.pending
+            or state.closing
+            or broker and broker.filename ~= state.modelFilename
+            or not isFullScreen()
+        then
+            context.uiRequest = "model settings"
         end
-        return
+        return true
     end
-    if context.aeroMenuModule and context.aeroMenuModule.handle(context, widgetEvent, touchState) then
-        context.editorPress = nil
-        return
-    end
-    if context.runtimeFailed then
-        context.root:set({ w = context.zone.w, h = context.zone.h })
-        context.page:set({ w = context.zone.w, h = context.zone.h })
-        context.canvas:set({ w = context.zone.w, h = context.zone.h })
-        context.reserved = reservedCorner(context.zone)
-        if context.errorLabel then
-            context.errorLabel:set({ y = errorTop(context), w = math.max(1, context.zone.w - 16) })
+    if hidden then
+        if context.editorUi and context.editorUi.saving then
+            context.uiRequest = "editor"
+        elseif context.reloadState == "clear" then
+            context.lifecycleRequest = "retire"
+        elseif context.reloadState == "rebuild" then
+            context.lifecycleRequest = "rebuild"
+        elseif context.stage then
+            context.lifecycleRequest = "load"
         end
-        return
+        return true
     end
-
     if context.locationDetails and (not isFullScreen() or context.reloadState) then
-        context.locationDetailsModule.close(context)
+        context.locationRequest = { kind = "close", state = context.locationDetails }
+        return true
     end
     if
         context.logViewer
@@ -1538,8 +1891,9 @@ local function refresh(context, widgetEvent, touchState)
             or context.logViewer.height ~= context.zone.h
         )
     then
-        context.logViewerModule.close(context)
-        return
+        context.logViewer.closing = true
+        context.uiRequest = "log viewer"
+        return true
     end
 
     -- Leaving fullscreen neither saves nor discards. Editor boxes built in
@@ -1547,13 +1901,8 @@ local function refresh(context, widgetEvent, touchState)
     -- torn down and a changed draft is set aside until fullscreen returns.
     -- A save already running finishes first, in `background`.
     if context.editorUi and not isFullScreen() and not context.editorUi.saving then
-        local session = context.editorSession
-        local keep = session and session.dirty and not context.editorUi.buildStage
-        context.editorUiModule.close(context, false)
-        context.editorController.restorePreview(context)
-        context.editorSession = nil
-        context.editorPreviewContainers = nil
-        context.editorStash = keep and session or nil
+        context.editorTransitionRequest = "leave"
+        return true
     elseif
         context.editorStash
         and not context.editorUi
@@ -1562,7 +1911,8 @@ local function refresh(context, widgetEvent, touchState)
         and not context.reloadState
         and context.document
     then
-        context.editorController.openEditor(context)
+        context.editorTransitionRequest = "open"
+        return true
     end
 
     -- EdgeTX 2.12 only makes Lua boxes touch-transparent when constructing
@@ -1583,95 +1933,46 @@ local function refresh(context, widgetEvent, touchState)
     -- ones created after the clear in the same callback. Anything rebuilt here
     -- would therefore be swept before it was ever drawn.
     if context.reloadState == "clear" then
-        context.dashboardLifecycle.retirePage(context)
-        return
+        context.lifecycleRequest = "retire"
+        return true
     end
 
     if context.reloadState == "rebuild" then
-        context.dashboardLifecycle.rebuildPage(context)
-        context.dashboardLoader.beginLoad(context)
-        return
+        context.lifecycleRequest = "rebuild"
+        return true
     end
 
     if context.stage then
-        context.dashboardLoader.advanceLoad(context)
+        context.lifecycleRequest = "load"
+        return true
+    end
+    return false
+end
+
+--- Record the next host request from the current state. Routing only reads
+--- state and records intent; each request's task does the native work.
+local function routeForeground(context)
+    if routeHost(context, false) then
         return
     end
 
-    context.dashboardLifecycle.updateEmptyHint(context)
-
-    -- EdgeTX reports FIRST/BREAK but does not forward LVGL's long-press event.
-    if not context.editorUi and not context.locationDetails and not context.logViewer and isFullScreen() then
-        if
-            widgetEvent == _G.EVT_TOUCH_FIRST
-            and context.editorController.editorEntryHit(context, widgetEvent, touchState, true)
-        then
-            context.editorPress = { started = getTime() }
-        -- Ignore SLIDE: dragging has no action before editing, and EdgeTX can
-        -- keep emitting it on stationary touches after a previous drag.
-        elseif widgetEvent ~= nil and (widgetEvent == _G.EVT_TOUCH_BREAK or widgetEvent == _G.EVT_TOUCH_TAP) then
-            context.editorPress = nil
-        end
-        if context.editorPress and getTime() - context.editorPress.started >= 60 then
-            context.editorPress = nil
-            context.editorController.openEditor(context)
-            return
-        end
-    elseif not isFullScreen() then
+    if not isFullScreen() then
         context.editorPress = nil
     end
 
-    if
-        context.editorUi
-        and (
-            context.editorUi.buildStage
-            or context.editorUi.saving
-            or context.editorUi.drawerBuild ~= nil
-            or context.editorUi.drawerPending
-            or context.editorUi.exitCommand
-            or context.editorUi.previewPending
-            or context.editorUi.previewRefresh
-        )
-    then
-        context.editorController.advanceEditor(context)
+    if editorWorkNeeded(context.editorUi) then
+        context.uiRequest = "editor"
         return
     end
 
-    -- EdgeTX delivers fullscreen input through refresh, not an event callback.
-    if widgetEvent ~= nil and widgetEvent ~= 0 and isFullScreen() then
-        local wasLogViewer = context.logViewer ~= nil
-        if widgetEvent == _G.EVT_TOUCH_FIRST then
-            context.touchTapHandled = false
-        end
-        -- LVGL bubbling can enqueue multiple taps for the same physical press.
-        if widgetEvent ~= _G.EVT_TOUCH_TAP or not context.touchTapHandled then
-            if widgetEvent == _G.EVT_TOUCH_TAP then
-                context.touchTapHandled = true
-            end
-            event(context, widgetEvent, touchState)
-        end
-        if context.reloadState then
-            return
-        end
-        -- Input rendering gets its own callback budget, separate from live panels.
-        if context.editorUi or context.logViewer or wasLogViewer then
-            if context.logViewer or wasLogViewer then
-                updateServices(context)
-            end
-            return
-        end
-    end
-
     if context.logViewer then
-        updateServices(context)
-        if context.logViewer.prepareIndex then
-            context.logViewerModule.advance(context)
+        if context.logViewer.prepareIndex or context.logViewer.closing then
+            context.uiRequest = "log viewer"
         end
         return
     end
 
     if context.editorUi then
-        dispatchDue(context)
         return
     end
 
@@ -1696,10 +1997,11 @@ local function refresh(context, widgetEvent, touchState)
         or context.top ~= (context.zone.yabs or 0)
         or context.fullScreen ~= isFullScreen()
     then
-        context.dashboardLifecycle.beginReflow(context)
+        context.lifecycleRequest = "reflow"
+        return
     end
     if context.reflowIndex then
-        context.dashboardLifecycle.advanceReflow(context)
+        context.lifecycleRequest = "reflow"
         return
     end
     if not context.appRebuild and not isFullScreen() and not context.editorUi then
@@ -1711,50 +2013,868 @@ local function refresh(context, widgetEvent, touchState)
         end
     end
     if context.appRebuild then
-        context.dashboardLifecycle.advanceAppRebuild(context)
+        context.lifecycleRequest = "app rebuild"
         return
     end
-
-    dispatchDue(context)
 end
 
---- Keep panels updated while the dashboard screen is not visible.
---- Services keep running here too, so flight timers do not develop
---- a hole whenever the pilot looks at another screen.
----@param context AeroGridContext
-local function background(context)
-    context.remainingSlots = 8
-    if pumpFlight(context) then
+--- Whether the empty-dashboard hint differs from what the page should show.
+local function emptyHintStale(context)
+    local hint = context.emptyHint
+    local show = context.document
+        and #context.document.panels == 0
+        and not context.stage
+        and not context.reloadState
+        and not context.editorUi
+        and #context.errors == 0
+    if show then
+        return not hint
+            or not hint.visible
+            or hint.w ~= context.zone.w
+            or hint.h ~= context.zone.h
+            or hint.fullscreen ~= isFullScreen()
+    end
+    return hint ~= nil and hint.visible
+end
+
+local function hintReady(task, _, hidden)
+    return not hidden and not task.host.lifecycleRequest and emptyHintStale(task.host)
+end
+
+local function hintStep(task)
+    task.host.dashboardLifecycle.updateEmptyHint(task.host)
+end
+
+--- Foreground work without a scheduler: only a failed runtime's error page.
+local function advanceForeground(context)
+    if context.runtimeFailed then
+        context.root:set({ w = context.zone.w, h = context.zone.h })
+        context.page:set({ w = context.zone.w, h = context.zone.h })
+        context.canvas:set({ w = context.zone.w, h = context.zone.h })
+        context.reserved = reservedCorner(context.zone)
+        if context.errorLabel then
+            context.errorLabel:set({ y = errorTop(context), w = math.max(1, context.zone.w - 16) })
+        end
         return
     end
-    if suspendArmingEditor(context) then
-        return
+    routeForeground(context)
+    context.dashboardLifecycle.updateEmptyHint(context)
+end
+
+local function menuWorkNeeded(context, fullscreen)
+    local editor, menu = context.editorUi, context.aerogridMenu
+    if context.chromeRoot and context.menuVisibleFullscreen ~= fullscreen then
+        return true
     end
-    if pumpSessionReset(context) then
-        return
+    if context.runtimeFailed or context.stage or context.reloadState then
+        return false
     end
+    if editor and context.aeroMenuModal == true and fullscreen then
+        return false
+    end
+    local modal = context.modelSettingsUi ~= nil
+        or context.locationDetails ~= nil
+        or context.logViewer ~= nil
+        or editor ~= nil
+    return context.theme
+        and (
+            not context.aeroMenuModule
+            or fullscreen and not context.chromeRoot
+            or context.chromeRoot and (context.aeroMenuParent ~= context.root or context.aeroMenuHeight ~= buttonHeight() or context.aeroMenuWidth ~= context.zone.w or context.aeroMenuZoneHeight ~= context.zone.h or context.aeroMenuFullscreen ~= fullscreen or context.aeroMenuModal ~= modal)
+            or menu
+                and (menu.pending or menu.action or menu.dismiss or menu.selectionDirty or context.flightFactory and context.flightFactory.broker and menu.modelFilename ~= context.flightFactory.broker.filename)
+        )
+end
+
+--- A screen change first only shows or hides the built button. That costs
+--- no slot, so it replaces EdgeTX's own in the same callback even when
+--- flight work has spent the budget.
+local function chromeOnly(context)
+    return context.chromeRoot and context.aerogridMenu and context.menuVisibleFullscreen ~= isFullScreen()
+end
+
+local function menuReady(task, _, hidden)
+    task.cost = chromeOnly(task.host) and 0 or task.host.scheduler.budget.slots
+    return not hidden and task.host.menuDue
+end
+
+local function menuStep(task)
+    local context = task.host
+    if chromeOnly(context) then
+        syncChrome(context, isFullScreen())
+    else
+        prepareAeroMenu(context)
+    end
+    context.menuVisibleFullscreen = isFullScreen()
+end
+
+-- Slots the editor's next step reserves: small build stages are cheap.
+local function editorCost(context)
+    local state = context.editorUi
+    if
+        state
+        and state.buildStage
+        and state.buildStage <= 9
+        and not state.nativeInput
+        and not state.previewPending
+        and not state.previewRefresh
+        and not state.exitCommand
+        and not state.drawerPending
+        and state.drawerBuild == nil
+        and not state.saving
+    then
+        return math.min(3, context.scheduler.budget.slots)
+    end
+    return context.scheduler.budget.slots
+end
+
+-- Building controls and writing the layout create or compute only; previews,
+-- drawers and exits retire LVGL objects and keep their callback boundary.
+local function editorContinues(state)
+    return state
+        and (state.buildStage or state.saving)
+        and not state.nativeInput
+        and not state.previewPending
+        and not state.previewRefresh
+        and not state.exitCommand
+        and not state.drawerPending
+        and state.drawerBuild == nil
+end
+
+--- Queued input, or a held long press, that the input task has yet to handle.
+local function inputWaiting(context, hidden)
+    return not hidden
+        and (context.inputPending or context.editorPress and getTime() - context.editorPress.started >= 60)
+end
+
+local function inputReady(task, _, hidden)
+    local context = task.host
+    -- Settings input only records a close request; services share the rest.
+    task.cost = context.modelSettingsUi and 1 or context.scheduler.budget.slots
+    return inputWaiting(context, hidden)
+        and isFullScreen()
+        and not context.modelArmingReload
+        and not sessionResetDue(context)
+        and (context.modelSettingsUi or not context.stage and not context.reloadState)
+        and not editorWorkNeeded(context.editorUi)
+end
+
+local function inputStep(task)
+    local context = task.host
+    local widgetEvent, touchState = context.widgetEvent, context.touchState
+    context.inputHandled = context.inputPending
     if context.modelSettingsUi then
-        context.modelSettingsUiModule.advance(context)
+        context.modelSettingsUiModule.handle(context, widgetEvent, touchState)
+        local state = context.modelSettingsUi
+        if state and (state.build or state.pending or state.closing) then
+            context.uiRequest = "model settings"
+        end
         return
     end
-    if context.editorUi and context.editorUi.saving then
+    if context.aeroMenuModule and context.aeroMenuModule.handle(context, widgetEvent, touchState) then
+        context.editorPress = nil
+        return
+    end
+    -- Hold timing uses arrival time, not the deferred grant's time.
+    if not context.editorUi and not context.locationDetails and not context.logViewer then
+        if
+            widgetEvent == _G.EVT_TOUCH_FIRST
+            and context.editorController.editorEntryHit(context, widgetEvent, touchState, true)
+        then
+            context.editorPress = { started = context.inputTime or getTime() }
+        elseif widgetEvent ~= nil and (widgetEvent == _G.EVT_TOUCH_BREAK or widgetEvent == _G.EVT_TOUCH_TAP) then
+            context.editorPress = nil
+        end
+        if
+            context.editorPress
+            and not (context.inputQueue and #context.inputQueue > 1)
+            and (context.inputTime or getTime()) - context.editorPress.started >= 60
+        then
+            context.editorPress = nil
+            context.editorTransitionRequest = "open"
+            return
+        end
+    end
+    if widgetEvent == nil then
+        return
+    end
+    if widgetEvent == _G.EVT_TOUCH_FIRST then
+        context.touchTapHandled = false
+    end
+    if widgetEvent ~= _G.EVT_TOUCH_TAP or not context.touchTapHandled then
+        if widgetEvent == _G.EVT_TOUCH_TAP then
+            context.touchTapHandled = true
+        end
+        handleEvent(context, widgetEvent, touchState)
+    end
+end
+
+local function modelSettingsOpenReady(task, _, hidden)
+    local context = task.host
+    return context.modelSettingsRequest
+        and not hidden
+        and isFullScreen()
+        and not context.modelArmingReload
+        and not context.sessionResetPending
+        and not context.stage
+        and not context.reloadState
+        and not context.modelSettingsUi
+        and not (context.editorUi and context.editorUi.saving)
+end
+
+local function modelSettingsOpenStep(task)
+    local context = task.host
+    local request, owner = context.modelSettingsRequest, context.flightFactory.broker
+    context.modelSettingsRequest = nil
+    if owner and (owner.filename ~= request.modelFilename or owner:identity() ~= request.modelFilename) then
+        return
+    end
+    openModelSettings(context)
+end
+
+local function logOpenReady(task, _, hidden)
+    return not hidden and task.host.logOpenRequest ~= nil
+end
+
+local function logOpenStep(task)
+    local context = task.host
+    context.logOpenRequest = nil
+    local module = context.logViewerModule
+    local message
+    if not module then
+        module, message = loadModule(context.path, "lib/log_viewer.lua", 1)
+    end
+    if not module then
+        addError(context, "diagnostics log: " .. tostring(message))
+        showErrors(context)
+        return
+    end
+    context.logViewerModule = module
+    local ok, openError = pcall(module.open, context)
+    if not ok then
+        module.close(context)
+        addError(context, "diagnostics log: " .. tostring(openError))
+        showErrors(context)
+    end
+end
+
+local function locationReady(task, _, hidden)
+    local request = task.host.locationRequest
+    task.cost = request and request.kind == "close" and 1 or task.host.scheduler.budget.slots
+    return not hidden and request ~= nil
+end
+
+local function locationStep(task)
+    local context = task.host
+    local request = context.locationRequest
+    context.locationRequest = nil
+    if request.kind == "close" then
+        if context.locationDetails == request.state then
+            context.locationDetailsModule.close(context)
+        end
+        return
+    end
+    local module = context.locationDetailsModule
+    local message
+    if not module then
+        module, message = loadModule(context.path, "lib/location_details.lua", 1)
+    end
+    if not module then
+        addError(context, "location details: " .. tostring(message))
+        showErrors(context)
+        return
+    end
+    context.locationDetailsModule = module
+    local ok, openError = pcall(module.open, context, request.view, request.accent)
+    if not ok then
+        module.close(context)
+        addError(context, "location details: " .. tostring(openError))
+        showErrors(context)
+    end
+end
+
+local function editorTransitionReady(task, _, hidden)
+    local context = task.host
+    local request, state = context.editorTransitionRequest, context.editorUi
+    if request == "suspend" then
+        return context.modelArmingReload and not (state and state.saving)
+    end
+    if hidden or context.modelArmingReload or sessionResetDue(context) or context.modelSettingsUi then
+        return false
+    end
+    if request == "leave" then
+        return state ~= nil and not state.saving and not isFullScreen()
+    end
+    return request == "open"
+        and not state
+        and not context.stage
+        and not context.reloadState
+        and not context.logViewer
+        and not context.locationDetails
+        and context.document ~= nil
+        and isFullScreen()
+end
+
+local function editorTransitionStep(task)
+    local context = task.host
+    local request, state = context.editorTransitionRequest, context.editorUi
+    context.editorTransitionRequest = nil
+    closeDashboard(context)
+    if request == "open" then
+        context.editorController.openEditor(context)
+    else
+        if state then
+            local session = context.editorSession
+            local keep = request == "suspend" or session and session.dirty and not state.buildStage
+            context.editorUiModule.close(context, false)
+            context.editorController.restorePreview(context)
+            context.editorSession = nil
+            context.editorPreviewContainers = nil
+            context.editorStash = keep and session or nil
+        end
+        if request == "suspend" then
+            context.modelArmingReload = nil
+        end
+    end
+end
+
+local function uiField(kind)
+    if kind == "model settings" then
+        return "modelSettingsUi"
+    elseif kind == "editor" then
+        return "editorUi"
+    end
+    return "logViewer"
+end
+
+local function uiCost(task)
+    local context, slots = task.host, task.host.scheduler.budget.slots
+    if task.kind == "editor" then
+        return editorCost(context)
+    elseif task.kind == "model settings" then
+        local cost = context.modelSettingsUiModule.cost
+        return cost and math.min(cost(context), slots) or slots
+    end
+    return context.logViewer and context.logViewer.closing and 1 or slots
+end
+
+local function uiReady(task, _, hidden)
+    local context = task.host
+    task.cost = uiCost(task)
+    if task.kind == "editor" then
+        local state = context.editorUi
+        if not state or state ~= task.ui or not editorWorkNeeded(state) then
+            return false
+        end
+        if context.modelArmingReload then
+            return state.saving ~= nil
+        end
+        return not sessionResetDue(context)
+            and not context.modelSettingsUi
+            and (hidden and state.saving ~= nil or not hidden and (isFullScreen() or state.saving ~= nil))
+    end
+    if context.modelArmingReload or sessionResetDue(context) then
+        return false
+    end
+    if task.kind == "model settings" then
+        return task.ui ~= nil and context.modelSettingsUi == task.ui
+    end
+    local viewer = context.logViewer
+    return not hidden
+        and not context.modelSettingsUi
+        and not context.stage
+        and viewer ~= nil
+        and viewer == task.ui
+        and (
+            viewer.closing
+            or not context.reloadState
+                and isFullScreen()
+                and viewer.width == context.zone.w - 16
+                and viewer.height == context.zone.h
+                and viewer.prepareIndex ~= nil
+        )
+end
+
+local function uiStep(task, _, _, hidden)
+    local context = task.host
+    context.uiRequest = nil
+    if task.kind == "editor" then
         context.editorController.advanceEditor(context)
-        return
+        if editorWorkNeeded(context.editorUi) then
+            context.uiRequest = task.kind
+            if editorContinues(context.editorUi) then
+                return nil, true
+            end
+        end
+    elseif task.kind == "model settings" then
+        context.modelSettingsUiModule.advance(context)
+        local state = context.modelSettingsUi
+        if state and (state.build or state.pending or state.closing) then
+            context.uiRequest = task.kind
+            -- Fields only create controls; commands and closing keep their boundary.
+            if state.build and not state.pending and not state.closing then
+                return nil, true
+            end
+        end
+    else
+        if context.logViewer.closing then
+            context.logViewerModule.close(context)
+            return
+        end
+        context.logViewerModule.advance(context)
+        if context.logViewer and context.logViewer.prepareIndex then
+            context.uiRequest = task.kind
+            return nil, true
+        end
     end
-    if context.reloadState == "clear" then
+end
+
+-- Slots reserved per load stage, from peak mocked-VM instruction counts at
+-- about 2000 instructions per slot; stages not listed reserve a full segment.
+local LOAD_STAGE_COST = {
+    ["header-migrate"] = 1,
+    ["panel-migrate"] = 1,
+    ["panel-validate"] = 1,
+    ["model-settings"] = 2,
+    ["read"] = 2,
+    ["services"] = 2,
+    ["header"] = 2,
+    ["header-finalize"] = 2,
+    ["panels"] = 2,
+    ["tokenize"] = 3,
+    ["theme-validate"] = 4,
+}
+
+local function lifecycleWanted(context, kind, hidden)
+    if kind == "retire" then
+        return context.reloadState == "clear"
+    elseif kind == "rebuild" then
+        return context.reloadState == "rebuild" and not context.retireBoundary
+    elseif kind == "load" then
+        local broker = context.flightFactory and context.flightFactory.broker
+        if context.stage == "services" and broker and not broker.documentLoaded then
+            return false
+        end
+        return not context.reloadState and context.stage ~= nil
+    elseif kind == "reflow" then
+        return not hidden and not context.reloadState and not context.stage and not context.logViewer
+    end
+    return not hidden and not context.reloadState and not context.stage and context.appRebuild ~= nil
+end
+
+--- Each lifecycle step checks its own work, then the shared lifecycle hold
+--- and any input it must not run ahead of.
+local function lifecycleReady(task, _, hidden)
+    local context, kind = task.host, task.kind
+    if context.lifecycleHold or not lifecycleWanted(context, kind, hidden) then
+        return false
+    end
+    local slots = context.scheduler.budget.slots
+    if kind == "load" then
+        task.cost = math.min(LOAD_STAGE_COST[context.stage] or slots, slots)
+    elseif kind == "rebuild" then
+        task.cost = 1
+    else
+        task.cost = slots
+    end
+    return context.stage or context.reloadState or not inputWaiting(context, hidden)
+end
+
+local function lifecycleStep(task)
+    local context, kind = task.host, task.kind
+    context.lifecycleRequest = nil
+    closeDashboard(context)
+    if kind == "retire" then
         context.dashboardLifecycle.retirePage(context)
-        return
-    elseif context.reloadState == "rebuild" then
+        context.retireBoundary = true
+        context.lifecycleRequest = "rebuild"
+    elseif kind == "rebuild" then
         context.dashboardLifecycle.rebuildPage(context)
-        context.dashboardLoader.beginLoad(context)
-        return
-    elseif context.stage then
-        context.dashboardLoader.advanceLoad(context)
-        return
-    elseif context.reflowIndex then
+        startLoad(context)
+        context.lifecycleRequest = "load"
+    elseif kind == "load" then
+        if context.stage == "model-settings" then
+            advanceModelSettings(context)
+        else
+            context.dashboardLoader.advanceLoad(context)
+        end
+        if context.stage then
+            context.lifecycleRequest = "load"
+            return nil, true
+        end
+    elseif kind == "reflow" then
+        if
+            context.width ~= context.zone.w
+            or context.height ~= context.zone.h
+            or context.left ~= (context.zone.xabs or 0)
+            or context.top ~= (context.zone.yabs or 0)
+            or context.fullScreen ~= isFullScreen()
+        then
+            context.dashboardLifecycle.beginReflow(context)
+        end
+        if context.reflowIndex then
+            context.dashboardLifecycle.advanceReflow(context)
+        end
+        if context.reflowIndex then
+            context.lifecycleRequest = "reflow"
+            return nil, true
+        end
+    else
+        context.dashboardLifecycle.advanceAppRebuild(context)
+        if context.appRebuild then
+            context.lifecycleRequest = "app rebuild"
+        end
+    end
+end
+
+--- Host tasks share only real ordering barriers: options and due session
+--- resets preempt unrelated work; visible menu changes precede dependent work;
+--- input cannot be overtaken by work that replaces its target; and page rebuilds
+--- wait one native callback after retirement.
+local function hostReady(task, now, hidden)
+    local context = task.host
+    if context.optionsRequest and task ~= context.optionsTask then
+        return false
+    end
+    if
+        sessionResetDue(context)
+        and not context.modelArmingReload
+        and task ~= context.optionsTask
+        and task ~= context.sessionResetTask
+    then
+        return false
+    end
+    if context.menuDue and task ~= context.menuTask and not context.menuChromeOnly then
+        return false
+    end
+    local first = task.inputFirst
+    if first and (first == true or first(task)) and inputWaiting(context, hidden) then
+        return false
+    end
+    return task.gate(task, now, hidden)
+end
+
+local function hostStep(task, now, granted, hidden)
+    local context = task.host
+    local used, again = task.run(task, now, granted, hidden)
+    updateHolds(context, hidden)
+    return used, again
+end
+
+local function hostTask(context, field, name, gate, run, fields)
+    local task = context[field]
+    if not task then
+        task = {
+            name = name,
+            owner = name,
+            host = context,
+            onError = hostError,
+            cost = context.scheduler.budget.slots,
+            gate = gate,
+            run = run,
+            ready = hostReady,
+            step = hostStep,
+        }
+        for key, value in pairs(fields or {}) do
+            task[key] = value
+        end
+        context[field] = task
+    end
+    return task
+end
+
+local function kindTask(context, field, kind, gate, run, ui)
+    local tasks = context[field]
+    if not tasks then
+        tasks = {}
+        context[field] = tasks
+    end
+    local task = tasks[kind]
+    if not task or ui and task.ui ~= ui then
+        task = {
+            name = kind,
+            owner = kind,
+            kind = kind,
+            ui = ui,
+            host = context,
+            onError = hostError,
+            gate = gate,
+            run = run,
+            ready = hostReady,
+            step = hostStep,
+        }
+        if kind == "model settings" or kind == "log viewer" then
+            task.inputFirst = function(self)
+                return not (self.kind == "log viewer" and self.host.logViewer and self.host.logViewer.closing)
+            end
+        end
+        tasks[kind] = task
+    end
+    return task
+end
+
+local function optionsReady(task)
+    return task.host.optionsRequest ~= nil
+end
+
+local function editorOpening(task)
+    return task.host.editorTransitionRequest == "open"
+end
+
+local function locationOpening(task)
+    local request = task.host.locationRequest
+    return request ~= nil and request.kind == "open"
+end
+
+--- Drop requests whose target has gone, so routing can record new ones.
+local function pruneRequests(context, hidden, fullscreen)
+    local filename
+    if context.logOpenRequest or context.locationRequest then
+        local info = model and model.getInfo and model.getInfo()
+        filename = info and info.filename
+    end
+    if context.modelSettingsRequest then
+        local task = hostTask(
+            context,
+            "modelSettingsOpenTask",
+            "model settings open",
+            modelSettingsOpenReady,
+            modelSettingsOpenStep,
+            { inputFirst = true }
+        )
+        if not modelSettingsOpenReady(task, nil, hidden) then
+            if not hidden and (not fullscreen or context.modelSettingsUi) then
+                context.modelSettingsRequest = nil
+            elseif context.editorUi and context.editorUi.saving then
+                context.uiRequest = "editor"
+            end
+        end
+    end
+    if context.editorTransitionRequest and not hidden then
+        local task = hostTask(
+            context,
+            "editorTransitionTask",
+            "editor transition",
+            editorTransitionReady,
+            editorTransitionStep,
+            { inputFirst = editorOpening }
+        )
+        if not editorTransitionReady(task, nil, hidden) then
+            context.editorTransitionRequest = nil
+        end
+    end
+    local request = context.logOpenRequest
+    if
+        request
+        and (
+            request.page ~= context.page
+            or request.modelFilename ~= filename
+            or context.reloadState
+            or context.stage
+            or context.modelSettingsUi
+            or context.editorUi
+            or not hidden and not fullscreen
+        )
+    then
+        context.logOpenRequest = nil
+    end
+    request = context.locationRequest
+    if
+        request
+        and (
+            request.kind == "close" and context.locationDetails ~= request.state
+            or request.kind == "open"
+                and (request.page ~= context.page or request.modelFilename ~= filename or context.reloadState or context.stage or context.modelSettingsUi or context.editorUi or context.logViewer or not hidden and not fullscreen)
+        )
+    then
+        context.locationRequest = nil
+    end
+    local kind = context.lifecycleRequest
+    -- The cached barrier is from the previous callback; judge with a fresh one.
+    context.lifecycleHold = kind ~= nil and lifecycleHeld(context, hidden)
+    if
+        kind
+        and not lifecycleReady(kindTask(context, "lifecycleTasks", kind, lifecycleReady, lifecycleStep), nil, hidden)
+    then
+        context.lifecycleRequest = nil
+    end
+    kind = context.uiRequest
+    if kind then
+        local ui = context[uiField(kind)]
+        if not ui or not uiReady(kindTask(context, "uiTasks", kind, uiReady, uiStep, ui), nil, hidden) then
+            context.uiRequest = nil
+        end
+    end
+end
+
+--- Enrol the host tasks with work outstanding, in a fixed order.
+local function enrolHost(context, hidden)
+    local add = context.scheduler.add
+    if context.optionsRequest then
+        add(hostTask(context, "optionsTask", "native options", optionsReady, optionsStep))
+    end
+    if context.sessionResetPending then
+        add(hostTask(context, "sessionResetTask", "session reset", sessionResetReady, sessionResetStep))
+    end
+    if context.menuDue then
+        add(hostTask(context, "menuTask", "menu", menuReady, menuStep))
+    end
+    if context.inputPending or context.editorPress then
+        add(hostTask(context, "inputTask", "input", inputReady, inputStep))
+    end
+    if context.modelSettingsRequest then
+        add(
+            hostTask(
+                context,
+                "modelSettingsOpenTask",
+                "model settings open",
+                modelSettingsOpenReady,
+                modelSettingsOpenStep,
+                { inputFirst = true }
+            )
+        )
+    end
+    if context.editorTransitionRequest then
+        add(
+            hostTask(
+                context,
+                "editorTransitionTask",
+                "editor transition",
+                editorTransitionReady,
+                editorTransitionStep,
+                { inputFirst = editorOpening }
+            )
+        )
+    end
+    if context.logOpenRequest then
+        add(hostTask(context, "logOpenTask", "log open", logOpenReady, logOpenStep, { inputFirst = true }))
+    end
+    if context.locationRequest then
+        add(
+            hostTask(
+                context,
+                "locationTask",
+                "location details",
+                locationReady,
+                locationStep,
+                { inputFirst = locationOpening }
+            )
+        )
+    end
+    local kind = context.lifecycleRequest
+    if kind then
+        add(kindTask(context, "lifecycleTasks", kind, lifecycleReady, lifecycleStep))
+    end
+    kind = context.uiRequest
+    if kind then
+        add(kindTask(context, "uiTasks", kind, uiReady, uiStep, context[uiField(kind)]))
+    end
+    if not hidden and emptyHintStale(context) then
+        add(hostTask(context, "hostTask", "host", hintReady, hintStep, { inputFirst = true }))
+    end
+end
+
+local function runCallback(context, hidden, widgetEvent, touchState)
+    if context.initializing then
+        if not hidden then
+            event(context, widgetEvent, touchState)
+        end
+        -- The first callback reads the model's settings in one segment;
+        -- later callbacks follow them.
+        context.scheduler.add(context.initializationTask)
+        runScheduled(context, hidden, 0)
         return
     end
-    dispatchDue(context, true)
+    if not context.scheduler or context.runtimeFailed then
+        if not hidden then
+            advanceForeground(context)
+        end
+        return
+    end
+    local fullscreen = not hidden and isFullScreen()
+    context.inputHandled, context.dashboardClosed, context.retireBoundary, context.menuChromeOnly = nil, nil, nil, nil
+    if not hidden then
+        event(context, widgetEvent, touchState)
+    end
+    if not hidden and not fullscreen then
+        context.inputQueue = nil
+    end
+    local input = not hidden and context.inputQueue and context.inputQueue[1]
+    context.widgetEvent, context.touchState = input and input.event, input and input.touch
+    context.inputTime = input and input.now
+    context.inputPending = not not input
+    if
+        not context.optionsRequest
+        and not context.lifecycleRequest
+        and not context.uiRequest
+        and not context.editorTransitionRequest
+        and not context.locationRequest
+    then
+        if hidden then
+            routeHost(context, true)
+        else
+            routeForeground(context)
+        end
+    end
+    pruneRequests(context, hidden, fullscreen)
+    context.menuDue = not hidden
+        and not context.modelArmingReload
+        and not context.sessionResetPending
+        and menuWorkNeeded(context, fullscreen)
+    context.menuChromeOnly = context.menuDue and chromeOnly(context)
+    updateHolds(context, hidden, true)
+    local flightTask
+    local owner = context.flightFactory and context.flightFactory.broker
+    if owner then
+        flightTask = context.flightTask
+        if not flightTask or flightTask.broker ~= owner then
+            flightTask = {
+                name = "flight",
+                owner = "flight",
+                onError = flightError,
+                broker = owner,
+                host = context,
+                step = flightStep,
+                ready = flightReady,
+            }
+            context.flightTask = flightTask
+        end
+    end
+    context.scheduler.clear()
+    if flightTask then
+        context.scheduler.add(flightTask)
+        local tasks = owner:tasks()
+        for index = 1, #tasks do
+            context.scheduler.add(tasks[index])
+        end
+    end
+    enrolHost(context, hidden)
+    runTasks(context, hidden)
+    if context.uiTasks then
+        for kind, task in pairs(context.uiTasks) do
+            local ui = context[uiField(kind)]
+            if task.ui ~= ui then
+                task.ui = nil
+            end
+        end
+    end
+    if not hidden and context.inputQueue and context.inputHandled then
+        table.remove(context.inputQueue, 1)
+        if #context.inputQueue == 0 then
+            context.inputQueue = nil
+        end
+    end
+    if input then
+        context.widgetEvent, context.touchState, context.inputPending, context.inputTime = nil, nil, nil, nil
+    end
+end
+
+local function refresh(context, widgetEvent, touchState)
+    runCallback(context, false, widgetEvent, touchState)
+end
+
+local function background(context)
+    runCallback(context, true)
 end
 
 return {

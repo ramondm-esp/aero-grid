@@ -3,6 +3,7 @@
 local root = assert(...)
 local fixture = assert(loadfile(root .. "/tests/support/widget_fixture.lua"))().new()
 local chart = fixture.module("panels/chart.lua")
+assert(loadfile(root .. "/tests/support/chart_turns.lua"))().install(chart)
 local equal = assert(loadfile(root .. "/tests/support/assertions.lua"))().assertEqual
 local chartView = assert(loadfile(root .. "/tests/support/chart_assertions.lua"))()
 local function liveSamples(service)
@@ -277,16 +278,18 @@ services.preview, services.history = false, history
 settings.timeRange = "growing"
 local consistent = chart.create(host.page, { x = 0, y = 0, w = 472, h = 196 }, settings, services)
 local previous = consistent.plotRoot
-local _, unfinished = chart.refresh(consistent)
-assert(unfinished and consistent.plotRoot == previous and not previous.hidden)
+local _, again = chart.refresh(consistent)
+assert(type(again) == "boolean" and not chartView.finished(consistent))
+assert(consistent.plotRoot == previous and not previous.hidden)
 local committed = false
 for step = 1, 2000 do
     live.elapsed = live.elapsed + 10
     samples[#samples + 1] = { live.elapsed, step % 17 }
     feed.last, feed.revision, feed.plotRevision = #samples, feed.revision + 1, feed.plotRevision + 1
     emit(live.elapsed, step % 17)
-    _, unfinished = chart.refresh(consistent)
-    if not unfinished and consistent.paintedVersion == consistent.version and not consistent.columnsDecorating then
+    _, again = chart.refresh(consistent)
+    assert(type(again) == "boolean", "refresh must return its continuation request")
+    if chartView.finished(consistent) and consistent.paintedVersion == consistent.version then
         committed = true
         break
     end
@@ -309,27 +312,31 @@ assert(arm.markers[arm.markerKeys[1]].active)
 equal(arm.markers[arm.markerKeys[1]].object.properties.dashGap, nil)
 feed.stale, feed.revision = true, feed.revision + 1
 live.elapsed = live.elapsed + 1000
+local liveEndX = consistent.area.x
+    + math.min(
+        consistent.area.w,
+        math.floor((live.elapsed - consistent.start) / consistent.window * consistent.area.w + 0.5)
+    )
+local liveBandUpdated = false
 for _ = 1, 2000 do
-    local _, pending = chart.refresh(consistent)
-    if not pending and not consistent.columnsDecorating then
+    chart.refresh(consistent)
+    frameBand = consistent.flightBands[1].properties
+    if frameBand.x + frameBand.w == liveEndX then
+        liveBandUpdated = true
         break
     end
 end
-frameBand = consistent.flightBands[1].properties
-equal(
-    frameBand.x + frameBand.w,
-    consistent.area.x
-        + math.min(
-            consistent.area.w,
-            math.floor((live.elapsed - consistent.start) / consistent.window * consistent.area.w + 0.5)
-        ),
-    "real telemetry loss must not make an active flight look completed"
-)
+assert(liveBandUpdated, "an active flight band must advance after telemetry becomes stale")
+equal(frameBand.x + frameBand.w, liveEndX, "real telemetry loss must not make an active flight look completed")
 
 local function finishFrame(target)
+    -- A frame ends when its overlays have been redrawn, not when readouts finish.
+    local decorated = false
     for _ = 1, 2000 do
-        local _, pending = chart.refresh(target)
-        if not pending and chartView.finished(target) then
+        local decorating = target.columnsDecorating
+        chart.refresh(target)
+        decorated = decorated or decorating and not target.columnsDecorating
+        if decorated and not chart.finishPending(target) and chartView.finished(target) then
             return
         end
     end
@@ -623,6 +630,8 @@ do
 end
 
 local scheduler = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
+fixture.pump(scheduler, 10)
+scheduler.document.panels, scheduler.emptyHint = { {} }, nil
 local turns = {}
 local function scheduled(id, kind)
     return {
@@ -640,19 +649,18 @@ local function scheduled(id, kind)
 end
 scheduler.panels = { scheduled("first", "chart"), scheduled("second", "chart"), scheduled("reading", "metric") }
 fixture.pump(scheduler, 2)
-equal(turns.first, 2)
-equal(turns.second, nil, "another chart must wait for the current chart's complete frame")
-equal(turns.reading, 2, "staged charts must not starve ordinary panels")
-fixture.pump(scheduler, 1)
-equal(turns.first, 3)
-equal(turns.second, 1, "the next chart starts once the preceding frame is complete")
+assert(turns.first >= 3 and turns.second >= 3, "continuing charts must receive same-callback turns")
+assert(math.abs(turns.first - turns.second) <= 1, "one continuing chart must not block another")
+equal(turns.reading, 2, "continuing charts must not starve ordinary panels")
 
 local fair = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
+fixture.pump(fair, 10)
+fair.document.panels, fair.emptyHint = { {} }, nil
 local progressing = {}
 for index = 1, 2 do
     local entry = scheduled("independent-" .. index, "chart")
-    entry.module.independentRefresh = chart.independentRefresh
     entry.module.refreshCost = "variable"
+    entry.module.refreshMinCost = 1
     entry.module.refresh = function(_, _, grant)
         progressing[index] = (progressing[index] or 0) + 1
         return 1, true, grant
@@ -663,4 +671,3 @@ fixture.pump(fair, 12)
 assert(progressing[1] and progressing[1] >= 3, "the first unfinished chart must keep receiving grants")
 assert(progressing[2] and progressing[2] >= 3, "the second chart must not wait for the first frame to finish")
 assert(math.abs(progressing[1] - progressing[2]) <= 1, "unfinished charts must share dispatch turns fairly")
-equal(fair.refreshOwner, nil, "independent chart transactions must not take an exclusive refresh lease")

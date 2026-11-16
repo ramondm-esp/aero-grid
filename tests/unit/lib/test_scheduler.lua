@@ -1,0 +1,550 @@
+-- SPDX-License-Identifier: GPL-2.0-only
+
+local root = assert(...)
+local module = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/scheduler.lua"))()
+assert(module.SLOTS == 8 and module.CAPACITY == 8 and module.INSTRUCTIONS_PER_SLOT == 2000)
+
+for _, capacity in ipairs({ false, 0, -1, 1.5, math.huge, 0 / 0, "8" }) do
+    assert(not pcall(module.new, { capacity = capacity }), "invalid capacity must be rejected")
+end
+
+local function fixture(dependencies)
+    local queue = module.new(dependencies)
+    local calls = {}
+    local function task(name, cost, steps)
+        local instance = { name = name, cost = cost, turns = 0 }
+        instance.step = function(self, now, slots, context)
+            self.turns = self.turns + 1
+            calls[#calls + 1] = name
+            self.now, self.slots, self.context = now, slots, context
+            return slots, self.turns < (steps or 1)
+        end
+        queue.add(instance)
+        return instance
+    end
+    return queue, calls, task
+end
+
+do
+    local queue, calls, task = fixture()
+    local a = task("A", 2, 3)
+    task("B", 1)
+    task("C", 1)
+    local context = {}
+    local used, requested, denied = queue.run(12, 8, context)
+    assert(table.concat(calls, ",") == "A,B,C,A,A")
+    assert(used == 8 and requested == 5 and denied == 0)
+    assert(queue.state(a).spent == 6 and not queue.state(a).pending)
+    for _, key in ipairs({ "spent", "pending", "refused", "denied", "spun", "ran", "zeroTurns" }) do
+        assert(rawget(a, key) == nil, "scheduler bookkeeping stays off the task: " .. key)
+    end
+    assert(a.now == 12 and a.context == context and a.slots == 2)
+end
+
+do
+    local queue, calls, task = fixture()
+    task("A", 1, 3)
+    task("B", 1, 3)
+    task("C", 1, 2)
+    assert(queue.run(0, 8) == 8)
+    assert(table.concat(calls, ",") == "A,B,C,A,B,C,A,B")
+end
+
+do
+    local queue, calls, task = fixture()
+    local a = task("A", 2, 3)
+    local b = task("B", 1)
+    local used, requested, denied = queue.run(0, 4)
+    assert(table.concat(calls, ",") == "A,B")
+    assert(used == 3 and requested == 3 and denied == 1 and queue.state(a).pending)
+    assert(queue.cursor == 1)
+    a.due, b.due = 100, 100
+    queue.clear()
+    queue.add(a)
+    queue.add(b)
+    assert(queue.run(1, 4) == 4)
+    assert(table.concat(calls, ",") == "A,B,A,A" and not queue.state(a).pending)
+end
+
+do
+    local queue, calls, task = fixture()
+    local a = task("A", 1, 3)
+    task("large", 8)
+    task("small", 1)
+    task("free", 0, 2)
+    local used, requested, denied = queue.run(0, 8)
+    assert(table.concat(calls, ",") == "A,free,free")
+    assert(used == 1 and requested == 4 and denied == 3)
+    assert(queue.cursor == 2 and queue.state(a).pending)
+    queue.run(1, 8)
+    assert(calls[4] == "large", "a deferred whole-budget task gets the first turn")
+    queue.run(2, 8)
+    assert(calls[6] == "small", "repeating whole-budget work must not starve later tasks")
+end
+
+do
+    local queue = module.new()
+    local turns = { A = 0, B = 0, X = 0 }
+    local function task(name, cost)
+        return {
+            name = name,
+            cost = cost,
+            step = function(_, _, slots)
+                turns[name] = turns[name] + 1
+                return slots, false
+            end,
+        }
+    end
+    local a, b, x = task("A", 8), task("B", 8), task("X", 0)
+    for callback = 1, 20 do
+        queue.clear()
+        if callback % 2 == 0 then
+            queue.add(x)
+        end
+        queue.add(a)
+        queue.add(b)
+        queue.run(callback, 8)
+    end
+    assert(
+        turns.A == 10 and turns.B == 10 and turns.X == 10,
+        "deferred task identity stays fair as free tasks enter and leave the ring"
+    )
+end
+
+do
+    local queue = module.new()
+    local turns = { A = 0, B = 0, X = 0 }
+    local function task(name, cost)
+        return {
+            name = name,
+            cost = cost,
+            step = function(_, _, slots)
+                turns[name] = turns[name] + 1
+                return slots, false
+            end,
+        }
+    end
+    local a, b, x = task("A", 8), task("B", 8), task("X", 0)
+    queue.add(a)
+    queue.add(b)
+    queue.run(0, 8)
+    queue.clear()
+    local retired = setmetatable({ b }, { __mode = "v" })
+    b = nil
+    collectgarbage()
+    assert(retired[1] == nil, "the deferred cursor must not retain a retired task")
+    queue.add(x)
+    queue.add(a)
+    queue.run(1, 8)
+    assert(turns.A == 2, "an absent deferred task falls back to its live successor")
+end
+
+do
+    local queue = module.new()
+    local turns = { A = 0, B = 0, X = 0 }
+    local function task(name, cost)
+        return {
+            name = name,
+            cost = cost,
+            step = function(_, _, slots)
+                turns[name] = turns[name] + 1
+                return slots, false
+            end,
+        }
+    end
+    local a, b, x = task("A", 8), task("B", 8), task("X", 0)
+    queue.add(a)
+    queue.add(b)
+    local _, _, _, failure = queue.run(0, 8, nil, {
+        segments = 1,
+        cross = function(run)
+            local ok, message = pcall(run)
+            return ok, message
+        end,
+    })
+    assert(not failure and turns.A == 1 and turns.B == 1, "extended capacity resumes the deferred task")
+    queue.clear()
+    queue.add(x)
+    queue.add(a)
+    queue.add(b)
+    queue.run(1, 8)
+    assert(turns.A == 1 and turns.B == 2, "extended segments preserve the deferred successor")
+    queue.clear()
+    queue.add(a)
+    queue.add(b)
+    queue.run(2, 8)
+    assert(turns.A == 2 and turns.B == 2, "the successor gets the next turn after enrollment changes")
+end
+
+do
+    local queue, calls, task = fixture()
+    local free = task("free", 0, 3)
+    task("paid", 8)
+    local used, requested, denied = queue.run(0, 8)
+    assert(table.concat(calls, ",") == "free,paid,free,free")
+    assert(used == 8 and requested == 1 and denied == 0)
+    assert(queue.state(free).spent == 0 and not queue.state(free).pending)
+end
+
+do
+    local queue, calls, task = fixture()
+    local variable = task("variable", "variable", 2)
+    variable.minCost = 1
+    variable.step = function(self)
+        calls[#calls + 1] = self.name
+        self.turns = self.turns + 1
+        return 0, self.turns == 1
+    end
+    task("fixed", 1)
+    local used, requested, denied = queue.run(0, 8)
+    assert(table.concat(calls, ",") == "variable,fixed,variable")
+    assert(used == 1 and requested == 3 and denied == 0)
+    assert(queue.state(variable).spent == 0 and not queue.state(variable).pending)
+end
+
+do
+    local queue, calls, task = fixture()
+    local reserved = task("reserved", 4)
+    reserved.step = function()
+        calls[#calls + 1] = "reserved"
+        return 1, false
+    end
+    task("other", 3)
+    local used, requested, denied = queue.run(0, 4)
+    assert(table.concat(calls, ",") == "reserved,other")
+    assert(used == 4 and requested == 2 and denied == 0 and queue.state(reserved).spent == 1)
+end
+
+do
+    local queue, calls, task = fixture()
+    local reserved = task("reserved", 2)
+    reserved.step = function()
+        calls[#calls + 1] = "reserved"
+        return 0, false
+    end
+    task("other", 2)
+    assert(queue.run(0, 2) == 2)
+    assert(table.concat(calls, ",") == "reserved,other" and queue.state(reserved).spent == 0)
+end
+
+do
+    local queue = module.new({ capacity = 2 })
+    local turns = 0
+    local reserved = {
+        cost = 1,
+        step = function()
+            turns = turns + 1
+            return 0, true
+        end,
+    }
+    queue.add(reserved)
+    assert(queue.run(0, 2) == 0 and turns == 2 and queue.state(reserved).pending)
+    assert(queue.run(1, 2) == 0 and turns == 4 and queue.state(reserved).pending)
+end
+
+do
+    local queue, calls, task = fixture()
+    local a = task("A", 2, 2)
+    a.step = function(self, _, slots)
+        calls[#calls + 1] = self.name
+        self.turns = self.turns + 1
+        self.cost = 3
+        return slots, self.turns == 1
+    end
+    assert(queue.run(0, 5) == 5)
+    assert(table.concat(calls, ",") == "A,A" and queue.state(a).spent == 5)
+end
+
+do
+    local charges = {}
+    local queue, calls, task = fixture({
+        charge = function(instance, spent)
+            charges[#charges + 1] = instance.name .. ":" .. spent
+        end,
+    })
+    local variable = task("variable", "variable", 2)
+    variable.minCost = 1
+    variable.step = function(self, _, slots)
+        calls[#calls + 1] = self.name .. ":" .. slots
+        self.turns = self.turns + 1
+        return 2, self.turns == 1
+    end
+    task("fixed", 1)
+    assert(queue.run(0, 8) == 5)
+    assert(table.concat(calls, ",") == "variable:8,fixed,variable:5")
+    assert(table.concat(charges, ",") == "variable:2,fixed:1,variable:2")
+    assert(queue.state(variable).spent == 4)
+end
+
+do
+    local failures = {}
+    local queue, calls, task = fixture({
+        fail = function(instance, message)
+            failures[#failures + 1] = instance.name .. ":" .. message
+        end,
+    })
+    local broken = task("broken", 2)
+    broken.step = function()
+        error("deliberate failure", 0)
+    end
+    task("healthy", 1)
+    assert(queue.run(0, 8) == 3)
+    assert(broken.failed and broken.error == "deliberate failure" and queue.state(broken).spent == 2)
+    assert(table.concat(calls, ",") == "healthy")
+    queue.run(1, 8)
+    assert(#failures == 1 and #calls == 2)
+end
+
+for _, invalid in ipairs({ false, -1, 1.5, 9, math.huge, 0 / 0, "1" }) do
+    local queue, _, task = fixture()
+    local variable = task("invalid", "variable")
+    variable.minCost = 1
+    variable.step = function()
+        return invalid, true
+    end
+    assert(queue.run(0, 8) == 8)
+    assert(variable.failed and not queue.state(variable).pending and queue.state(variable).spent == 8)
+    assert(variable.error == "consumption must be whole slots within the grant")
+end
+
+for _, invalid in ipairs({ false, -1, 1.5, 3, math.huge, 0 / 0, "1" }) do
+    local queue, _, task = fixture()
+    local fixed = task("invalid", 2)
+    fixed.step = function()
+        return invalid, true
+    end
+    assert(queue.run(0, 8) == 2)
+    assert(fixed.failed and not queue.state(fixed).pending and queue.state(fixed).spent == 2)
+    assert(fixed.error == "consumption must be whole slots within the grant")
+end
+
+do
+    local queue, _, task = fixture()
+    local variable = task("missing", "variable")
+    variable.minCost = 1
+    variable.step = function() end
+    assert(queue.run(0, 8) == 8 and variable.failed)
+end
+
+do
+    local queue, _, task = fixture()
+    local variable = task("missing minimum", "variable")
+    assert(queue.run(0, 8) == 0 and variable.failed)
+    assert(variable.error == "invalid minimum slot cost")
+end
+
+for _, invalid in ipairs({ false, -1, 1.5, 9, math.huge, 0 / 0, "1" }) do
+    local queue, calls, task = fixture()
+    local instance = task("invalid", invalid)
+    local used, requested, denied = queue.run(0, 8)
+    assert(used == 0 and requested == 0 and denied == 0 and #calls == 0)
+    assert(instance.failed and instance.error == "invalid slot cost")
+end
+
+do
+    local queue, calls, task = fixture()
+    local future = task("future")
+    future.due = 10
+    local hidden = task("hidden")
+    hidden.ready = function(_, _, context)
+        return context.hidden
+    end
+    assert(queue.run(0, 8, { hidden = false }) == 0)
+    assert(queue.run(1, 8, { hidden = true }) == 1)
+    assert(queue.run(10, 8, { hidden = false }) == 1)
+    assert(table.concat(calls, ",") == "hidden,future")
+end
+
+do
+    local queue, calls, task = fixture()
+    local a = task("A", 1, 2)
+    a.ready = function(self)
+        return self.turns == 0
+    end
+    assert(queue.run(0, 8) == 1 and queue.state(a).pending)
+    assert(#calls == 1, "a pending task must still obey its readiness gate")
+    a.ready = nil
+    assert(queue.run(1, 8) == 1 and not queue.state(a).pending)
+end
+
+do
+    local queue = module.new({ capacity = 12 })
+    local granted
+    queue.add({
+        name = "bounded",
+        cost = "variable",
+        minCost = 3,
+        step = function(_, _, slots)
+            granted = slots
+            return slots, false
+        end,
+    })
+    assert(queue.run(0, 12) == 8 and granted == 8, "one variable turn must never exceed eight slots")
+    queue.clear()
+    assert(queue.count == 0 and next(queue.tasks) == nil)
+    local used, requested, denied = queue.run(1, 12)
+    assert(used == 0 and requested == 0 and denied == 0)
+    queue.cursor = 20
+    queue.add({
+        name = "replacement",
+        step = function(_, _, slots)
+            return slots, false
+        end,
+    })
+    assert(queue.run(2, 12) == 1 and queue.cursor == 1)
+end
+
+do
+    local queue = module.new({ capacity = 12 })
+    local calls = {}
+    queue.add({
+        name = "small",
+        cost = 2,
+        step = function(_, _, slots)
+            calls[#calls + 1] = "small:" .. slots
+            return slots, false
+        end,
+    })
+    queue.add({
+        name = "minimum",
+        cost = "variable",
+        minCost = 5,
+        step = function(_, _, slots)
+            calls[#calls + 1] = "minimum:" .. slots
+            return slots, false
+        end,
+    })
+    local used, requested, denied = queue.run(0, 4)
+    assert(used == 2 and requested == 2 and denied == 1)
+    assert(table.concat(calls, ",") == "small:2", "variable tasks must not run below their minimum")
+end
+
+for _, minimum in ipairs({ false, 0, 1.5, 9, math.huge, 0 / 0, "1" }) do
+    local queue, _, task = fixture()
+    local variable = task("invalid minimum", "variable")
+    variable.minCost = minimum
+    assert(queue.run(0, 8) == 0)
+    assert(variable.failed and variable.error == "invalid minimum slot cost")
+end
+
+do
+    local queue, _, task = fixture()
+    local fixed = task("missing usage", 2)
+    fixed.step = function() end
+    assert(queue.run(0, 8) == 2 and not fixed.failed and not queue.state(fixed).pending)
+    assert(queue.state(fixed).spent == 2, "a fixed step without consumption used its grant")
+end
+
+do
+    local queue, _, task = fixture()
+    local variable = task("missing variable usage", "variable")
+    variable.minCost = 1
+    variable.step = function() end
+    assert(queue.run(0, 8) == 8 and variable.failed)
+    assert(variable.error == "consumption must be whole slots within the grant")
+end
+
+do
+    local queue, _, task = fixture()
+    local fixed = task("over grant", 2)
+    fixed.step = function()
+        return 3
+    end
+    queue.run(0, 8)
+    assert(fixed.error == "consumption must be whole slots within the grant")
+end
+
+for _, continuation in ipairs({ 1, "yes" }) do
+    local queue, _, task = fixture()
+    local fixed = task("invalid continuation", 2)
+    fixed.step = function(_, _, slots)
+        return slots, continuation
+    end
+    assert(queue.run(0, 8) == 2 and fixed.failed)
+    assert(fixed.error == "continuation must be boolean")
+end
+
+do
+    local queue, _, task = fixture()
+    local fixed = task("invalid continuation refund", 2)
+    fixed.step = function()
+        return 0, "bad"
+    end
+    assert(queue.run(0, 8) == 2 and fixed.failed)
+    assert(queue.state(fixed).spent == 2, "an invalid continuation must not refund its grant")
+end
+
+do
+    local queue, _, task = fixture()
+    local fixed = task("too large", 9)
+    assert(queue.run(0, 8) == 0 and fixed.failed)
+    assert(fixed.error == "invalid slot cost")
+end
+
+-- Further segments run inside `cross`, which reports like pcall.
+local function crossing()
+    local crossings = { count = 0 }
+    function crossings.cross(fn)
+        crossings.count = crossings.count + 1
+        return pcall(fn)
+    end
+    return crossings
+end
+
+do
+    -- A callback continues with new slots: only tasks that asked for another
+    -- step or did not fit run again, and a task that already ran is not rerun.
+    local queue, calls, task = fixture()
+    task("A", 4, 3)
+    task("B", 4)
+    task("C", 4)
+    task("D", 1)
+    local crossings, segments, callbacks = crossing(), queue.segments, queue.callbacks
+    local used, requested, denied, failure = queue.run(0, 8, nil, { segments = 4, cross = crossings.cross })
+    assert(table.concat(calls, ",") == "A,B,C,D,A,A" and used == 21, table.concat(calls, ","))
+    assert(requested == 6 and denied == 0 and failure == nil)
+    assert(queue.callbacks == callbacks + 1, "segments stay in the same callback")
+    assert(queue.segments == segments + 3 and crossings.count == 1, "unneeded segments are not run")
+    assert(queue.remaining == 0)
+    local stats = queue.stats()
+    assert(stats.callbacks == 1 and stats.used == 21 and stats.available == 40, "every allowed segment is available")
+    assert(stats.requested == 6 and stats.denied == 0)
+end
+
+do
+    local queue, calls, task = fixture()
+    task("A", 1)
+    task("B", 1)
+    local crossings = crossing()
+    queue.run(0, 8, nil, { segments = 4, cross = crossings.cross })
+    assert(crossings.count == 0 and #calls == 2 and queue.remaining == 6, "ran tasks do not repeat")
+    local free = task("free", 0, 100)
+    queue.clear()
+    queue.add(free)
+    queue.run(1, 8, nil, { segments = 4, cross = crossings.cross })
+    assert(queue.state(free).pending and queue.state(free).refused == queue.callbacks)
+    assert(crossings.count == 0, "a task stopped after repeated free turns waits for the next callback")
+end
+
+do
+    local queue, calls, task = fixture()
+    task("A", 4)
+    task("heavy", 8)
+    local used, requested, denied = queue.run(0, 8, nil, { segments = 1, cross = crossing().cross })
+    assert(table.concat(calls, ",") == "A,heavy" and used == 12, "a deferred task continues")
+    assert(requested == 2 and denied == 0)
+    used, requested, denied = queue.run(1, 8)
+    assert(used == 8 and requested == 2 and denied == 1, "without further segments a deferred task waits")
+end
+
+do
+    local queue, _, task = fixture()
+    task("A", 8, 2)
+    local _, _, denied, failure = queue.run(0, 8, nil, {
+        segments = 2,
+        cross = function()
+            return false, "CPU limit"
+        end,
+    })
+    assert(failure == "CPU limit" and denied == 1 and queue.remaining == 0)
+end

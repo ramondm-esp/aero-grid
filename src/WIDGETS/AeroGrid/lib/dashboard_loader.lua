@@ -59,14 +59,15 @@ function module.new(dependencies)
     --- intersection is computed rather than assumed.
     ---@param context AeroGridContext
     ---@param placement table
+    ---@param rect? AeroGridRect The placement's rectangle, when already known.
     ---@return table? reserved
-    local function reservedFor(context, placement)
+    local function reservedFor(context, placement, rect)
         local reserved = context.reserved
         if not reserved then
             return nil
         end
 
-        local rect = panelRect(context, placement)
+        rect = rect or panelRect(context, placement)
         if not rect then
             return nil
         end
@@ -124,6 +125,10 @@ function module.new(dependencies)
                 return builder.state(theme, name, accentName)
             end,
             clock = getTime,
+            -- Whether the layout editor is open over the dashboard.
+            editing = function()
+                return context.editorUi ~= nil
+            end,
             -- The host's own state, for the diagnostics view and nothing else.
             --
             -- The live context, not a copy. A diagnostics view reporting on a
@@ -172,7 +177,8 @@ function module.new(dependencies)
             return nil, tostring(reason)
         end
 
-        local panel, panelError = loadModule(context.path, "panels/" .. placement.type .. ".lua")
+        local panel, panelError =
+            loadModule(context.path, "panels/" .. placement.type .. ".lua", nil, context.scheduler.budget)
         local contractValid, contractError
 
         if panel then
@@ -241,6 +247,9 @@ function module.new(dependencies)
                 instance = instance,
                 settings = settings,
                 container = container,
+                -- What the panel was last laid out for; reflow skips an unchanged frame.
+                rect = rect,
+                reserved = reservedFor(context, placement, rect),
                 -- Boxes built in fullscreen stay touchable in App mode.
                 builtFullscreen = isFullScreen() or nil,
                 interval = interval,
@@ -718,7 +727,6 @@ function module.new(dependencies)
             end
         end
         context.panels = {}
-        context.refreshOwner = nil
         context.rejected = {}
         context.errors = {}
         context.notices = {}

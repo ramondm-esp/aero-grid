@@ -4,12 +4,15 @@ local root = ... or "."
 local equal = assert(loadfile(root .. "/tests/support/assertions.lua"))().assertEqual
 local panel = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/panels/output.lua"))()
 local host = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/panel_host.lua"))()
+host.SLOTS = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/scheduler.lua"))().SLOTS
 local settings, errors = host.resolveSettings(panel, {})
 equal(#errors, 0)
 equal(settings.label, "CHANNEL OUTPUT")
 equal(settings.accent, "cyan")
 equal(settings.showNames, true)
 equal(settings.showTrim, true)
+equal(panel.refreshContinuation, nil)
+assert(host.validateModule(panel, "output"))
 equal(settings.firstChannel, 1)
 equal(settings.channelCount, nil)
 for _, invalid in ipairs({ 0, 33, 1.5, math.huge, 0 / 0 }) do

@@ -173,6 +173,9 @@ function uiModule.advance(context)
     if not state then
         return false
     end
+    if state.nativeInput then
+        context.editorDrawerModule.applyNative(context, state)
+    end
     if state.previewPending then
         state.previewPending = nil
         state.previewRefresh = state.handlers.startPreview(state.session.draft)
@@ -427,6 +430,15 @@ local function coordinates(context, touch)
     return x, y
 end
 
+local function gearIndex(state, x, y)
+    for index, controls in ipairs(state.controls) do
+        local rect = index <= #state.session.draft.panels and controls.rect
+        if rect and hit({ x = rect.x + rect.w - 32, y = rect.y, w = 32, h = 32 }, x, y) then
+            return index
+        end
+    end
+end
+
 local function drag(context, state, event, touch)
     if matches(event, "EVT_TOUCH_BREAK") then
         state.drag = nil
@@ -520,6 +532,7 @@ function uiModule.handle(context, event, touch)
         or state.previewPending
         or state.previewRefresh
         or state.exitCommand
+        or state.nativeInput
     then
         return false
     end
@@ -527,26 +540,25 @@ function uiModule.handle(context, event, touch)
     if state.mode ~= "menu" then
         return true
     end
+    local tap
+    if context.gesture.touch(event) then
+        state.gearPress, tap = context.gesture.track(state.gearPress, event, touch)
+    end
+    local x, y = coordinates(context, tap)
+    local target = x and (gearIndex(state, x, y) or state.addRect and hit(state.addRect, x, y) and "add")
+    if target == "add" then
+        openDrawer(context, state, "add")
+        return true
+    elseif target then
+        state.handlers.editor.select(state.session, target)
+        openDrawer(context, state, "configure")
+        return true
+    end
     if drag(context, state, event, touch) then
         return true
     end
     if matches(event, "EVT_TOUCH_TAP") then
-        local x, y = coordinates(context, touch)
-        if not x then
-            return false
-        end
-        for index, controls in ipairs(state.controls) do
-            local rect = index <= #state.session.draft.panels and controls.rect
-            if rect and hit({ x = rect.x + rect.w - 32, y = rect.y, w = 32, h = 32 }, x, y) then
-                state.handlers.editor.select(state.session, index)
-                openDrawer(context, state, "configure")
-                return true
-            end
-        end
-        if state.addRect and hit(state.addRect, x, y) then
-            openDrawer(context, state, "add")
-            return true
-        end
+        return false
     elseif matches(event, "EVT_VIRTUAL_EXIT") then
         if state.session.dirty then
             context.editorDrawerModule.openExit(context, state)

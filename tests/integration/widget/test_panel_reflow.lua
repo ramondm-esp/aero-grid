@@ -101,7 +101,7 @@ for _, dashboard in ipairs({
             fixture.lvglMock.setFullScreen(fullscreen)
             definition.refresh(context)
             local guard = 0
-            while context.reflowIndex do
+            while context.reflowIndex or context.lifecycleRequest do
                 definition.refresh(context)
                 guard = guard + 1
                 assert(guard < 100, "reflow did not finish")
@@ -173,5 +173,51 @@ for _, subject in ipairs({
         module.refresh(panel)
         equal(panel[subject.label].hidden, true, subject.module .. ": detail is shed again")
         equal(panel.settings[subject.preference], true, subject.module .. ": preference is preserved")
+    end
+end
+
+-- Entering or leaving fullscreen keeps the zone, so only a panel under the
+-- menu-button corner, whose reservation changes, is updated.
+fixture.reset()
+fixture.lvglMock.setFullScreen(false)
+do
+    local context = fixture.createLoaded(nil, { Layout = "Default", Theme = "modern-dark" })
+    fixture.pump(context, 40)
+    equal(#context.errors, 0, table.concat(context.errors, "; "))
+    local updates, originals = {}, {}
+    for _, entry in ipairs(context.panels) do
+        local module, original = entry.module, entry.module.update
+        if not originals[module] then
+            originals[module] = original
+            module.update = function(panel, ...)
+                updates[panel] = (updates[panel] or 0) + 1
+                return original(panel, ...)
+            end
+        end
+    end
+    for _, fullscreen in ipairs({ true, false }) do
+        fixture.lvglMock.setFullScreen(fullscreen)
+        local reserved = {}
+        for _, entry in ipairs(context.panels) do
+            reserved[entry] = entry.reserved
+            updates[entry.instance] = 0
+        end
+        definition.refresh(context)
+        local guard = 0
+        while context.reflowIndex or context.lifecycleRequest do
+            definition.refresh(context)
+            guard = guard + 1
+            assert(guard < 100, "reflow did not finish")
+        end
+        local corner = 0
+        for _, entry in ipairs(context.panels) do
+            local changed = (reserved[entry] == nil) ~= (entry.reserved == nil)
+            corner = corner + (changed and 1 or 0)
+            equal(updates[entry.instance], changed and 1 or 0, entry.placement.id .. ": fullscreen update")
+        end
+        equal(corner, 1, "one panel sits under the menu button")
+    end
+    for module, original in pairs(originals) do
+        module.update = original
     end
 end

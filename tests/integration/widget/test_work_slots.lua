@@ -6,10 +6,12 @@ fixture.reset()
 local definition = fixture.module("main.lua")
 local support = fixture.module("lib/services.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
+fixture.pump(context, 6)
+context.document.panels, context.emptyHint = { {} }, nil
 context.flightFactory = nil
 context.serviceRuntime = support.runtime({})
 context.panels = {}
-context.workCursor = nil
+context.scheduler.cursor = 1
 local calls = {}
 local function record(id, slots)
     calls[#calls + 1] = { id = id, slots = slots }
@@ -20,6 +22,7 @@ local telemetry = {
     count = 1,
     revision = 0,
     updateCost = "variable",
+    updateMinCost = 1,
     update = function(_, _, slots)
         record("telemetry", slots)
         return slots
@@ -43,6 +46,7 @@ local function panel(id, cost, used)
         module = {
             id = id,
             refreshCost = cost,
+            refreshMinCost = cost == "variable" and 1 or nil,
             refresh = function(_, creating, slots)
                 assert(creating == false)
                 record(id, slots)
@@ -71,7 +75,7 @@ assert(context.remainingSlots == 0)
 
 -- A fixed task that cannot fit keeps the next callback's first turn.
 context.panels[2] = panel("large", 8)
-context.workCursor = 3
+context.scheduler.cursor = 3
 calls = {}
 fixture.tick(10)
 definition.refresh(context)
@@ -83,7 +87,7 @@ assert(calls[2].id == "large" and calls[2].slots == 8)
 assert(context.remainingSlots == 0)
 
 context.panels = { panel("first") }
-context.workCursor = 3
+context.scheduler.cursor = 3
 ordinary.updateCost = 8
 calls = {}
 fixture.tick(10)
@@ -94,22 +98,105 @@ definition.refresh(context)
 assert(calls[3].id == "service" and calls[3].slots == 8, "fixed services must retain a deferred turn")
 ordinary.updateCost = nil
 
+local serviceOrder = context.serviceRuntime.order
+context.serviceRuntime.order = {}
 context.panels = { panel("invalid", "variable", 9) }
-context.workCursor = 3
+context.scheduler.cursor = 3
 fixture.tick(10)
 definition.refresh(context)
 assert(context.panels[1].failed and context.remainingSlots == 0)
 assert(string.find(context.panels[1].error, "consumption", 1, true))
 assert(#context.errors == 1, "invalid usage must be reported")
 context.panels = { panel("missing", "variable") }
-context.workCursor = 3
+context.scheduler.cursor = 3
 fixture.tick(10)
 definition.refresh(context)
 assert(context.panels[1].failed and #context.errors == 2, "variable tasks must report consumption")
+context.panels = { panel("invalid-fixed", 2, 3) }
+context.scheduler.cursor = 3
+fixture.tick(10)
+definition.refresh(context)
+assert(context.panels[1].failed and #context.errors == 3, "invalid fixed consumption must be reported")
+context.serviceRuntime.order = serviceOrder
+
+-- Fixed reservations can return unused slots to later services and panels.
+context.serviceRuntime = support.runtime({})
+local partial = {
+    id = "partial",
+    interval = 0,
+    count = 1,
+    revision = 0,
+    updateCost = 8,
+    update = function(_, _, slots)
+        record("partial", slots)
+        return 1
+    end,
+}
+support.register(context.serviceRuntime, partial, 0)
+context.panels = { panel("partial-panel", 4, 1), panel("after", 6) }
+context.scheduler.cursor = 1
+calls = {}
+fixture.tick(10)
+definition.refresh(context)
+assert(#calls == 3 and calls[1].slots == 8 and calls[2].slots == 4 and calls[3].slots == 6)
+assert(context.remainingSlots == 0, "unused fixed reservations must be available to later work")
+
+local continuationTurns = 0
+partial.updateCost, partial.interval = 1, 100
+partial.update = function()
+    continuationTurns = continuationTurns + 1
+    return 1, continuationTurns < 9
+end
+context.panels = { panel("companion") }
+context.scheduler.cursor = 1
+fixture.tick(10)
+definition.refresh(context)
+assert(continuationTurns == 7 and partial.due > getTime())
+fixture.tick(1)
+definition.refresh(context)
+assert(continuationTurns == 9, "pending service work must resume despite its future deadline")
+
+context.serviceRuntime = support.runtime({})
+context.panels = {}
+local dynamicMinimumTurns, dynamicGrants = 0, {}
+local dynamicMinimum = {
+    id = "dynamic minimum",
+    interval = 0,
+    count = 1,
+    revision = 0,
+    updateCost = "variable",
+    updateMinCost = 8,
+    update = function(self, _, slots)
+        dynamicMinimumTurns = dynamicMinimumTurns + 1
+        dynamicGrants[#dynamicGrants + 1] = slots
+        if dynamicMinimumTurns == 1 then
+            self.updateMinCost = 1
+            return 1, true
+        end
+        if dynamicMinimumTurns == 2 then
+            self.updateCost = 2
+            self.updateMinCost = nil
+            return 1, true
+        end
+        return 1, false
+    end,
+}
+support.register(context.serviceRuntime, dynamicMinimum, 0)
+context.scheduler.cursor = 1
+fixture.tick(10)
+definition.refresh(context)
+assert(
+    dynamicMinimumTurns == 3 and dynamicGrants[1] == 8 and dynamicGrants[2] == 7 and dynamicGrants[3] == 2,
+    "a continuing service must use updated slot cost and minimum on each turn"
+)
+
+context.serviceRuntime = support.runtime({})
+support.register(context.serviceRuntime, telemetry, 0)
+support.register(context.serviceRuntime, ordinary, 0)
 
 -- Hidden services share slots too; ordinary foreground refreshes stay dormant.
 context.panels = { panel("hidden") }
-context.workCursor = 1
+context.scheduler.cursor = 1
 calls = {}
 fixture.tick(10)
 definition.background(context)
@@ -120,7 +207,7 @@ assert(#calls == 3 and calls[2].id == "service" and calls[3].id == "telemetry")
 -- Free services still run once after a variable task exhausts the allowance.
 ordinary.updateCost = 0
 context.panels = { panel("blocked") }
-context.workCursor = 1
+context.scheduler.cursor = 1
 calls = {}
 fixture.tick(10)
 definition.refresh(context)
@@ -131,45 +218,40 @@ definition.refresh(context)
 assert(calls[3].id == "blocked", "charged work deferred by free-service scanning must retain its turn")
 assert(calls[4].id == "telemetry" and calls[5].id == "service")
 assert(#calls == 5, "each service must run at most once per callback")
-context.workCursor = 1
+context.scheduler.cursor = 1
 calls = {}
 fixture.tick(10)
 definition.background(context)
 assert(#calls == 2 and calls[2].id == "service" and calls[2].slots == 0)
-assert(fixture.module("lib/history_service.lua").updateCost == 0)
-assert(fixture.module("lib/control_service.lua").updateCost == 0)
+assert(fixture.module("lib/history_service.lua").updateCost == 1)
+assert(fixture.module("lib/control_service.lua").updateCost == 1)
 
 -- Free panels run even after charged work was deferred, without affecting demand.
 context.panels = { panel("blocked"), panel("diagnostic", 0) }
-context.schedulerStats = {
-    started = getTime(),
-    callbacks = 0,
-    used = 0,
-    requested = 0,
-    denied = 0,
-    revision = 0,
-    utilization = 0,
-    deferrals = 0,
-}
-context.workCursor = 1
+local stats = context.scheduler.stats()
+local function counters()
+    return { used = stats.used, available = stats.available, requested = stats.requested, denied = stats.denied }
+end
+local before = counters()
+context.scheduler.cursor = 1
 calls = {}
 fixture.tick(100)
 definition.refresh(context)
 assert(#calls == 3 and calls[3].id == "diagnostic" and calls[3].slots == 0)
-local stats = context.schedulerStats
-assert(stats.revision == 1 and stats.utilization == 100 and stats.deferrals == 50)
+assert(stats.used - before.used == stats.available - before.available)
+assert(stats.denied > before.denied and (stats.denied - before.denied) * 2 == stats.requested - before.requested)
 assert(context.remainingSlots == 0)
 -- The same zero-cost contract can be selected by an individual panel instance.
 context.panels[2].module.refreshCost = 1
 context.panels[2].instance.refreshCost = 0
-context.workCursor = 1
+context.scheduler.cursor = 1
 calls = {}
+before = counters()
 fixture.tick(100)
 definition.refresh(context)
 assert(#calls == 3 and calls[3].id == "diagnostic" and calls[3].slots == 0)
-assert(stats.revision == 2 and stats.deferrals == 50)
-assert(stats.consumers[telemetry] == 8 and next(stats.consumers, next(stats.consumers)) == nil)
-assert(stats.capacity == 8 and stats.seconds == 1, "consumer slots are reported per measured second")
+assert(stats.denied > before.denied and (stats.denied - before.denied) * 2 == stats.requested - before.requested)
+assert(stats.available - before.available == 8, "one callback offers one segment")
 context.flightFactory = {
     broker = {
         identity = function()
@@ -181,22 +263,25 @@ context.flightFactory = {
         errors = {},
         state = {},
         view = { diagnosticRevision = 0, epoch = 1 },
-        tick = function() end,
+        setup = function() end,
+        tasks = function()
+            return {}
+        end,
     },
 }
 context.flightReportedRevision, context.flightReportedEpoch = 0, 1
 fixture.tick(100)
 definition.refresh(context)
-assert(stats.consumers.flight == 1, "flight detection slots are attributed")
 context.flightFactory = nil
 
 context.serviceRuntime = support.runtime({})
 context.panels = { panel("two", 2), panel("one", 1), panel("not-due", 8) }
 context.panels[3].nextRefresh = getTime() + 1000
-context.workCursor = 1
+context.scheduler.cursor = 1
 fixture.tick(100)
+before = counters()
 definition.refresh(context)
-assert(stats.revision == 4 and stats.utilization == 37.5 and stats.deferrals == 0)
+assert(stats.used - before.used == 3 and stats.available - before.available == 8 and stats.denied == before.denied)
 context.panels = {}
 fixture.tick(100)
 -- Keep an inactive service in the registry so the normal dispatch path runs.
@@ -210,5 +295,25 @@ local inactive = {
     end,
 }
 support.register(context.serviceRuntime, inactive, 0)
+before = counters()
 definition.refresh(context)
-assert(stats.revision == 5 and stats.utilization == 0 and stats.deferrals == 0)
+assert(stats.used == before.used and stats.denied == before.denied)
+
+context.serviceRuntime = support.runtime({})
+local backgroundTurns = 0
+context.panels = {
+    {
+        placement = { id = "background" },
+        module = {
+            background = function()
+                backgroundTurns = backgroundTurns + 1
+                return nil, backgroundTurns == 1, 0
+            end,
+        },
+        instance = {},
+    },
+}
+fixture.tick(10)
+definition.background(context)
+assert(backgroundTurns == 2, "background continuation must resume in the same callback")
+assert(context.scheduler.state(context.panels[1].backgroundTask).spent == 0)

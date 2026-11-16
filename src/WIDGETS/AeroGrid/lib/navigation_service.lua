@@ -410,7 +410,14 @@ local function pollEntry(service, entry, now)
 end
 
 function navigationService:update(now)
-    self.cursor = self.support.roundRobin(self.entries, self.cursor, POLL_CAP, pollEntry, self, now)
+    local entries = self.entries
+    -- Keep an in-progress round across callbacks; only completed rounds restart.
+    local left = math.min(self.unpolled or #entries, #entries)
+    local polls = math.min(POLL_CAP, left)
+    self.cursor = self.support.roundRobin(entries, self.cursor, polls, pollEntry, self, now)
+    local unpolled = left - polls
+    self.unpolled = unpolled > 0 and unpolled or nil
+    return nil, unpolled > 0
 end
 
 function navigationService:resetSession(_, index)

@@ -29,10 +29,11 @@ local function create(span)
     radio.globalDetails[8] = { name = "Flights", min = 0, max = 999, prec = 0, unit = 0 }
     local context = definition.create(
         { x = 0, y = 0, w = 480, h = 272 },
-        { Layout = "flight-test", Theme = "modern-dark" },
+        { Layout = "Empty", Theme = "modern-dark" },
         root .. "/src/WIDGETS/AeroGrid/"
     )
-    while context.stage == "theme-read" or context.stage == "theme-validate" do
+    -- Stages share callbacks, so finish loading the empty layout before replacing its source.
+    while context.initializing or context.stage do
         measured(definition.refresh, context)
     end
     context.source = table.concat({

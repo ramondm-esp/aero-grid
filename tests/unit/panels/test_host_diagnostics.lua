@@ -43,4 +43,11 @@ assert(string.find(rows[1].text, "event 10", 1, true), "shrinking keeps the newe
 context.visibleLines = 3
 panel.refresh(context)
 assert(string.find(rows[1].text, "event 8", 1, true), "enlarging restores older visible messages")
+rows[4] = { set = rows[1].set }
+local wide = { host = host, section = "log", visibleLines = 4, rows = rows, texts = {} }
+local _, again = panel.refresh(wide)
+assert(again == true, "a history shift continues in the same callback")
+assert(wide.texts[1] == nil, "the oldest row waits for the next turn")
+_, again = panel.refresh(wide)
+assert(not again and wide.texts[1] ~= nil)
 print("Host diagnostics log panel tests passed")

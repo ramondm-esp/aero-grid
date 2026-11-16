@@ -5,6 +5,7 @@
 local root = assert(...)
 local fixture = assert(loadfile(root .. "/tests/support/widget_fixture.lua"))(root).new()
 local chart = fixture.module("panels/chart.lua")
+assert(loadfile(root .. "/tests/support/chart_turns.lua"))().install(chart)
 local recorder = assert(loadfile(root .. "/tests/support/chart_recorder.lua"))(root)
 local view = assert(loadfile(root .. "/tests/support/chart_assertions.lua"))()
 local equal = assert(loadfile(root .. "/tests/support/assertions.lua"))().assertEqual
@@ -46,8 +47,9 @@ local function run(duration, editingKey)
             end
             if now >= due then
                 grant = 3 - grant
+                local offered = chart.offered(panel, grant)
                 local interval, _, used = chart.refresh(panel, false, grant)
-                assert(used >= 1 and used <= grant, "refreshes must stay within the grant")
+                assert(used >= 1 and used <= offered, "refreshes must stay within the grant")
                 due = now + interval
             end
         end
@@ -59,8 +61,11 @@ local function run(duration, editingKey)
     -- Five minutes of editing: no time, no samples, no queue, no drawing.
     local objects, writes = nativeState()
     host[editingKey] = {}
+    local editing = panel.editing
     if editingKey == "editorUi" then
-        panel.host = { editorUi = true }
+        panel.editing = function()
+            return true
+        end
     end
     advance(now + 40)
     local frozenAt, revision = session.elapsed, record.feeds[1].plotRevision
@@ -82,7 +87,7 @@ local function run(duration, editingKey)
     end
 
     -- Closing resumes the recording with one pause gap; charts carry on.
-    host[editingKey], panel.host = nil, nil
+    host[editingKey], panel.editing = nil, editing
     advance(now + 6000)
     equal(session.resumeLast, resumes + 1, "the editing period must become one pause")
     assert(session.elapsed > frozenAt + 5000, "recording time must advance again")
@@ -90,7 +95,11 @@ local function run(duration, editingKey)
     equal(pauseAt, frozenAt, "the pause sits where recording time stopped")
     for _ = 1, 400 do
         local _, pending = chart.refresh(panel, false, 8)
-        if not pending and view.finished(panel) then
+        local waiting = false
+        for _, owner in ipairs(panel.columnConsumers) do
+            waiting = waiting or #owner.pending > 0 or owner.tail ~= nil
+        end
+        if not pending and not waiting and view.finished(panel) then
             break
         end
     end

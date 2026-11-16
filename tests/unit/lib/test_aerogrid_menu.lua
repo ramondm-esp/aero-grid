@@ -17,6 +17,7 @@ local function fixture(width, height, size)
         root = lvgl.box({ x = 0, y = 0, w = width or 480, h = height or 272 }),
         zone = { w = width or 480, h = height or 272 },
         path = base .. "/",
+        gesture = assert(loadfile(base .. "/lib/gesture.lua"))(),
     }
     local handlers = {
         fullscreen = function()
@@ -208,15 +209,20 @@ do
     assert(not menu.handle(c, EVT_TOUCH_TAP, { x = 1, y = state.h }), "bottom edge is exclusive")
     for _, event in ipairs({ EVT_TOUCH_LONG, EVT_TOUCH_SLIDE }) do
         menu.handle(c, EVT_TOUCH_FIRST, { x = 1, y = 1 })
-        menu.handle(c, event, { x = 1, y = 1 })
+        menu.handle(c, event, { x = 12, y = 1 })
         menu.handle(c, EVT_TOUCH_TAP, { x = 1, y = 1 })
         assert(not menu.advance(c) and not state.open, "hold/drag must not open the popup or editor")
     end
+    menu.handle(c, EVT_TOUCH_FIRST, { x = 1, y = 1 })
+    menu.handle(c, EVT_TOUCH_SLIDE, { x = 11, y = 11 })
+    menu.handle(c, EVT_TOUCH_BREAK, { x = 0, y = 0 })
+    assert(state.pending, "jitter within ten pixels still taps")
+    state.pending = nil
     open(c)
     local tile = state.tiles[1].bounds
     menu.handle(c, EVT_TOUCH_FIRST, { x = tile.x + 1, y = tile.y + 1 })
-    menu.handle(c, EVT_TOUCH_SLIDE, { x = tile.x + 3, y = tile.y + 1 })
-    menu.handle(c, EVT_TOUCH_TAP, { x = tile.x + 3, y = tile.y + 1 })
+    menu.handle(c, EVT_TOUCH_SLIDE, { x = tile.x + 12, y = tile.y + 1 })
+    menu.handle(c, EVT_TOUCH_TAP, { x = tile.x + 12, y = tile.y + 1 })
     menu.advance(c)
     assert(control.model == 0 and state.open, "dragging cannot activate a tile")
     menu.handle(c, EVT_TOUCH_FIRST, { x = 1, y = 1 })
@@ -226,6 +232,21 @@ do
     menu.handle(c, EVT_TOUCH_TAP, { x = 1, y = 1 })
     menu.advance(c)
     assert(not state.open, "outside-dismiss gesture must not reopen the header icon")
+end
+
+do
+    -- EdgeTX sends no TAP when a press outlasts its tap time; the release alone opens the menu.
+    local c, state = fixture()
+    assert(menu.handle(c, EVT_TOUCH_FIRST, { x = 5, y = 5 }))
+    assert(menu.handle(c, EVT_TOUCH_BREAK, { x = 0, y = 0 }))
+    assert(state.pending, "a release without a tap opens the menu")
+    state.pending = nil
+    assert(menu.handle(c, EVT_TOUCH_TAP, { x = 5, y = 5 }))
+    assert(not state.pending, "the tap after a release must not open it twice")
+    assert(menu.handle(c, EVT_TOUCH_FIRST, { x = 5, y = 5 }))
+    assert(menu.handle(c, EVT_TOUCH_SLIDE, { x = 16, y = 5 }))
+    assert(menu.handle(c, EVT_TOUCH_BREAK, { x = 0, y = 0 }))
+    assert(not state.pending, "a slide is not a tap")
 end
 
 do

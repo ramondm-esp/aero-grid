@@ -41,8 +41,8 @@ local function testEnvironmentAndRuntime()
     }
 
     services.register(runtime, service, 0)
-    local updatedId = services.update(runtime, 0)
-    assertions.assertEqual(updatedId, "demo")
+    services.step({ owner = service, registry = runtime }, 0, 1)
+    assertions.assertEqual(service.revision, 1)
 end
 
 local function recordVisit(owner, entry, now)
@@ -87,61 +87,21 @@ local function run()
     testSubscriptionOwnership()
     local runtime = services.runtime({})
     local granted
-    local task = {
+    local service = {
         id = "variable",
         interval = 10,
         due = 0,
         count = 1,
         revision = 0,
-        updateCost = "variable",
         update = function(_, _, slots)
             granted = slots
-            return 2
+            return 2, true
         end,
     }
-    local id, message, used = services.dispatch(runtime, task, 0, 5)
-    assert(id == "variable" and not message and used == 2 and granted == 5)
-    assert(task.due == 10 and task.revision == 1)
-    assert(services.dispatch(runtime, task, 1, 8) == nil)
-    task.updateCost = 3
-    assert(services.dispatch(runtime, task, 10, 2) == nil)
-    assert(task.due == 10, "deferral must not move the deadline")
-    id, message, used = services.dispatch(runtime, task, 10, 3)
-    assert(id == "variable" and not message and used == 3)
-    task.updateCost = "variable"
-    task.update = function()
-        return 9
-    end
-    id, message, used = services.dispatch(runtime, task, 20, 8)
-    assert(id == "variable" and message and used == 8 and task.failed)
-    assert(services.dispatch(runtime, task, 30, 8) == nil)
-    task.failed = nil
-    task.update = function() end
-    id, message, used = services.dispatch(runtime, task, 30, 8)
-    assert(id == "variable" and message and used == 8 and task.failed, "missing consumption must fail")
-    task.failed = nil
-    task.update = function()
-        return 0
-    end
-    id, message, used = services.dispatch(runtime, task, 40, 8)
-    assert(id == "variable" and not message and used == 0 and not task.failed)
-    for _, value in ipairs({ -1, 1.5, 9, math.huge, 0 / 0, "1" }) do
-        assert(not services.consumption(value, 8))
-    end
-    assert(services.consumption(0, 8) and services.consumption(8, 8))
-    task.updateCost, task.due = 0, 50
-    task.update = function(_, _, slots)
-        assert(slots == 0)
-    end
-    id, message, used = services.dispatch(runtime, task, 50, 0)
-    assert(id == "variable" and not message and used == 0 and task.due == 60)
-    assert(services.dispatch(runtime, task, 50, 0) == nil, "zero-slot work must retain its due interval")
-    task.update = function()
-        error("zero-slot failure")
-    end
-    id, message, used = services.dispatch(runtime, task, 60, 0)
-    assert(id == "variable" and message and used == 0 and task.failed)
-    assert(services.grant(0, 0) == 0)
+    local task = { owner = service, registry = runtime }
+    local used, again = services.step(task, 5, 5)
+    assert(used == 2 and again == true and granted == 5, "the step must pass the grant and return the update's result")
+    assert(service.due == 15 and task.due == 15 and service.revision == 1 and runtime.updates == 1)
 end
 
 run()
