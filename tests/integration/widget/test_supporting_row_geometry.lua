@@ -134,7 +134,7 @@ local function testSupportingWordingsStayDistinct()
 
     -- And the narrowest row in the catalogue really does reach the shortest
     -- forms, or the assertions above are about strings nothing prints.
-    local navigationModule = assert(loadfile(sourcePath .. "panels/navigation.lua"))()
+    local navigationModule = moduleLoader("panels/navigation.lua")
     local GUTTER, CELLS, WIDTH, HEIGHT = 4, 4, 480, 272
     local cellWidth = math.floor((WIDTH - GUTTER * (CELLS - 1)) / CELLS)
     local cellHeight = math.floor((HEIGHT - GUTTER * (CELLS - 1)) / CELLS)

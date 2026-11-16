@@ -1,5 +1,8 @@
 -- SPDX-License-Identifier: GPL-2.0-only
 
+local _, armedConfig = ...
+local validSwitch = assert(armedConfig, "navigation requires switch validation").valid
+
 --- GPS position, distance to home, and the north-up bearing from home.
 ---
 --- Direction is measured from home toward the model, not aircraft heading
@@ -80,12 +83,7 @@ local navigation = {
 function navigation.validateSettings(settings, _, _, modelArmed)
     local errors = {}
     local arm = settings.armSwitch
-    if
-        modelArmed == nil
-        and arm ~= nil
-        and arm ~= ""
-        and (type(arm) ~= "string" or not (string.match(arm, "^S[A-Z][%^v%-]$") or string.match(arm, "^L%d%d$")))
-    then
+    if modelArmed == nil and arm ~= nil and arm ~= "" and not validSwitch(arm) then
         errors[#errors + 1] = "armSwitch must be blank, a physical switch position, or a logical switch"
     end
     for _, key in ipairs({ "satelliteWarning", "satelliteCritical" }) do

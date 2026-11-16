@@ -19,7 +19,11 @@ local env = {
     end,
     getSwitchValue = function(index)
         reads = reads + 1
-        return values[index]
+        local value = values[math.abs(index)]
+        if index < 0 and type(value) == "boolean" then
+            return not value
+        end
+        return value
     end,
 }
 local function runtime(modelArm)
@@ -81,11 +85,29 @@ equal(selected.origin, "model")
 assert(native:state("SFv") == selected and native:state("ch5") == selected, "model Armed overrides legacy")
 equal(nativeControl.count, 1)
 equal(armedModule.name(1, control), "SFv")
+equal(armedModule.name(-3, control), "!L01")
 assert(not pcall(armedModule.name, 999, control), "unsupported switch kinds must be reported")
 equal(registry.modelArmed, nil, "legacy resolution must not save model settings")
 local _, disabled = runtime("")
 assert(disabled:state("SFv") == disabled:state("SAv"))
 equal(disabled:state("SFv").configured, false, "saved None disables every legacy condition")
+
+local _, inverted, invertedControl = runtime("!L01")
+local invertedState = inverted:state()
+invertedControl:update(now)
+equal(invertedState.value, true)
+equal(invertedState.fresh, true, "negated false is a reliable reading")
+values[3] = true
+invertedControl:update(now)
+equal(invertedState.value, false)
+values[3] = nil
+invertedControl:update(now)
+equal(invertedState.available, false, "negation must not turn a missing reading into true")
+equal(invertedState.fresh, false)
+local unknown = invertedControl:switch("!L02")
+invertedControl:update(now)
+equal(unknown.known, false, "negation must not turn an unresolved switch into a known condition")
+equal(unknown.available, false)
 
 local layout = load("lib/layout.lua")
 local counter = layout.migratePanel({ type = "flight-counter" }, 3)
@@ -94,3 +116,35 @@ local navigation = layout.migratePanel({ type = "navigation", config = { armSwit
 equal(navigation.config.homeMode, "first-arm")
 local edge = layout.migratePanel({ type = "navigation", config = {} }, 3)
 equal(edge.config.homeMode, "edgetx")
+
+local host = load("lib/panel_host.lua")
+local switchNames = { "", "SF^", "SA-", "SFv" }
+for number = 1, 64 do
+    local name = string.format("L%02d", number)
+    switchNames[#switchNames + 1] = name
+    switchNames[#switchNames + 1] = "!" .. name
+end
+local invalidNames = { "L00", "!L00", "L65", "!L65", "L99", "!L99", "L4", "!L4", "!!L04", "SF", "!SFv", "ch5" }
+for _, panelName in ipairs({ "state", "chart", "navigation", "flight-counter" }) do
+    local panel = load("panels/" .. panelName .. ".lua")
+    local function settings(name)
+        if panelName == "state" then
+            return { entries = { { label = "ARM", states = { { switch = name, text = "ARMED" } } } } }
+        end
+        return { armSwitch = name }
+    end
+    for _, name in ipairs(switchNames) do
+        assert(armedModule.valid(name))
+        local _, warnings = host.resolveSettings(panel, settings(name))
+        equal(#warnings, panelName == "state" and name == "" and 1 or 0, panelName .. " condition " .. name)
+    end
+    for _, name in ipairs(invalidNames) do
+        assert(not armedModule.valid(name))
+        local _, warnings = host.resolveSettings(panel, settings(name))
+        assert(#warnings > 0, panelName .. " accepted invalid condition " .. name)
+        if panelName ~= "state" then
+            _, warnings = host.resolveSettings(panel, settings(name), nil, "!L04")
+            equal(#warnings, 0, "saved model arming still overrides legacy conditions")
+        end
+    end
+end
