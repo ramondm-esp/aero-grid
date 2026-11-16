@@ -3,7 +3,7 @@
 local root = (... and ... ~= "" and ...) or "."
 
 local assertions = assert(loadfile(root .. "/tests/support/assertions.lua"))()
-local navigation = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/panels/navigation.lua"))()
+local navigation = assert(loadfile(root .. "/tests/support/module_loader.lua"))(root)("panels/navigation.lua")
 
 local function testPresentation()
     assertions.assertEqual(navigation.cardinal(0), "N")

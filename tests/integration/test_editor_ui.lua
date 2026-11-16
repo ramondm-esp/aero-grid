@@ -260,22 +260,6 @@ getSourceIndex = function(name)
 end
 getSourceName = menuName
 CHAR_UP, CHAR_DOWN = string.char(192), string.char(193)
-getSwitchName = function(index)
-    if index > 2000 and index <= 2064 then
-        return string.format("L%02d", index - 2000)
-    end
-    for source in pairs(widget.radio.fields) do
-        if string.match(source, "^s[a-z]$") then
-            for _, suffix in ipairs({ CHAR_UP, "-", CHAR_DOWN }) do
-                local name = string.upper(source) .. suffix
-                if getSwitchIndex(name) == index then
-                    return name
-                end
-            end
-        end
-    end
-    return ""
-end
 local function action(name, key)
     for _, row in ipairs(context.editorUi.drawerControls) do
         if row.field.action == name and (not key or row.field.key == key) then
@@ -1434,6 +1418,9 @@ action("item", "entries").properties.press()
 settleDrawer()
 action("item", "entries").properties.press()
 settleDrawer()
+control("entries", "switch").properties.set(getSwitchIndex("!L04"))
+settleDrawer()
+equal(control("entries", "switch").properties.get(), -getSwitchIndex("L04"), "negated selection stays selected")
 control("entries", "text").properties.set("SAVED")
 settleDrawer()
 control("entries", "background").properties.set(4)
@@ -1451,8 +1438,15 @@ local stateDocument = assert(context.yaml.parse(stateSaved:read("*a")))
 stateSaved:close()
 equal(stateDocument.panels[1].config.entries[1].states[1].text, "SAVED", "nested condition text persists")
 equal(stateDocument.panels[1].config.entries[1].states[1].background, "critical", "nested background persists")
+equal(stateDocument.panels[1].config.entries[1].states[1].switch, "!L04", "negated condition persists")
 context = widget.createLoaded(nil, { Layout = "edit-state", Theme = "modern-dark" }, path)
 equal(context.document.panels[1].config.entries[1].states[1].background, "critical", "saved nested settings reload")
+equal(context.document.panels[1].config.entries[1].states[1].switch, "!L04", "negated condition reloads")
+equal(
+    widget.module("lib/settings_ui.lua").switchSummary("!L04"),
+    "!L04",
+    "negated condition summary preserves inversion"
+)
 
 -- A new State panel and its first entry and condition all start blank.
 load("edit-state")
@@ -2002,6 +1996,10 @@ equal(context.editorSession.draft.panels[1].config.armSwitch, "SAv", "physical p
 control("armSwitch").properties.set(getSwitchIndex("L01"))
 settleDrawer()
 equal(context.editorSession.draft.panels[1].config.armSwitch, "L01", "logical arm conditions must also be selectable")
+control("armSwitch").properties.set(getSwitchIndex("!L01"))
+settleDrawer()
+equal(context.editorSession.draft.panels[1].config.armSwitch, "!L01", "negated legacy arm conditions are selectable")
+equal(control("armSwitch").properties.get(), -getSwitchIndex("L01"), "negated legacy selection stays selected")
 control("armSwitch").properties.set(getSwitchIndex("SA" .. CHAR_DOWN))
 settleDrawer()
 action("item", "metrics").properties.press()

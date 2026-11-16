@@ -363,6 +363,26 @@ fixture.pump(context, 20)
 assert(instance.text == "UNMAPPED" or instance.text == "?", "no match does not retain previous reading")
 equal(instance.panel.surfaceColor, instance.theme.color.surface, "no match clears previous mode")
 
+context, instance = create({
+    {
+        label = "ARM",
+        states = {
+            { switch = "!L04", text = "DISARMED" },
+            { switch = "L04", text = "ARMED", background = "warning" },
+        },
+    },
+})
+equal(instance.text, "DISARMED", "a false logical switch satisfies the negated condition")
+equal(instance.feeds[1][1].known, true)
+fixture.radio.logicalSwitches[4] = true
+fixture.pump(context, 20)
+equal(instance.text, "ARMED", "a true logical switch falls through the negated condition")
+equal(instance.stateName, "warning")
+fixture.radio.logicalSwitches[4] = false
+fixture.pump(context, 20)
+equal(instance.text, "DISARMED", "negated conditions follow later logical switch transitions")
+equal(instance.stateName, "normal")
+
 for _, theme in ipairs({ "modern-dark", "modern-light" }) do
     for _, background in ipairs({ "active", "warning", "critical" }) do
         colored.states[3].background = background

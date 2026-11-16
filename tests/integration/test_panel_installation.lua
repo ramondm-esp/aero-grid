@@ -44,22 +44,6 @@ getSourceIndex = function(source)
     return info and info.id or 0
 end
 CHAR_UP, CHAR_DOWN = string.char(192), string.char(193)
-getSwitchName = function(index)
-    if index > 2000 and index <= 2064 then
-        return string.format("L%02d", index - 2000)
-    end
-    for source in pairs(fixture.radio.fields) do
-        if string.match(source, "^s[a-z]$") then
-            for _, suffix in ipairs({ CHAR_UP, "-", CHAR_DOWN }) do
-                local display = string.upper(source) .. suffix
-                if getSwitchIndex(display) == index then
-                    return display
-                end
-            end
-        end
-    end
-    return ""
-end
 
 EVT_TOUCH_FIRST, EVT_TOUCH_BREAK, EVT_TOUCH_TAP = 9101, 9102, 9103
 EVT_VIRTUAL_EXIT = 9104

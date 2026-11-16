@@ -512,9 +512,7 @@ local function checkLayoutExample(body, label)
 
     for _, placement in ipairs(normalized.panels) do
         local where = label .. ": " .. placement.id
-        local chunk = loadfile(root .. "/src/WIDGETS/AeroGrid/panels/" .. placement.type .. ".lua")
-        assert(chunk, where .. ": no panel file for type " .. placement.type)
-        local module = chunk(fixture.loadModule("lib/scheduler.lua").new().budget)
+        local module = fixture.loadModule("panels/" .. placement.type .. ".lua")
 
         local valid, moduleError = panelHost.validateModule(module, placement.type)
         assert(valid, where .. ": " .. tostring(moduleError))

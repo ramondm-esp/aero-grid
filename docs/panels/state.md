@@ -38,7 +38,7 @@ Tap a condition under **States** to open its settings.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **When** | Not selected | Physical switch position, such as `SF^`, `SA-`, or `SFv`, or logical switch, such as `L01`. The first true condition wins. |
+| **When** | Not selected | Physical switch position, such as `SF^`, `SA-`, or `SFv`, or logical switch `L01`–`L64`. Prefix a logical switch with `!` to match when it is off, for example `!L04`. The first true condition wins. |
 | **Text** | Empty | Exact single-line text displayed when this condition wins. |
 | **Background** | normal | Main entry's whole-panel presentation: **normal**, **active**, **warning**, or **critical**. Supporting entries do not control the panel presentation. |
 

@@ -177,8 +177,13 @@ function module.new(dependencies)
             return nil, tostring(reason)
         end
 
-        local panel, panelError =
-            loadModule(context.path, "panels/" .. placement.type .. ".lua", nil, context.scheduler.budget)
+        local panel, panelError = loadModule(
+            context.path,
+            "panels/" .. placement.type .. ".lua",
+            nil,
+            context.scheduler.budget,
+            context.armedConfig
+        )
         local contractValid, contractError
 
         if panel then
@@ -622,7 +627,12 @@ function module.new(dependencies)
 
             context.serviceIndex = index + 1
 
-            local module, moduleError = loadModule(context.path, definition.file, context.packageInfo.runtimeApi)
+            local module, moduleError
+            if definition.id == "armed" then
+                module = context.armedConfig
+            else
+                module, moduleError = loadModule(context.path, definition.file, context.packageInfo.runtimeApi)
+            end
             local constructor = module and rawget(module, "new") or nil
             if type(constructor) == "function" then
                 local runtime = context.serviceRuntime

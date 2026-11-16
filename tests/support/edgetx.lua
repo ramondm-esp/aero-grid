@@ -1822,9 +1822,14 @@ function support.radio(hostIo)
     CHAR_DELTA = firmware.CHAR_DELTA
     local switchPositions = {}
     function getSwitchIndex(name)
+        local inverted = string.sub(name, 1, 1) == "!"
+        if inverted then
+            name = string.sub(name, 2)
+        end
         local logical = string.match(name, "^L(%d%d)$")
         if logical and tonumber(logical) >= 1 and tonumber(logical) <= 64 then
-            return 2000 + tonumber(logical)
+            local index = 2000 + tonumber(logical)
+            return inverted and -index or index
         end
         local source, position = string.match(name, "^(S[A-Z])(.)$")
         local field = source and radio.fields[string.lower(source)]
@@ -1837,7 +1842,28 @@ function support.radio(hostIo)
         end
         local index = field.id * 3 + (target + 1024) / 1024
         switchPositions[index] = { field.id, target }
-        return index
+        return inverted and -index or index
+    end
+    function getSwitchName(index)
+        if index < 0 then
+            local name = getSwitchName(-index)
+            return name and "!" .. name or nil
+        end
+        if index > 2000 and index <= 2064 then
+            return string.format("L%02d", index - 2000)
+        end
+        for source in pairs(radio.fields) do
+            if string.match(source, "^s[a-z]$") then
+                for _, suffix in ipairs({ CHAR_UP, "-", CHAR_DOWN }) do
+                    local name = string.upper(source) .. suffix
+                    local candidate = getSwitchIndex(name)
+                    if candidate ~= 0 and candidate == index then
+                        return name
+                    end
+                end
+            end
+        end
+        return nil
     end
     function getSwitchValue(index)
         if index < 0 then

@@ -2,7 +2,7 @@
 
 local root = assert(..., "repository root argument is required")
 local equal = assert(loadfile(root .. "/tests/support/assertions.lua"))().assertEqual
-local panel = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/panels/flight-counter.lua"))()
+local panel = assert(loadfile(root .. "/tests/support/module_loader.lua"))(root)("panels/flight-counter.lua")
 local detector = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/flight_service.lua"))()
 local support = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/services.lua"))()
 local host = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/panel_host.lua"))()

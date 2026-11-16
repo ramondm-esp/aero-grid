@@ -1,6 +1,8 @@
 -- SPDX-License-Identifier: GPL-2.0-only
 
 local budget = assert(..., "chart requires scheduler budget")
+local _, armedConfig = ...
+local validSwitch = assert(armedConfig, "chart requires switch validation").valid
 
 local chart = {
     id = "chart",
@@ -109,12 +111,7 @@ end
 function chart.validateSettings(settings, _, _, modelArmed)
     local warnings = {}
     local arm = settings.armSwitch
-    if
-        modelArmed == nil
-        and arm ~= nil
-        and arm ~= ""
-        and (type(arm) ~= "string" or not (string.match(arm, "^S[A-Z][%^v%-]$") or string.match(arm, "^L%d%d$")))
-    then
+    if modelArmed == nil and arm ~= nil and arm ~= "" and not validSwitch(arm) then
         warnings[#warnings + 1] = "armSwitch must be blank, a physical switch position, or a logical switch"
     end
     if type(settings.metrics) ~= "table" then

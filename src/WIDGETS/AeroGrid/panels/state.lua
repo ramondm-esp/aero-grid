@@ -1,5 +1,8 @@
 -- SPDX-License-Identifier: GPL-2.0-only
 
+local _, armedConfig = ...
+local validSwitch = assert(armedConfig, "state requires switch validation").valid
+
 local statePanel = {
     id = "state",
     apiVersion = 1,
@@ -97,16 +100,9 @@ function statePanel.validateSettings(settings)
                             warnings[#warnings + 1] = path .. ".text must be a single-line string"
                         end
                         local switch = condition.switch
-                        if
-                            switch ~= nil
-                            and switch ~= ""
-                            and (
-                                type(switch) ~= "string"
-                                or not (string.match(switch, "^S[A-Z][%^v%-]$") or string.match(switch, "^L%d%d$"))
-                            )
-                        then
+                        if switch ~= nil and switch ~= "" and (type(switch) ~= "string" or not validSwitch(switch)) then
                             warnings[#warnings + 1] = path
-                                .. ".switch must name a position such as SF^ or a logical switch such as L01"
+                                .. ".switch must name a position such as SF^ or a logical switch L01-L64, optionally prefixed with !"
                         end
                         local bg = condition.background
                         if bg ~= nil and bg ~= "normal" and bg ~= "active" and bg ~= "warning" and bg ~= "critical" then
