@@ -97,7 +97,7 @@ Drawer title: **Chart** · [drawer settings and behavior](../panels/chart.md) ·
 | Key | Type | Default | Allowed values | Drawer label | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `label` | string | `""` | Any string | Label | Blank hides the heading. |
-| `armSwitch` | string | `""` | Physical position or logical switch | Arm switch position | Legacy fallback before model arming is saved. |
+| `armSwitch` | string | `""` | Physical position or logical switch `L01`–`L64`, including `"!L04"` | Arm switch position | Legacy fallback before model arming is saved. |
 | `metrics` | sequence | `[]` | 0-3 contiguous entries | Metrics | Entry fields follow. |
 | `duration` | number | Unset (drawer: `Auto`) | Whole minutes `1`-`60` | Window minutes | Omit for a growing window. Earlier strings such as `30s` or `5m` round up to whole minutes; values above 60 are limited to 60. |
 | `scaling` | string | `shared` | `shared`, `independent` | Series scales | Independent scales suit unlike units. |
@@ -157,7 +157,7 @@ Drawer title: **Flight counter** · [drawer settings and behavior](../panels/fli
 | Key | Type | Default | Allowed values | Drawer label | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `label` | string | `FLT` | Any string | Label | Heading. |
-| `armSwitch` | string | `""` | Blank, physical switch position, or logical switch such as `L01` | Arm switch position (legacy only) | New panels use model arming. Version-1–3 layouts retain the former `SF^` default when omitted. |
+| `armSwitch` | string | `""` | Blank, physical switch position, or logical switch `L01`–`L64`, including `"!L04"` | Arm switch position (legacy only) | New panels use model arming. Version-1–3 layouts retain the former `SF^` default when omitted. |
 
 Configure flight detection, optional **Smart detection**, and the optional
 logical-switch output in **AeroGrid → Model settings**, not in new panel YAML. The old
@@ -378,7 +378,7 @@ Drawer title: **Navigation** · [drawer settings and behavior](../panels/navigat
 | `label` | string | `NAV` | Any string | Label | |
 | `source` | string | `GPS` | EdgeTX GPS source name | GPS source | |
 | `homeMode` | string | `edgetx` | `edgetx`, `first-arm` | Home position | Choose EdgeTX home or capture using the effective Armed condition. |
-| `armSwitch` | string | `""` | Blank, physical switch position, or logical switch such as `L01` | Home arm switch | Legacy fallback before model arming is saved. Older layouts with a nonblank switch migrate to `first-arm`; other older layouts keep EdgeTX home. |
+| `armSwitch` | string | `""` | Blank, physical switch position, or logical switch `L01`–`L64`, including `"!L04"` | Home arm switch | Legacy fallback before model arming is saved. Older layouts with a nonblank switch migrate to `first-arm`; other older layouts keep EdgeTX home. |
 | `satelliteSource` | string | `""` | Any EdgeTX source name or blank | Satellite count source | |
 | `satelliteWarning` | number | `8` | Nonnegative integer | Warn below satellites | |
 | `satelliteCritical` | number | `4` | Nonnegative integer | Critical below satellites | |
@@ -516,7 +516,7 @@ Drawer title: **State** · [drawer settings and behavior](../panels/state.md) ·
 
 | Key | Type | Default | Allowed values | Drawer label | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `switch` | string | `SA^` in default example; required otherwise | Switch position such as `SF^`, `SA-`, `SFv`, or logical switch `L01` | When | Nested in `entries[].states[]`; required. |
+| `switch` | string | `SA^` in default example; required otherwise | Switch position such as `SF^`, `SA-`, `SFv`, or logical switch `L01`–`L64`, including negated conditions such as `"!L04"` | When | Nested in `entries[].states[]`; required. |
 | `text` | string | `UP` in default example; required otherwise | Nonempty, single-line string | Text | Nested in `entries[].states[]`; displayed when the condition matches. |
 | `background` | string | `normal` | `normal`, `active`, `warning`, `critical` | Background | Nested in `entries[].states[]`; omitted uses `normal`. |
 

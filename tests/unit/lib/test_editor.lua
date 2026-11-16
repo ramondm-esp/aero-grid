@@ -614,7 +614,7 @@ local function testReorderingWithEmptySpace()
 end
 
 local function testNestedStateLists()
-    local statePanel = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/panels/state.lua"))()
+    local statePanel = moduleLoader("panels/state.lua")
     modules.state = statePanel
     local input = document()
     input.panels[1].type = "state"
