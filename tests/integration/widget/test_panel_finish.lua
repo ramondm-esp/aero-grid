@@ -7,9 +7,7 @@ local definition = fixture.module("main.lua")
 local support = fixture.module("lib/services.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(context, 6)
-context.document.panels, context.emptyHint = { {} }, nil
-context.flightFactory = nil
-context.serviceRuntime = support.runtime({})
+fixture.isolateWork(context)
 
 local calls = {}
 local function record(id, slots)
@@ -243,7 +241,6 @@ local scalarRefreshes = 0
 local scalarEntry = entry({
     id = "scalar",
     refreshCost = 1,
-    refreshContinuation = true,
     refresh = function()
         scalarRefreshes = scalarRefreshes + 1
         return nil, true

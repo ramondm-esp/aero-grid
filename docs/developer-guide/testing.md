@@ -11,7 +11,7 @@ make test
 make check
 ```
 
-`make test` checks the Python runner, then runs every `test_*.lua` under
+`make test` checks menu artwork and the Python runner, then runs every `test_*.lua` under
 `tests/`, excluding support modules. Each suite gets a fresh Lua 5.3 runtime
 and the repository root as its chunk argument. The runner stops at the first
 failure and prints its captured AeroGrid errors and traceback.
@@ -35,10 +35,10 @@ make check LUA_COMPILER=/absolute/path/to/edgetx-luac
 | Layout parsing, validation, geometry, persistence | Corresponding `tests/unit/lib/` suites. |
 | Source resolution or service data | Corresponding service suites in `tests/unit/lib/`. |
 | Panel settings/presentation | `tests/unit/panels/` and `tests/integration/widget/test_*_review.lua`. |
-| Loading, scheduling, callback budgets | `tests/integration/test_widget.lua` and widget queue/slot suites. |
+| Loading, scheduling, callback budgets | Focused `test_catalog_loading.lua`, `test_host_faults.lua`, `test_callback_budget.lua`, and widget queue/slot suites. |
 | Editor commands/dialogs | `test_editor.lua`, `test_editor_ui.lua`, and `test_panel_installation.lua`. |
 | Arming, flight detection, model settings, reset | Shared-arming/shared-flight, model-settings, and session-reset suites. |
-| Reflow or resource lifetime | All-panel-spans, builder-matrix, panel-reflow, font-callback, and resource-stability suites. |
+| Reflow or resource lifetime | Rendered-geometry, all-panel-spans, panel-reflow, font-callback, and resource-stability suites. |
 
 Use `tests/support/runtime_fixture.lua` for runtime helpers without LVGL,
 `widget_fixture.lua` for a mocked host, and `edgetx.lua` for firmware behavior
@@ -47,7 +47,7 @@ do not make a mock agree with an unverified assumption.
 
 ## Performance and resource regressions
 
-`tests/integration/test_widget.lua` measures callback instructions across
+`tests/integration/widget/test_callback_budget.lua` measures callback instructions across
 loading, dense layouts, services, and reflow. Its ceiling is below 15,000,
 leaving headroom against EdgeTX's 20,000-instruction limit. Focused suites add
 their own budgets; these are mock measurements, not hardware timing guarantees.
@@ -96,7 +96,7 @@ serve a [built site with mirrored assets](build.md#browser-installer-assets):
 node tests/browser/radio-panel.smoke.mjs http://127.0.0.1:8000/
 ```
 
-It needs two mirrored releases and uses disposable browser storage, not a radio
+It needs two available mirrored stable releases and uses disposable browser storage, not a radio
 or the OS folder picker. Optional environment variables are `PLAYWRIGHT_MODULE`
 (external `index.mjs` path), `PLAYWRIGHT_CHANNEL=chrome`, and
 `INSTALLER_KEYBOARD=1` for keyboard activation.
@@ -111,6 +111,14 @@ Release packaging (standard library):
 python3 -m unittest discover -s tools -p 'test_release_*.py'
 ```
 
+Menu icon and tile artwork checks also use only the standard library:
+
+```sh
+make test-artwork
+```
+
+They run as part of `make test` / `make check`, including CI.
+
 Screenshot recipes/adapters (PyYAML, no Companion required):
 
 ```sh
@@ -121,7 +129,7 @@ build/capture-venv/bin/python -m unittest discover -s tools -p 'test_capture_*.p
 Documentation publishing and browser layout:
 
 ```sh
-make docs
+python3 -m venv build/docs-venv
 build/docs-venv/bin/python -m pip install -r requirements-docs-test.txt
 build/docs-venv/bin/python -m playwright install chromium
 build/docs-venv/bin/python -m unittest discover -s tools -p 'test_docs_*.py'

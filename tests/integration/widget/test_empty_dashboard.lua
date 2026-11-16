@@ -29,7 +29,6 @@ fixture.lvglMock.setFullScreen(true)
 assert(fixture.pumpUntil(context, function()
     return hint.instruction.properties.text == "AeroGrid menu > UI setup"
 end, 20))
-assert(hint.instruction.properties.text == "AeroGrid menu > UI setup")
 assert(hint.setupHint.properties.text == "")
 assertHorizontallyCentred({ "title", "instruction" })
 context.zone.w, context.zone.h = 320, 180

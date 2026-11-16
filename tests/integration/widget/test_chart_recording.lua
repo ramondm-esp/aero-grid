@@ -76,7 +76,7 @@ if withFlights or smartEnabled then
 end
 
 local context
-local function measure(fn, ...)
+local function runCallback(fn, ...)
     fixture.lvglMock.setPropertyValidation(false)
     fixture.lvglMock.setCallCounting(false)
     fixture.lcdMock.setTextMeasurement(false)
@@ -94,7 +94,7 @@ context = definition.create({ x = 0, y = 0, w = 480, h = 272 }, {
 local function pump(count, background)
     for _ = 1, count do
         fixture.tick(10)
-        measure(background and definition.background or definition.refresh, context)
+        runCallback(background and definition.background or definition.refresh, context)
         fixture.lvglMock.settle()
     end
     assert(#context.errors == 0, table.concat(context.errors, "\n"))
@@ -120,6 +120,63 @@ for _ = 1, 2500 do
     end
 end
 assert(prepared, "all chart frames must be initialized before recording starts")
+if independent then
+    local sessions = {}
+    for index, entry in ipairs(context.panels) do
+        local session = entry.instance.session
+        assert(not session.recording, "independent charts must start disarmed")
+        for _, other in ipairs(sessions) do
+            assert(session ~= other, "different arm switches must own different sessions")
+        end
+        sessions[index] = session
+    end
+    local function transition(index, armed)
+        local before, revisions = {}, {}
+        for other, session in ipairs(sessions) do
+            before[other] = { recording = session.recording, segment = session.segment, elapsed = session.elapsed }
+        end
+        for _, item in ipairs(context.panels[index].instance.series) do
+            revisions[item] = item.feed.plotRevision
+        end
+        fixture.radio.logicalSwitches[index] = armed
+        pump(40)
+        assert(sessions[index].recording == armed, "only the selected chart must follow its switch")
+        for other, session in ipairs(sessions) do
+            if other ~= index then
+                assert(session.recording == before[other].recording, "one chart switch changed another recording")
+                assert(session.segment == before[other].segment, "one chart switch split another session")
+                if before[other].recording then
+                    assert(session.elapsed > before[other].elapsed, "another active chart stopped recording time")
+                else
+                    assert(session.elapsed == before[other].elapsed, "disarmed chart time advanced")
+                end
+            end
+        end
+        if armed then
+            assert(sessions[index].elapsed > before[index].elapsed, "the selected chart must record elapsed time")
+            for _, item in ipairs(context.panels[index].instance.series) do
+                assert(
+                    item.feed.available and item.feed.plotRevision > revisions[item],
+                    "each independently armed source must record"
+                )
+            end
+        end
+    end
+    for index = 1, 8 do
+        transition(index, true)
+    end
+    for index = 7, 1, -2 do
+        transition(index, false)
+    end
+    transition(1, true)
+    assert(sessions[1].segment == 2, "rearming one chart must start only its next segment")
+    transition(1, false)
+    for index = 2, 8, 2 do
+        transition(index, false)
+    end
+    assert(context.serviceRuntime.byId.history.count == 24, "all independent chart sources must be subscribed")
+    return
+end
 setArmed(1024)
 pump(200)
 if withFlights then
@@ -171,7 +228,14 @@ for step = 1, 10000 do
             advanced = advanced and item.drawnRevision and item.drawnRevision > liveRevisions[item]
         end
     end
-    if step >= 1000 and advanced then
+    if smartEnabled then
+        local telemetry = context.serviceRuntime.byId.telemetry
+        for id = 1, 24 do
+            local reading = telemetry:subscribe("Q" .. id)
+            advanced = advanced and reading.updatedAt > getTime() - 300 and reading.value > id
+        end
+    end
+    if step >= ((withFlights or smartEnabled) and 100 or 1000) and advanced then
         break
     end
 end
@@ -258,6 +322,10 @@ if withFlights then
         )
     )
     assert(panel.flightBands and panel.flightBands[1], "completed flights must have background bands")
+end
+
+if withFlights or smartEnabled then
+    return
 end
 
 for cycle = 1, 20 do
@@ -349,7 +417,7 @@ first.module.refresh = function()
 end
 first.nextRefresh = 0
 for _ = 1, 4 do
-    measure(definition.refresh, context)
+    runCallback(definition.refresh, context)
     if first.interval == 37 then
         break
     end

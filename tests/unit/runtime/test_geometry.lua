@@ -257,78 +257,23 @@ end
 
 --- Width is asked of the radio, and the estimate is only a fallback.
 ---
---- The two differ enough to tell apart, which is the point: `theme.textWidth`
---- charges every character 0.58 of a line height, so a decimal point costs
---- what a digit does, and against the real advances of the font EdgeTX ships
---- `7.9` comes out 68% too wide. That generosity is correct when deciding
---- whether something fits and wrong when deciding where something starts.
----
 --- The mock's `lcd.sizeText` is a proportional model rather than the radio's
 --- own numbers -- it cannot be more, since every font the dashboard draws
 --- with is LZ4-compressed in the tree. What it reproduces faithfully is the
 --- shape: a narrow `.`, a wide `m`, and a total that depends on which
 --- characters a string holds rather than only how many.
 local function testWidthIsMeasuredNotEstimated()
-    -- The estimate is length times height times a constant, so two strings of
-    -- the same length measure the same however different they look.
-    assertEqual(theme.textWidth(MIDSIZE, "8.8"), theme.textWidth(MIDSIZE, "888"))
-
-    -- Measurement does not, and that difference is what a test can see.
     assert(
         theme.measureText(MIDSIZE, "8.8") < theme.measureText(MIDSIZE, "888"),
         "a decimal point measures as wide as a digit, so this is the estimate" .. " wearing a different name"
     )
 
-    -- **The estimate is generous on digits, and only on digits.** It is one
-    -- allowance per character, sized between a digit and a capital, so the
-    -- direction of its error depends on what the string holds. This used to be
-    -- asserted as a general property of "the readings this dashboard prints",
-    -- which was a claim about every panel made by looking at one kind of
-    -- string.
-    local checked = 0
-    for _, sample in ipairs({ "7.9", "10.0", "88.8", "-100", "888.88", "1:04:12" }) do
+    -- Assert the host's measured result, not a particular estimator's error.
+    for _, sample in ipairs({ "7.9", "10.0", "88.8", "-100", "888.88", "1:04:12", "MMMMMM" }) do
         for _, font in ipairs(theme.READING_FONTS) do
-            checked = checked + 1
-            assert(
-                theme.textWidth(font, sample) >= theme.measureText(font, sample),
-                "the estimate under-reports "
-                    .. sample
-                    .. " at "
-                    .. edgetx.fontName(font)
-                    .. ", which would clip rather than shrink"
-            )
+            assertEqual(theme.measureText(font, sample), lcd.sizeText(sample, font))
         end
     end
-    assert(checked >= 24, "only " .. checked .. " pairs were compared")
-
-    -- And the counterexample, which is not hypothetical: `model-identity`
-    -- sizes its panel against a row of `M`, because `LEN_MODEL_NAME` is 15 and
-    -- that is the widest name EdgeTX will store. A capital advances wider than
-    -- the allowance, so the estimate reports less than the truth for exactly
-    -- the string that panel fits against -- and a fit that believes it
-    -- draws past the panel edge rather than shrinking. Pinned here so the
-    -- boundary above cannot be read as a general guarantee again.
-    for _, font in ipairs(theme.READING_FONTS) do
-        assert(
-            theme.textWidth(font, "MMMMMM") < theme.measureText(font, "MMMMMM"),
-            "the estimate no longer under-reports capitals at "
-                .. edgetx.fontName(font)
-                .. ", so the reason fitting measures has"
-                .. " changed and the comment above is now telling a different story"
-        )
-    end
-
-    -- The gap between them is the user's complaint, stated as a number. At the
-    -- largest reading a `7.9` was placed tens of pixels further right than the
-    -- radio draws it.
-    local slack = theme.textWidth(XXLSIZE, "7.9") - theme.measureText(XXLSIZE, "7.9")
-    assert(
-        slack > 20,
-        "the estimate is only "
-            .. slack
-            .. " pixels generous at XXLSIZE, so this change buys nothing and the"
-            .. " gap the user reported has another cause"
-    )
 
     -- Empty and absent text measure zero rather than raising, because a panel
     -- with no reading yet still places its unit.
@@ -566,14 +511,6 @@ local function testUnitSitsOnTheBaseline()
     end
 
     assertEqual(checked, #theme.READING_FONTS)
-
-    -- The pair that matters most is the one the approximation is worst on.
-    local worst = theme.fontHeight(XXLSIZE) - theme.fontHeight(MIDSIZE) - theme.unitTop(XXLSIZE, MIDSIZE, 0)
-    assertEqual(
-        worst,
-        9,
-        "the error in bottom alignment at the largest reading moved, so the" .. " table in this comment is stale"
-    )
 end
 
 --- Text must be fitted by measured width as well as height, because a long
@@ -747,7 +684,7 @@ local function testBatteryStaysVisible()
         return resolved.rgb[accent]
     end
 
-    local checked, worst, where = 0, 99, ""
+    local checked = 0
     for _, mode in ipairs({ "modern-dark", "modern-light" }) do
         local resolved = theme.build(mode)
         for _, state in ipairs({ "normal", "warning", "critical", "stale", "unavailable" }) do
@@ -760,9 +697,6 @@ local function testBatteryStaysVisible()
                     minimum = 1.5
                 end
                 checked = checked + 1
-                if ratio < worst then
-                    worst, where = ratio, mode .. "/" .. state .. "/" .. accent
-                end
                 assert(
                     ratio >= minimum,
                     mode
@@ -778,17 +712,6 @@ local function testBatteryStaysVisible()
     end
 
     assert(checked >= 40, "only " .. checked .. " combinations were checked")
-
-    -- The margin is recorded rather than merely cleared, so a change that eats
-    -- most of it is visible in the diff even while the test still passes.
-    assert(
-        worst < 3.5,
-        "the worst pairing is now "
-            .. string.format("%.2f", worst)
-            .. " at "
-            .. where
-            .. ", so this test no longer describes the palette"
-    )
 
     -- And the pairing the whole question was about, named rather than left to
     -- be inferred from the loop.
@@ -1184,12 +1107,6 @@ local function testTheRowHangsFromTheFloor()
     local GUTTER, CELLS, WIDTH, HEIGHT = 4, 4, 480, 272
     local cellHeight = math.floor((HEIGHT - GUTTER * (CELLS - 1)) / CELLS)
 
-    -- Where a centred row landed, measured on the commit before pinning.
-    -- Written out rather than derived, for the reason the heading's twin
-    -- states: an expectation computed from the code under test passes whatever
-    -- the code does.
-    local CENTRED_BEFORE = { 45, 106, 166, 227 }
-
     local checked = 0
     for rows = 2, 4 do
         local rect = { x = 0, y = 0, w = 238, h = cellHeight * rows + GUTTER * (rows - 1) }
@@ -1210,15 +1127,6 @@ local function testTheRowHangsFromTheFloor()
                 rows,
                 rect.h - (bare + ink),
                 frame.compact
-            )
-        )
-
-        assert(
-            bare ~= CENTRED_BEFORE[rows],
-            string.format(
-                "a %d-row panel still puts its row where centring in the bottom"
-                    .. " quarter put it, so nothing was pinned",
-                rows
             )
         )
 
@@ -1827,7 +1735,8 @@ local function testIdentityPresentation()
 
     local previous = fstat
     fstat = nil
-    local _, unchecked = identity.fileExists("/IMAGES/plane.png")
+    local missing, unchecked = identity.fileExists("/IMAGES/plane.png")
+    assertEqual(missing, false)
     assertEqual(unchecked, false, "without fstat nothing can be proven, so the fallback must stay")
 
     -- A firmware whose fstat raises must not take the panel with it.

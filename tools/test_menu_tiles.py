@@ -1,17 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Verify exact native menu icon alpha and inverse selection artwork offline."""
 import hashlib
-import importlib.util
 from pathlib import Path
 import unittest
 
+from tool_test_support import load_tool
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("menu_tiles", ROOT / "tools/generate-menu-tiles.py")
-tiles = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(tiles)
-spec = importlib.util.spec_from_file_location("menu_capture", ROOT / "tools/capture-editor.py")
-capture = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(capture)
+tiles = load_tool("menu_tiles", "generate-menu-tiles.py")
+capture = load_tool("menu_capture", "capture-editor.py")
 
 
 class MenuTilesTests(unittest.TestCase):
@@ -52,7 +49,6 @@ class MenuTilesTests(unittest.TestCase):
             ("model", 62): "2c58417f8fad8867dd26e3af5b64c50eb9fc70ceeb22c6255e42cf60c00fc8fc",
             ("theme", 62): "2cde45a04134bff6b767940a71ec14af625463c608086fbddb3f7360f5350039",
         }
-        self.assertEqual(len(expected), 6)
         for (icon, size), digest in expected.items():
             rows = tiles.png.read_png(ROOT / f"src/WIDGETS/AeroGrid/assets/menu-{icon}-white-{size}.png")
             alpha = bytes(pixel[3] for row in rows for pixel in row)

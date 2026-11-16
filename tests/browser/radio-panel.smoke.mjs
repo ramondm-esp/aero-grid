@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Optional Chromium acceptance check: the picker returns native, disposable OPFS handles.
 import assert from "node:assert/strict";
+import { githubRelease, smokeReleases } from "./radio-smoke-fixtures.mjs";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? "playwright");
 const site = new URL(process.argv[2] ?? "http://127.0.0.1:8000/");
 const catalog = await (await fetch(new URL("installer/releases.json", site))).json();
+const { stable, historical } = smokeReleases(catalog);
 const manifest = await (await fetch(new URL(`installer/releases/${catalog.latest}/manifest.json`, site))).json();
-const historical = catalog.releases.find((entry) => entry.available && entry.version !== catalog.latest);
-assert.ok(historical, "Acceptance requires a mirrored historical release");
 const RELEASES_API = "https://api.github.com/repos/thomaskistler/aero-grid/releases";
 const browser = await chromium.launch({
   headless: true,
@@ -18,26 +18,15 @@ const errors = [];
 context.on("page", (page) => page.on("pageerror", (error) => errors.push(error.message)));
 await context.route("**/*", async (route) => {
   const url = route.request().url();
-const tagPrefix = `${RELEASES_API}/tags/v`;
-if (url.startsWith(tagPrefix)) {
-  const version = url.slice(tagPrefix.length);
-  const entry = catalog.releases.find((release) => release.version === version);
-  await route.fulfill({ json: {
-    tag_name: `v${version}`, draft: false, prerelease: false,
-    assets: entry?.available ? [`AeroGrid-${version}.zip`, `AeroGrid-${version}.zip.sha256`].map((name) => ({
-      name,
-      browser_download_url: `https://github.com/thomaskistler/aero-grid/releases/download/v${version}/${name}`,
-    })) : [],
-  } });
-} else if (url.startsWith(`${RELEASES_API}?`)) {
-  await route.fulfill({ json: catalog.releases.map((entry) => ({
-    tag_name: `v${entry.version}`, name: entry.name, draft: false, prerelease: false,
-    assets: entry.available ? [`AeroGrid-${entry.version}.zip`, `AeroGrid-${entry.version}.zip.sha256`].map((name) => ({
-      name,
-      browser_download_url: `https://github.com/thomaskistler/aero-grid/releases/download/v${entry.version}/${name}`,
-    })) : [],
-  })) });
-} else if (new URL(url).origin === site.origin) await route.continue();
+  const tagPrefix = `${RELEASES_API}/tags/`;
+  if (url.startsWith(tagPrefix)) {
+    const tag = url.slice(tagPrefix.length);
+    const entry = catalog.releases.find((release) => githubRelease(release).tag_name === tag);
+    if (entry) await route.fulfill({ json: githubRelease(entry) });
+    else await route.fulfill({ status: 404, body: "Unknown release" });
+  } else if (url.startsWith(`${RELEASES_API}?`)) {
+    await route.fulfill({ json: catalog.releases.map(githubRelease) });
+  } else if (new URL(url).origin === site.origin) await route.continue();
   else await route.abort();
 });
 
@@ -82,10 +71,14 @@ try {
   assert.equal(await page.locator("[data-release-label]").textContent(), "Selected AeroGrid release");
   assert.equal(await page.locator("[data-latest]").textContent(), `v${catalog.latest} - latest`);
   assert.equal(await page.locator(".ag-radio-card").nth(1).locator("small").count(), 0);
-  assert.ok(await page.evaluate(() =>
-    parseFloat(getComputedStyle(document.querySelector(".ag-article h1")).fontSize)
-      === parseFloat(getComputedStyle(document.querySelector("#manual-installation")).fontSize)),
-  "USB and manual installation headings have the same font size");
+  for (const [selector, size] of [
+    [".ag-article h1", "32px"],
+    ["#install-over-usb", "24px"],
+    ["#manual-installation", "24px"],
+  ]) {
+    assert.equal(await page.locator(selector).evaluate((node) =>
+      getComputedStyle(node).fontSize), size, `${selector} uses ${size} heading text`);
+  }
   for (const selector of [
     ".ag-radio-help-popover", ".ag-radio-help-popover p",
     ".ag-install-safety", "[data-compatibility]", "[data-connect]", "[data-install]",
@@ -111,7 +104,7 @@ try {
   await assertConnectionIcon(false);
   assert.equal(await page.locator("[data-device]").count(), 0);
   assert.equal(await page.locator(`input[name=aerogrid-release][value="${catalog.latest}"]`).isChecked(), true);
-  assert.equal(await page.locator("input[name=aerogrid-release]").count(), catalog.releases.length);
+  assert.equal(await page.locator("input[name=aerogrid-release]").count(), stable.length);
   assert.equal(await page.locator("[data-release-dialog]").isVisible(), false);
   await activate("[data-release-open]");
   assert.equal(await page.locator("[data-release-dialog]").isVisible(), true);
@@ -121,7 +114,7 @@ try {
   await activate("[data-release-open]");
   await activate("[data-release-close]");
   assert.equal(await page.locator("[data-release-dialog]").isVisible(), false);
-  for (const entry of catalog.releases.filter((entry) => !entry.available)) {
+  for (const entry of stable.filter((entry) => !entry.available)) {
     assert.equal(await page.locator(`input[name=aerogrid-release][value="${entry.version}"]`).isDisabled(), true);
   }
   assert.equal(await page.locator("[data-install]").isDisabled(), true);
@@ -182,7 +175,7 @@ try {
   assert.equal(await page.locator("[data-confirm-dialog]").isVisible(), true);
   assert.equal(await page.locator("[data-confirm-description]").textContent(),
     `Install AeroGrid v${manifest.version} on installer-acceptance?\n\n`
-    + "This will replace the AeroGrid installation on your radio. No backup or rollback is available.\n\n"
+    + "This will replace the AeroGrid installation on your radio. Any modified or added files in WIDGETS/AeroGrid will be discarded. No backup or rollback is available.\n\n"
     + "AeroGrid user data, maps, other widgets, model/radio settings, and firmware will not be changed.");
   await page.keyboard.press("Escape");
   assert.equal(await page.locator("[data-confirm-dialog]").isVisible(), false);

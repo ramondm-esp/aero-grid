@@ -6,57 +6,7 @@ local yaml = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/yaml.lua"))()
 local layout = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/layout.lua"))()
 local grid = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/grid.lua"))()
 
-local function memoryFiles()
-    local files = {}
-    local failRenameTo
-    local operations = {}
-    function operations.open(filename, mode)
-        if mode == "w" then
-            return { filename = filename, mode = mode }
-        end
-        if files[filename] then
-            return { filename = filename, mode = mode }
-        end
-        return nil, "not found"
-    end
-    function operations.read(handle, size)
-        local content = files[handle.filename]
-        return content and string.sub(content, 1, size) or nil
-    end
-    function operations.write(handle, content)
-        files[handle.filename] = content
-        return true
-    end
-    function operations.close()
-        return true
-    end
-    function operations.stat(filename)
-        local content = files[filename]
-        return content and { size = #content } or nil
-    end
-    function operations.remove(filename)
-        files[filename] = nil
-        return true
-    end
-    function operations.rename(from, to)
-        if failRenameTo == to then
-            return nil, "injected rename failure"
-        end
-        if not files[from] then
-            return nil, "source missing"
-        end
-        if files[to] then
-            return nil, "destination exists"
-        end
-        files[to] = files[from]
-        files[from] = nil
-        return true
-    end
-    function operations.failNextRenameTo(filename)
-        failRenameTo = filename
-    end
-    return files, operations
-end
+local memoryFiles = assert(loadfile(root .. "/tests/support/memory_files.lua"))()
 
 local function makeDocument(label)
     return {
@@ -96,7 +46,13 @@ local function testFailedCommitLeavesBackup()
     local files, operations = memoryFiles()
     local filename = layoutStore.path("/widget", "main")
     files[filename] = assert(yaml.serialize(makeDocument("last good")))
-    operations.failNextRenameTo(filename)
+    local rename = operations.rename
+    operations.rename = function(from, to)
+        if to == filename then
+            return nil, "injected rename failure"
+        end
+        return rename(from, to)
+    end
     local saved, saveError = layoutStore.save("/widget", "main", makeDocument("new"), yaml, layout, grid, operations)
     assert(not saved and string.find(saveError, "injected", 1, true))
     assert(not files[filename])

@@ -7,9 +7,7 @@ fixture.reset()
 local definition = fixture.module("main.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(context, 10)
-context.flightFactory = nil
-context.document.panels, context.emptyHint = { {} }, nil
-context.serviceRuntime = context.servicesModule.runtime({})
+fixture.isolateWork(context)
 local calls, loadSteps, reflowSteps = {}, 0, 0
 local function record(kind)
     local task = assert(context.lifecycleTasks[kind])

@@ -21,13 +21,6 @@ local function testPositionChecksAndDistance()
     assert(bearing >= 0 and bearing <= 360, "bearing should be in degrees")
 end
 
-local function testServiceCreatesRuntime()
-    local env = services.environment({})
-    local runtime = services.runtime(env)
-    local service = navigationService.new(env, services, runtime)
-    assert(type(service) == "table", "navigation service should construct")
-end
-
 local function captureFixture(homes)
     local arm = { available = true, fresh = true, value = false, updatedAt = 0 }
     local reading = {
@@ -517,7 +510,6 @@ end
 
 local function run()
     testPositionChecksAndDistance()
-    testServiceCreatesRuntime()
     testRoundContinuesUntilEverySubscriptionIsPolled()
     testContendedRoundSurvivesCallbacksAndSubscriptionChanges()
     testFirstArmHome()

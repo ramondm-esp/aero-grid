@@ -122,8 +122,6 @@ local dashboards = {
 local baseline = {}
 local maxGrowth = 0
 local peakObjects = 0
-local worstRefreshMs = 0
-local worstRefreshDashboard = ""
 local weak = setmetatable({}, { __mode = "v" })
 
 -- Warm the same workloads before taking baselines: lazy chart columns grow
@@ -168,28 +166,14 @@ for cycle = 1, 22 do
             assert(fullObjects == baseline[dashboard].objects, dashboard .. " grew its live object count")
             assert(growth < 16, string.format("%s retained %.1f KiB after cycle %d", dashboard, growth, cycle))
         end
-        if cycle == 1 or cycle == 22 then
-            local started = os.clock()
-            for _ = 1, 1000 do
-                refresh()
-            end
-            local averageMs = (os.clock() - started) * 1000 / 1000
-            if averageMs > worstRefreshMs then
-                worstRefreshMs = averageMs
-                worstRefreshDashboard = dashboard
-            end
-        end
     end
 end
 
 print(
     string.format(
-        "  mock resource stability: %d reloads after warm-up, peak %d objects, growth %.1f KiB;"
-            .. " worst average %.3f ms/refresh (%s)",
+        "  mock resource stability: %d reloads after warm-up, peak %d objects, growth %.1f KiB",
         20 * #dashboards,
         peakObjects,
-        maxGrowth,
-        worstRefreshMs,
-        worstRefreshDashboard
+        maxGrowth
     )
 )

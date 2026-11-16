@@ -74,6 +74,22 @@ local function checkPanel(context, entry)
     end
 end
 
+local function reflow(context, width, height, fullscreen)
+    context.zone.w, context.zone.h = width, height
+    fixture.lvglMock.setFullScreen(fullscreen)
+    definition.refresh(context)
+    local guard = 0
+    while context.reflowIndex or context.lifecycleRequest do
+        definition.refresh(context)
+        guard = guard + 1
+        assert(guard < 100, "reflow did not finish")
+    end
+    -- Check immediately, without a telemetry tick or panel refresh.
+    for _, entry in ipairs(context.panels) do
+        checkPanel(context, entry)
+    end
+end
+
 for _, dashboard in ipairs({
     "review-metric",
     "review-link-status",
@@ -97,19 +113,7 @@ for _, dashboard in ipairs({
     equal(#context.errors, 0, dashboard .. ": " .. table.concat(context.errors, "; "))
     for _, size in ipairs({ { 480, 272 }, { 320, 240 }, { 480, 272 } }) do
         for _, fullscreen in ipairs({ true, false }) do
-            context.zone.w, context.zone.h = size[1], size[2]
-            fixture.lvglMock.setFullScreen(fullscreen)
-            definition.refresh(context)
-            local guard = 0
-            while context.reflowIndex or context.lifecycleRequest do
-                definition.refresh(context)
-                guard = guard + 1
-                assert(guard < 100, "reflow did not finish")
-            end
-            -- No telemetry tick or panel refresh between reflow and the assertions.
-            for _, entry in ipairs(context.panels) do
-                checkPanel(context, entry)
-            end
+            reflow(context, size[1], size[2], fullscreen)
             fixture.pump(context, 10)
             equal(#context.errors, 0, dashboard .. ": " .. table.concat(context.errors, "; "))
         end
@@ -134,6 +138,30 @@ for _, panelType in ipairs({
 end
 fixture.lvglMock.setAppMode(false)
 fixture.lvglMock.setFullScreen(false)
+
+local layouts = assert(loadfile(root .. "/tests/support/layout_fixtures.lua"))()
+local geometry = assert(loadfile(root .. "/tests/support/widget_geometry.lua"))(fixture)
+for _, layout in ipairs({ "CORE_LAYOUT", "TELEMETRY_LAYOUT" }) do
+    fixture.reset()
+    fixture.lvglMock.setAppMode(false)
+    local context = fixture.createLoaded(nil, nil, fixture.makeWidget("reflow-" .. layout, layouts[layout]))
+    fixture.pump(context, 20)
+    for _, size in ipairs({ { 480, 272 }, { 320, 140 }, { 480, 272 } }) do
+        reflow(context, size[1], size[2], false)
+        geometry.assertReflowContained(context, layout)
+        local nav = fixture.instanceOf(context, "nav")
+        if nav then
+            assert(nav.area.value ~= nil, "tape panel lost its reading after reflow")
+            equal(nav.detailLabel.hidden, true, "tape must not duplicate the bearing row")
+            if size[1] == 480 then
+                equal(nav.showTape, true, "tape must return after restoring size")
+                equal(nav.showCoordinates, true, "restored tape lost its coordinates")
+            end
+        end
+        fixture.pump(context, 10)
+        equal(#context.errors, 0, table.concat(context.errors, "; "))
+    end
+end
 
 for _, subject in ipairs({
     {

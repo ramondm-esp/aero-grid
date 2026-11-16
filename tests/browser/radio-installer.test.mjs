@@ -338,7 +338,6 @@ test("widget absence, unknown version and ambiguous entries are distinct", async
 
 test("action selection installs, updates, shows equal and labels downgrades explicitly", () => {
   assert.equal(actionFor({ present: false }, "0.4.0").label, "Install AeroGrid v0.4.0");
-  assert.match(actionFor({ present: false }, "0.4.0").label, /^Install/);
   assert.match(actionFor({ present: true, version: null }, "0.4.0").label, /^Update/);
   assert.equal(actionFor({ present: true, version: "0.4.0" }, "0.4.0").enabled, false);
   assert.equal(actionFor({ present: true, version: "0.5.0" }, "0.4.0").enabled, true);
@@ -607,7 +606,7 @@ test("first install and lower-case widget replacement use only the resolved widg
   }
 });
 
-test("replacement cannot mutate sibling, root-level, nested lookalike or empty directories", async () => {
+test("replacement and failed-install retries preserve sibling, root-level, nested lookalike and empty directories", async () => {
   const { manifest, fetcher } = await releaseFixture();
   for (const mode of ["install", "update", "downgrade", "failDelete", "failOpen", "failWrite", "failClose", "corrupt"]) {
     const root = await fixture(mode === "install" ? "absent" : "old");
@@ -624,27 +623,35 @@ test("replacement cannot mutate sibling, root-level, nested lookalike or empty d
     const original = await snapshot(root);
     const rootDirectories = [...root.children.entries()].filter(([, handle]) => handle.kind === "directory");
     const otherEmpty = other.children.get("EMPTY");
+    const assertPreserved = async () => {
+      const deletions = root.context.events.filter((event) => event.startsWith("delete:"));
+      if (mode === "install") assert.deepEqual(deletions, []);
+      else assert.ok(deletions.length > 0, mode);
+      for (const event of root.context.events) {
+        const path = event.slice(event.indexOf(":") + 1);
+        assert.ok(path === "WIDGETS/AeroGrid" || path.startsWith("WIDGETS/AeroGrid/"), `${mode}: ${event}`);
+      }
+      const after = await snapshot(root);
+      for (const [path, bytes] of Object.entries(original)) {
+        if (!path.startsWith("WIDGETS/AeroGrid/")) assert.deepEqual(after[path], bytes, `${mode}: ${path}`);
+      }
+      for (const [name, handle] of rootDirectories) assert.equal(root.children.get(name), handle);
+      assert.equal(other.children.get("EMPTY"), otherEmpty);
+    };
     root.context.events = [];
     const prepared = await preparePackage(manifest, base, () => {}, fetcher);
     if (mode.startsWith("fail") || mode === "corrupt") {
       root.context[mode] = true;
       await assert.rejects(replaceWidget(root, prepared), /Installation incomplete/);
+      await assertPreserved();
+      root.context.events = [];
+      root.context[mode] = false;
+      await replaceWidget(root, prepared);
     } else {
       await replaceWidget(root, prepared, () => {}, { allowDowngrade: mode === "downgrade" });
     }
-    const deletions = root.context.events.filter((event) => event.startsWith("delete:"));
-    if (mode === "install") assert.deepEqual(deletions, []);
-    else assert.ok(deletions.length > 0, mode);
-    for (const event of root.context.events) {
-      const path = event.slice(event.indexOf(":") + 1);
-      assert.ok(path === "WIDGETS/AeroGrid" || path.startsWith("WIDGETS/AeroGrid/"), `${mode}: ${event}`);
-    }
-    const after = await snapshot(root);
-    for (const [path, bytes] of Object.entries(original)) {
-      if (!path.startsWith("WIDGETS/AeroGrid/")) assert.deepEqual(after[path], bytes, `${mode}: ${path}`);
-    }
-    for (const [name, handle] of rootDirectories) assert.equal(root.children.get(name), handle);
-    assert.equal(other.children.get("EMPTY"), otherEmpty);
+    await verifyInstalled(root, manifest);
+    await assertPreserved();
   }
 });
 
@@ -675,16 +682,6 @@ test("newer installed version blocks downgrade before deletion", async () => {
   assert.deepEqual(root.context.events, []);
 });
 
-test("explicit downgrade authorization permits replacement and preserves user data", async () => {
-  const root = await fixture();
-  await put(root, "WIDGETS/AeroGrid/lib/package.lua", 'return {\nversion = "99.0.0",\n}');
-  const { manifest, fetcher } = await releaseFixture();
-  await replaceWidget(root, await preparePackage(manifest, base, () => {}, fetcher),
-    () => {}, { allowDowngrade: true });
-  await verifyInstalled(root, manifest);
-  assert.equal(await (await root.children.get("MAPS").children.get("tiles").children.get("tile.png").getFile()).text(), "user map");
-});
-
 test("first install creates only WIDGETS and its widget when WIDGETS is absent", async () => {
   const root = await fixture("absent");
   root.children.delete("WIDGETS");
@@ -694,19 +691,6 @@ test("first install creates only WIDGETS and its widget when WIDGETS is absent",
   await verifyInstalled(root, manifest);
   assert.equal(await (await root.children.get("RADIO").children.get("radio.yml").getFile()).text(),
     'board: tx16s\r\nsemver: "2.12.4"\r\n');
-});
-
-test("deletion, full disk, write, close and readback failures never succeed; retry fully replaces", async () => {
-  const { manifest, fetcher } = await releaseFixture();
-  for (const flag of ["failDelete", "failOpen", "failWrite", "failClose", "corrupt"]) {
-    const root = await fixture();
-    const prepared = await preparePackage(manifest, base, () => {}, fetcher);
-    root.context[flag] = true;
-    await assert.rejects(replaceWidget(root, prepared), /Installation incomplete/);
-    root.context[flag] = false;
-    await replaceWidget(root, prepared);
-    await verifyInstalled(root, manifest);
-  }
 });
 
 test("deletion logs exact-path errors without routine logs, retrying or writing", async (t) => {

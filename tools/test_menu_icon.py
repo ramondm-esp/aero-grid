@@ -1,22 +1,15 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Native header geometry regression tests, independent of simulator availability."""
-import importlib.util
 from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
 
+from tool_test_support import load_tool
+
 ROOT = Path(__file__).resolve().parents[1]
 
-
-def load(name, filename):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / filename)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-icons = load("menu_icons", "generate-menu-icon.py")
-capture = load("menu_capture", "capture-editor.py")
+icons = load_tool("menu_icons", "generate-menu-icon.py")
+capture = load_tool("menu_capture", "capture-editor.py")
 
 
 class MenuIconTests(unittest.TestCase):

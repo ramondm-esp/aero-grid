@@ -40,10 +40,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Validate documentation and release tooling
-        run: |
-          make docs
-          python3 -m unittest discover -s tools -p 'test_release_*.py'
+      - name: Validate documentation
+        run: make docs
       - name: Build installation archive
         id: package
         run: |

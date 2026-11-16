@@ -8,9 +8,7 @@ fixture.lvglMock.setFullScreen(true)
 local definition = fixture.module("main.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(context, 20)
-context.flightFactory = nil
-context.document.panels, context.emptyHint = { {} }, nil
-context.serviceRuntime = context.servicesModule.runtime({})
+fixture.isolateWork(context)
 context.editorUi = { buildStage = 1 }
 context.aeroMenuModal = true
 local steps = 0
