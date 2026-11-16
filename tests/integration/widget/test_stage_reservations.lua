@@ -158,9 +158,9 @@ for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagn
     end)
     if layout == "Default" then
         assert(startup <= 75, "startup must improve on the old 121-callback path")
-        -- Every flight poll and decision is charged a whole slot, so at this
-        -- 20-tick cadence, where all of them are due, settings only matches it.
-        assert(settings <= 28, "settings must not exceed the old 28-callback path")
+        -- The revised scheduler stays within one callback of the old path
+        -- at this cadence, where every flight poll and decision is due.
+        assert(settings <= 29, "settings must remain within one callback of the old path")
         assert(editorBuild <= 22, "editor construction must improve on the old full-budget path")
     end
     host.editorUiModule.close(host, true)

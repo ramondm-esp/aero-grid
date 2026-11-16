@@ -56,7 +56,7 @@ Host coordination has three boundaries:
 | --- | --- |
 | `dashboard_loader.lua` | Layout recovery, staged parsing, service/panel construction, and placement-local services. |
 | `dashboard_lifecycle.lua` | Empty-page decoration, batched reflow, fullscreen-to-App rebuilds, and page retirement/replacement. |
-| `scheduler.lua` | Fair slot scheduling of initialization, flight, native option changes, fullscreen input, session reset, loading, reload, reflow, menu work, model settings, log/location overlays, editor transitions/advancement, panel refreshes and service updates. |
+| `scheduler.lua` | Generic fair slot scheduling, due checks, continuations, and charged-slot validation. It knows tasks only through their common contract. |
 | `editor_controller.lua` | Editor activation, staged advancement, dashboard previews, draft restoration, and adoption after saving. |
 
 Their `new` functions bind host operations once per widget. They do not capture
@@ -97,22 +97,28 @@ Subscriptions to the same source share polling, and an unsubscribed service
 does not consume scheduled work.
 
 Due services, panels and host work (flight, input, menus, modals, loading and
-editor transitions) share nominal slots in one round-robin ring. A host
-transition that changes dashboard membership holds services or panels until it
-completes, and at most one host step, plus its own continuations, runs per
-callback. The default
+editor transitions) share nominal slots in one round-robin ring. Host readiness
+keeps domain-specific eligibility outside the scheduler. Options changes and
+due session resets preempt unrelated host work; actionable menu changes precede
+dependent host work; queued input precedes work that could replace its target;
+and page reconstruction waits for the native callback after retirement. Other
+independent host tasks share the ring without a separate one-host-step rule. A
+host transition that changes dashboard membership holds services or panels
+until it completes. The default
 callback capacity is eight 2,000-instruction slots, configured by `SLOTS` and
 `INSTRUCTIONS_PER_SLOT` in `lib/scheduler.lua`. Every task turn is capped at
 eight slots, even if a callback has a larger capacity. Fixed tasks reserve
 their declared cost; variable tasks declare a minimum and receive between that
 minimum and eight slots when enough remain. Each task turn reports its charged
-slots and whether it requests another turn in the same callback. Panels opt in
-to same-callback refresh continuation with `refreshContinuation`, which a panel
-instance may also set for a single turn; other staged refreshes resume on their
-next due callback. A panel may split work into further tasks: `finish`, ready
-while `finishPending` is true and declaring `finishMinCost`, runs after a
-refresh while refreshes wait; `finishPending` may also return the next stage's
-minimum. `background` becomes variable-cost when it declares
+slots and whether it requests another turn in the same callback. A panel refresh
+returns its next interval, that same continuation boolean, and optionally its
+charged slots; there is no separate module or instance opt-in. Work that should
+wait for its next due time returns false. A panel may split work into further
+tasks: `finish`, ready while `finishPending` is true and declaring
+`finishMinCost`, runs after a refresh while refreshes wait; `finishPending` may
+also return the next stage's minimum. An unfinished service polling round keeps
+its remainder across callbacks, so a changing callback time does not restart
+the round. `background` becomes variable-cost when it declares
 `backgroundMinCost`. An instance may override the refresh and background
 minimums for the stage it needs next. Unused slots are released to later
 tasks, and pending work remains subject to the scheduler's fair rotation. A
@@ -128,13 +134,15 @@ initial approximations, not live instruction measurements; the whole callback
 has a nominal target below 16,000 instructions; regression tests enforce the
 stricter 15,000-instruction ceiling. Callback/scheduler overhead is not separately charged.
 
-The chart reports the slots a step really needs, rounded up to whole slots, and
-limits each step to the slots it was given: a live append takes only the samples
-and columns that fit and leaves the rest queued, and a step that cannot fit its
-smallest unit of work declares a larger minimum instead of overrunning. Charts
-refresh at most four times a second. Their appends continue within one callback
-while readings are waiting; readouts, overlays and the next rescale layer are
-prepared by other turns.
+The chart uses two named cost models with one conversion to charged slots:
+`PIPELINE` keeps 20% of each slot plus 900 instructions for surrounding work,
+and `END_TO_END` uses the full slot plus 400 instructions for finishing stages.
+It limits each step to its allowance: a live append takes only the samples and
+columns that fit and leaves the rest queued, and a step that cannot fit its
+smallest unit declares a larger minimum instead of overrunning. Charts refresh
+at most four times a second. Their appends continue within one callback while
+readings are waiting; readouts, overlays and the next rescale layer are prepared
+by other turns.
 
 | Service module | Responsibility |
 | --- | --- |

@@ -112,7 +112,7 @@ run({ entry(module, instance) })
 assert(#calls == 1 and calls[1].id == "finish" and calls[1].slots == 8)
 assert(context.remainingSlots == 6, "finishing is charged what it reports: " .. tostring(context.remainingSlots))
 
--- A refresh asks for a second turn in the same callback only when its instance opts in.
+-- A refresh result directly requests another turn in the same callback.
 local turns = 0
 local continuing = {
     id = "demo",
@@ -127,11 +127,7 @@ local continuing = {
 pending = false
 turns = 0
 run({ entry(continuing) })
-assert(turns == 1, "continuation is off unless the instance asks for it")
-turns = 0
-local opted = { refreshContinuation = true }
-run({ entry(continuing, opted) })
-assert(turns > 1 and turns <= 8, "an opted-in refresh continues while slots remain, up to the callback")
+assert(turns > 1 and turns <= 8, "a direct continuation runs while slots remain, up to the callback")
 assert(#context.errors == 0, "continuation must not raise errors")
 
 local dynamicRefreshTurns, dynamicRefreshGrants = 0, {}
@@ -146,7 +142,7 @@ local dynamicRefresh = {
         return 1, dynamicRefreshTurns < 2, 1
     end,
 }
-local dynamicRefreshEntry = entry(dynamicRefresh, { refreshMinCost = 8, refreshContinuation = true })
+local dynamicRefreshEntry = entry(dynamicRefresh, { refreshMinCost = 8 })
 run({ dynamicRefreshEntry })
 assert(
     dynamicRefreshTurns == 2 and dynamicRefreshGrants[1] == 8 and dynamicRefreshGrants[2] == 7,

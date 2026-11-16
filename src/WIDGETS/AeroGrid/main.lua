@@ -832,6 +832,9 @@ initialize = function(context)
             end
         end
         context.panelHost = runtimeModule("lib/panel_host.lua")
+        if context.panelHost and context.scheduler then
+            context.panelHost.SLOTS = context.scheduler.budget.slots
+        end
         context.chartColumns = runtimeModule("lib/chart_columns.lua")
         context.chartColumnsRenderer = runtimeModule("lib/chart_columns_renderer.lua")
         local typography = runtimeModule("lib/typography.lua")
@@ -1288,7 +1291,7 @@ end
 
 local function panelStep(task, now, granted)
     local context, entry, eventName = task.host, task.owner, task.event
-    local ok, message, interval, unfinished, used = context.panelHost.dispatch(entry, eventName, false, granted)
+    local ok, message, interval, again, used = context.panelHost.dispatch(entry, eventName, false, granted)
     if eventName == "finish" then
         -- Ending a cycle sets when the next refresh is due.
         if ok and type(interval) == "number" then
@@ -1303,12 +1306,7 @@ local function panelStep(task, now, granted)
     if not ok then
         error(message or "panel failed", 0)
     end
-    if eventName == "refresh" and unfinished == true then
-        -- A panel may opt in for one turn, as it may override the refresh cost.
-        unfinished = instanceField(entry, "refreshContinuation") == true
-            or rawget(entry.module, "refreshContinuation") == true
-    end
-    return used, unfinished
+    return used, again
 end
 
 local NONE = {}
@@ -2040,7 +2038,7 @@ local function emptyHintStale(context)
 end
 
 local function hintReady(task, _, hidden)
-    return not hidden and emptyHintStale(task.host)
+    return not hidden and not task.host.lifecycleRequest and emptyHintStale(task.host)
 end
 
 local function hintStep(task)
@@ -2451,7 +2449,7 @@ local function lifecycleWanted(context, kind, hidden)
     if kind == "retire" then
         return context.reloadState == "clear"
     elseif kind == "rebuild" then
-        return context.reloadState == "rebuild"
+        return context.reloadState == "rebuild" and not context.retireBoundary
     elseif kind == "load" then
         local broker = context.flightFactory and context.flightFactory.broker
         if context.stage == "services" and broker and not broker.documentLoaded then
@@ -2488,6 +2486,7 @@ local function lifecycleStep(task)
     closeDashboard(context)
     if kind == "retire" then
         context.dashboardLifecycle.retirePage(context)
+        context.retireBoundary = true
         context.lifecycleRequest = "rebuild"
     elseif kind == "rebuild" then
         context.dashboardLifecycle.rebuildPage(context)
@@ -2528,17 +2527,12 @@ local function lifecycleStep(task)
     end
 end
 
---- Every host task shares one ordering rule on top of its own readiness:
---- one host step per callback (plus its own continuation), so native
---- callback boundaries between host steps remain; pending options, then a
---- due session reset, then menu work run before other host work; and steps
---- that may move or replace what queued input targets wait for that input.
+--- Host tasks share only real ordering barriers: options and due session
+--- resets preempt unrelated work; visible menu changes precede dependent work;
+--- input cannot be overtaken by work that replaces its target; and page rebuilds
+--- wait one native callback after retirement.
 local function hostReady(task, now, hidden)
     local context = task.host
-    local turn = context.hostTurn
-    if turn and turn ~= task then
-        return false
-    end
     if context.optionsRequest and task ~= context.optionsTask then
         return false
     end
@@ -2550,7 +2544,7 @@ local function hostReady(task, now, hidden)
     then
         return false
     end
-    if context.menuDue and task ~= context.menuTask then
+    if context.menuDue and task ~= context.menuTask and not context.menuChromeOnly then
         return false
     end
     local first = task.inputFirst
@@ -2562,7 +2556,6 @@ end
 
 local function hostStep(task, now, granted, hidden)
     local context = task.host
-    context.hostTurn = task
     local used, again = task.run(task, now, granted, hidden)
     updateHolds(context, hidden)
     return used, again
@@ -2799,7 +2792,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         return
     end
     local fullscreen = not hidden and isFullScreen()
-    context.inputHandled, context.hostTurn, context.dashboardClosed = nil, nil, nil
+    context.inputHandled, context.dashboardClosed, context.retireBoundary, context.menuChromeOnly = nil, nil, nil, nil
     if not hidden then
         event(context, widgetEvent, touchState)
     end
@@ -2828,6 +2821,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
         and not context.modelArmingReload
         and not context.sessionResetPending
         and menuWorkNeeded(context, fullscreen)
+    context.menuChromeOnly = context.menuDue and chromeOnly(context)
     updateHolds(context, hidden, true)
     local flightTask
     local owner = context.flightFactory and context.flightFactory.broker

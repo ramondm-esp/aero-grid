@@ -461,10 +461,7 @@ function telemetryService:update(now, slots)
         self.unpolled = nil
         return 1
     end
-    -- A round polls each source once; a continuation covers only what is left.
-    if self.roundAt ~= now then
-        self.roundAt, self.unpolled = now, nil
-    end
+    -- Keep an in-progress round across callbacks; only completed rounds restart.
     local left = math.min(self.unpolled or #entries, #entries)
     local polls = math.min(
         left,

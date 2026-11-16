@@ -411,10 +411,7 @@ end
 
 function navigationService:update(now)
     local entries = self.entries
-    -- A round polls each subscription once; a continuation covers only what is left.
-    if self.roundAt ~= now then
-        self.roundAt, self.unpolled = now, nil
-    end
+    -- Keep an in-progress round across callbacks; only completed rounds restart.
     local left = math.min(self.unpolled or #entries, #entries)
     local polls = math.min(POLL_CAP, left)
     self.cursor = self.support.roundRobin(entries, self.cursor, polls, pollEntry, self, now)

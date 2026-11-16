@@ -3,7 +3,6 @@
 local output = {
     id = "output",
     apiVersion = 1,
-    refreshContinuation = true,
     supportedSpans = { "any" },
     refreshInterval = 10,
     settings = {

@@ -82,7 +82,6 @@ resolvingNames = false
 pump()
 local panel = assert(fixture.instanceOf(context, "outputs"))
 local outputEntry = assert(fixture.entryById(context, "outputs"))
-assert(outputEntry.module.refreshContinuation)
 equal(outputEntry.refreshTask.cost, 1, "output refresh uses one nominal scheduler slot per step")
 local originalRefresh = outputEntry.module.refresh
 local refreshSteps = 0

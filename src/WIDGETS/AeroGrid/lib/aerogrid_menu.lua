@@ -50,12 +50,12 @@ end
 --- The button shows in fullscreen unless an overlay covers the dashboard.
 --- The layout editor keeps it in place.
 local function shown(context, state)
-    return state.handlers.fullscreen()
+    return not context.stage
+        and not context.reloadState
+        and state.handlers.fullscreen()
         and not (state.handlers.modal and state.handlers.modal())
         and not context.modelSettingsUi
         and not context.runtimeFailed
-        and not context.stage
-        and not context.reloadState
 end
 
 --- While editing the button stays visible but passes touches to the editor.

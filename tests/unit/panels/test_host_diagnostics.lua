@@ -46,8 +46,8 @@ assert(string.find(rows[1].text, "event 8", 1, true), "enlarging restores older 
 rows[4] = { set = rows[1].set }
 local wide = { host = host, section = "log", visibleLines = 4, rows = rows, texts = {} }
 local _, again = panel.refresh(wide)
-assert(again == true and wide.refreshContinuation == true, "a history shift continues in the same callback")
+assert(again == true, "a history shift continues in the same callback")
 assert(wide.texts[1] == nil, "the oldest row waits for the next turn")
 _, again = panel.refresh(wide)
-assert(not again and not wide.refreshContinuation and wide.texts[1] ~= nil)
+assert(not again and wide.texts[1] ~= nil)
 print("Host diagnostics log panel tests passed")

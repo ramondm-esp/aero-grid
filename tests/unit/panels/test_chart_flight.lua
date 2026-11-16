@@ -278,16 +278,18 @@ services.preview, services.history = false, history
 settings.timeRange = "growing"
 local consistent = chart.create(host.page, { x = 0, y = 0, w = 472, h = 196 }, settings, services)
 local previous = consistent.plotRoot
-local _, unfinished = chart.refresh(consistent)
-assert(unfinished and consistent.plotRoot == previous and not previous.hidden)
+local _, again = chart.refresh(consistent)
+assert(type(again) == "boolean" and not chartView.finished(consistent))
+assert(consistent.plotRoot == previous and not previous.hidden)
 local committed = false
 for step = 1, 2000 do
     live.elapsed = live.elapsed + 10
     samples[#samples + 1] = { live.elapsed, step % 17 }
     feed.last, feed.revision, feed.plotRevision = #samples, feed.revision + 1, feed.plotRevision + 1
     emit(live.elapsed, step % 17)
-    _, unfinished = chart.refresh(consistent)
-    if not unfinished and consistent.paintedVersion == consistent.version and not consistent.columnsDecorating then
+    _, again = chart.refresh(consistent)
+    assert(type(again) == "boolean", "refresh must return its continuation request")
+    if chartView.finished(consistent) and consistent.paintedVersion == consistent.version then
         committed = true
         break
     end
@@ -310,31 +312,31 @@ assert(arm.markers[arm.markerKeys[1]].active)
 equal(arm.markers[arm.markerKeys[1]].object.properties.dashGap, nil)
 feed.stale, feed.revision = true, feed.revision + 1
 live.elapsed = live.elapsed + 1000
+local liveEndX = consistent.area.x
+    + math.min(
+        consistent.area.w,
+        math.floor((live.elapsed - consistent.start) / consistent.window * consistent.area.w + 0.5)
+    )
+local liveBandUpdated = false
 for _ = 1, 2000 do
-    local _, pending = chart.refresh(consistent)
-    if not pending and not consistent.columnsDecorating then
+    chart.refresh(consistent)
+    frameBand = consistent.flightBands[1].properties
+    if frameBand.x + frameBand.w == liveEndX then
+        liveBandUpdated = true
         break
     end
 end
-frameBand = consistent.flightBands[1].properties
-equal(
-    frameBand.x + frameBand.w,
-    consistent.area.x
-        + math.min(
-            consistent.area.w,
-            math.floor((live.elapsed - consistent.start) / consistent.window * consistent.area.w + 0.5)
-        ),
-    "real telemetry loss must not make an active flight look completed"
-)
+assert(liveBandUpdated, "an active flight band must advance after telemetry becomes stale")
+equal(frameBand.x + frameBand.w, liveEndX, "real telemetry loss must not make an active flight look completed")
 
 local function finishFrame(target)
     -- A frame ends when its overlays have been redrawn, not when readouts finish.
     local decorated = false
     for _ = 1, 2000 do
         local decorating = target.columnsDecorating
-        local _, pending = chart.refresh(target)
+        chart.refresh(target)
         decorated = decorated or decorating and not target.columnsDecorating
-        if decorated and not pending and chartView.finished(target) then
+        if decorated and not chart.finishPending(target) and chartView.finished(target) then
             return
         end
     end
@@ -647,9 +649,9 @@ local function scheduled(id, kind)
 end
 scheduler.panels = { scheduled("first", "chart"), scheduled("second", "chart"), scheduled("reading", "metric") }
 fixture.pump(scheduler, 2)
-equal(turns.first, 2)
-equal(turns.second, 2, "an unfinished chart frame must not block another chart")
-equal(turns.reading, 2, "staged charts must not starve ordinary panels")
+assert(turns.first >= 3 and turns.second >= 3, "continuing charts must receive same-callback turns")
+assert(math.abs(turns.first - turns.second) <= 1, "one continuing chart must not block another")
+equal(turns.reading, 2, "continuing charts must not starve ordinary panels")
 
 local fair = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(fair, 10)

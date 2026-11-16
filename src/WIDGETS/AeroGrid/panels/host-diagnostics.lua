@@ -583,7 +583,7 @@ function diagnostics.create(parent, rect, settings, services)
 
     context.visibleLines = area.lines
     if section == "scheduler" then
-        context.refreshCost = 0
+        context.refreshCost = 1
         schedulerGraph(context, rect, area)
     end
     return context
@@ -599,8 +599,6 @@ function diagnostics.refresh(context)
     local lines = diagnostics.lines(context.host, context.section, context.visibleLines)
     local start = context.section == "log" and math.max(1, #lines - context.visibleLines + 1) or 1
     local changed = 0
-    context.refreshContinuation = nil
-
     for position = 1, context.visibleLines do
         local index = context.section == "log" and context.visibleLines - position + 1 or position
         local text = lines[start + index - 1] or ""
@@ -611,7 +609,6 @@ function diagnostics.refresh(context)
             -- A history shift changes every row; keep its repaint within the host budget.
             if context.section == "log" and changed == 3 then
                 -- The remaining rows repaint in another turn of this callback.
-                context.refreshContinuation = true
                 return nil, true
             end
         end

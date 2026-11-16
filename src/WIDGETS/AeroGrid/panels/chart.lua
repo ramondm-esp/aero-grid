@@ -2398,14 +2398,14 @@ local function refreshColumns(context, slots)
     local remaining, used = allowance(PIPELINE, slots), 0
     if not context.columnRenderer then
         context.columnRenderer = context.columnRendererModule.new(context)
-        return 1, true, 1
+        return 1, true, 1, false
     end
     if context.columnsDecorating or not context.metadataReady then
         -- Readouts and overlays belong to the finishing task.
-        return 1, true, 1
+        return 1, true, 1, false
     end
     if remaining < 1 then
-        return 1, true, slotsFor(PIPELINE, used)
+        return 1, true, slotsFor(PIPELINE, used), false
     end
     remaining, used = remaining - 1, used + 1
     local owner = context.columnConsumers[1]
@@ -2419,18 +2419,18 @@ local function refreshColumns(context, slots)
         local axisReady, stageUsed = prepareAxis(context, remaining)
         remaining, used = remaining - stageUsed, used + stageUsed
         if not axisReady then
-            return 1, true, slotsFor(PIPELINE, used)
+            return 1, true, slotsFor(PIPELINE, used), false
         end
     end
     if context.gridVersion ~= context.version then
         local complete, stageUsed = updateGrid(context, remaining)
         remaining, used = remaining - stageUsed, used + stageUsed
         if not complete then
-            return 1, true, slotsFor(PIPELINE, used)
+            return 1, true, slotsFor(PIPELINE, used), false
         end
     end
     if used > 1 then
-        return 1, true, slotsFor(PIPELINE, used)
+        return 1, true, slotsFor(PIPELINE, used), false
     end
     -- Charge the samples and columns actually taken; the rest stays queued.
     local appended, _, appendUsed = context.columnRenderer:append(false, remaining)
@@ -2438,13 +2438,13 @@ local function refreshColumns(context, slots)
     if appended > 0 and context.appendRuns < MAX_APPEND_RUNS and queued(context) then
         -- Readings are still waiting: ask for another turn in this callback, which
         -- the host grants only while slots are left, before overlays and readouts.
-        context.appendRuns, context.refreshContinuation = context.appendRuns + 1, true
-        return 1, true, consumed
+        context.appendRuns = context.appendRuns + 1
+        return 1, true, consumed, true
     end
     context.appendRuns = 0
     context.metadataReady = nil
     context.columnsDecorating, context.frameThrough = true, nil
-    return 1, false, consumed
+    return 1, false, consumed, false
 end
 
 local function refreshChart(context, creating, slots)
@@ -2471,7 +2471,7 @@ local function refreshChart(context, creating, slots)
             local cost = geometryCost(context)
             if allowance < cost then
                 context.refreshMinCost = math.min(8, slotsFor(PIPELINE, cost))
-                return 1, true, 1
+                return 1, true, 1, false
             end
             chart.geometry(context, context.rect)
             context.columnConsumers, context.columnSetupIndex = {}, 1
@@ -2505,24 +2505,24 @@ local function refreshChart(context, creating, slots)
                     }
                 or nil
         end
-        return 1, true, math.min(slots, slotsFor(PIPELINE, used))
+        return 1, true, math.min(slots, slotsFor(PIPELINE, used)), false
     end
     if creating or not context.history or context.history.failed or #context.series == 0 then
         chart.render(context)
         updateHeader(context)
         text(context.status, plotStatus(context), context.theme.color.textFaint)
-        return 20
+        return 20, false, nil, false
     end
     return refreshColumns(context, slots)
 end
 
 function chart.refresh(context, creating, slots)
     slots = slots or budget.capacity
-    context.refreshContinuation, context.refreshMinCost = nil, nil
+    context.refreshMinCost = nil
     if context.resetWork and not creating then
         -- Old columns and overlays are hidden before anything new is drawn.
         local used, complete = resetPresentation(context, math.max(0, allowance(PIPELINE, slots) - RESET_OVERHEAD))
-        return 1, not complete, math.min(slots, slotsFor(PIPELINE, used + RESET_OVERHEAD))
+        return 1, false, math.min(slots, slotsFor(PIPELINE, used + RESET_OVERHEAD))
     end
     if
         context.editing()
@@ -2543,7 +2543,6 @@ function chart.refresh(context, creating, slots)
             used = used + renderer.SERIES_COST + taken * renderer.SAMPLE_COST
         end
         local waiting = queued(context)
-        context.refreshContinuation = waiting
         return waiting and 1 or 25, waiting, math.min(slots, slotsFor(PIPELINE, used))
     end
     local auto = context.auto
@@ -2561,8 +2560,7 @@ function chart.refresh(context, creating, slots)
         local _, _, appendUsed = context.columnRenderer:append(true, math.max(0, allowance(PIPELINE, slots) - reserve))
         local prepUsed, minimum = prepare(context, slots, appendUsed, math.huge)
         context.refreshMinCost = minimum
-        context.refreshContinuation = queued(context)
-        return 1, true, math.min(slots, slotsFor(PIPELINE, appendUsed + prepUsed))
+        return 1, queued(context), math.min(slots, slotsFor(PIPELINE, appendUsed + prepUsed))
     end
     -- A bounded run of preparation turns never starves ordinary refreshes.
     if preparationTurn(context, ready) then
@@ -2572,9 +2570,9 @@ function chart.refresh(context, creating, slots)
         context.refreshMinCost = minimum
         local interval = autoPending(auto, context.session) and 1 or auto.wakeAt - context.clock()
         -- The visible plot still owes its next refresh.
-        return math.max(1, math.min(6000, interval)), true, math.min(slots, slotsFor(PIPELINE, used))
+        return math.max(1, math.min(6000, interval)), false, math.min(slots, slotsFor(PIPELINE, used))
     end
-    local interval, unfinished, consumed = refreshChart(context, creating, slots)
+    local interval, unfinished, consumed, again = refreshChart(context, creating, slots)
     consumed = consumed or 1
     if auto then
         auto.backgroundTurns = 0
@@ -2584,7 +2582,7 @@ function chart.refresh(context, creating, slots)
         local idle = not unfinished and not context.columnsDecorating and not context.metadataReady
         interval, consumed = pace(context, interval, consumed, slots, idle)
     end
-    return interval, unfinished, consumed
+    return interval, again, consumed
 end
 
 --- While the dashboard is hidden, keep columns current so returning to it

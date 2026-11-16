@@ -98,6 +98,8 @@ definition.refresh(context)
 assert(calls[3].id == "service" and calls[3].slots == 8, "fixed services must retain a deferred turn")
 ordinary.updateCost = nil
 
+local serviceOrder = context.serviceRuntime.order
+context.serviceRuntime.order = {}
 context.panels = { panel("invalid", "variable", 9) }
 context.scheduler.cursor = 3
 fixture.tick(10)
@@ -115,6 +117,7 @@ context.scheduler.cursor = 3
 fixture.tick(10)
 definition.refresh(context)
 assert(context.panels[1].failed and #context.errors == 3, "invalid fixed consumption must be reported")
+context.serviceRuntime.order = serviceOrder
 
 -- Fixed reservations can return unused slots to later services and panels.
 context.serviceRuntime = support.runtime({})
@@ -220,7 +223,7 @@ calls = {}
 fixture.tick(10)
 definition.background(context)
 assert(#calls == 2 and calls[2].id == "service" and calls[2].slots == 0)
-assert(fixture.module("lib/history_service.lua").updateCost == 0)
+assert(fixture.module("lib/history_service.lua").updateCost == 1)
 assert(fixture.module("lib/control_service.lua").updateCost == 1)
 
 -- Free panels run even after charged work was deferred, without affecting demand.

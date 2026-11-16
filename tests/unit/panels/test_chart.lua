@@ -26,6 +26,7 @@ chart.update = function(panel, rect)
     refresh(panel)
 end
 local host = fixture.module("lib/panel_host.lua")
+host.SLOTS = fixture.module("lib/scheduler.lua").SLOTS
 local equal = assert(loadfile(root .. "/tests/support/assertions.lua"))().assertEqual
 
 assert(host.validateModule(chart, "chart"))
@@ -866,10 +867,10 @@ do
     assert(setup, "recording panel must require initial attachment")
     -- The geometry is laid out in one piece, so the panel declares the grant it needs.
     equal(gridPanel.refreshMinCost, 3, "geometry must declare the grant it needs")
-    local _, unfinished, used = chartModule.refreshOnly(gridPanel, false, 1)
-    assert(unfinished and used == 1 and not gridPanel.columnSetupIndex, "a smaller grant must not lay out the geometry")
-    _, unfinished, used = chartModule.refreshOnly(gridPanel, false, 3)
-    assert(unfinished and used <= 3 and not gridPanel.columnSetup, "geometry and attachment must fit that grant")
+    local _, again, used = chartModule.refreshOnly(gridPanel, false, 1)
+    assert(not again and used == 1 and not gridPanel.columnSetupIndex, "a smaller grant must not lay out the geometry")
+    _, again, used = chartModule.refreshOnly(gridPanel, false, 3)
+    assert(not again and used <= 3 and not gridPanel.columnSetup, "geometry and attachment must fit that grant")
 end
 gridPanel.session = { configured = true, available = true, recording = false, elapsed = 65000 }
 for _ = 1, 24 do
@@ -897,8 +898,8 @@ do
     assert(not unfinished and used == 2 and rendered == 1, "readouts must be charged their two slots without drawing")
     -- A refresh waits while overlays or readouts are pending.
     gridPanel.metadataReady = nil
-    _, unfinished, used = chartModule.refreshOnly(gridPanel, false, 8)
-    assert(unfinished and used == 1 and rendered == 1, "a refresh must leave pending readouts to the finishing task")
+    _, again, used = chartModule.refreshOnly(gridPanel, false, 8)
+    assert(not again and used == 1 and rendered == 1, "a refresh must leave pending readouts to the finishing task")
     gridPanel.metadataReady = true
     gridPanel.gridVersion = gridPanel.version
     local appended = false

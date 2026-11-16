@@ -10,7 +10,7 @@ local panel = diagnostics.create(dashboard.page, { x = 0, y = 0, w = 238, h = 13
     section = "scheduler",
     accent = "cyan",
 }, services)
-assert(panel.refreshCost == 0)
+assert(panel.refreshCost == 1)
 local stats, graph = dashboard.scheduler.stats(), panel.graph
 assert(graph.cursor.properties.w == 1, "native vertical line width is its stroke thickness")
 for _, object in ipairs(fixture.lvglMock.objects) do

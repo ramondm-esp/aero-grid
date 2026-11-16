@@ -4,6 +4,7 @@ local root = (... and ... ~= "" and ...) or "."
 
 local assertions = assert(loadfile(root .. "/tests/support/assertions.lua"))()
 local panelHost = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/panel_host.lua"))()
+panelHost.SLOTS = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/scheduler.lua"))().SLOTS
 
 local function testPanelContract()
     local valid = { id = "demo", apiVersion = 1, create = function() end }
@@ -74,8 +75,6 @@ local function testFinishAndBackgroundContract()
         rejects(base({ background = finish, backgroundMinCost = minimum }), "backgroundMinCost")
     end
     assert(panelHost.validateModule(base({ background = finish, backgroundMinCost = 8 }), "demo"))
-    assert(panelHost.validateModule(base({ refreshContinuation = true }), "demo"))
-    rejects(base({ refreshContinuation = "yes" }), "refreshContinuation")
 end
 
 local function testFinishDispatch()
@@ -90,8 +89,8 @@ local function testFinishDispatch()
         instance = {},
         interval = 50,
     }
-    local ok, message, interval, unfinished, consumed = panelHost.dispatch(entry, "finish", false, 4)
-    assert(ok and not message and interval == 20 and unfinished == true and consumed == 3)
+    local ok, message, interval, again, consumed = panelHost.dispatch(entry, "finish", false, 4)
+    assert(ok and not message and interval == 20 and again == true and consumed == 3)
     assertions.assertEqual(entry.interval, 20)
     result = { 0 }
     entry.failed = false
@@ -167,8 +166,8 @@ local function run()
     entry.module.refresh = function()
         return 1, true, 3
     end
-    local ok, message, interval, unfinished, consumed = panelHost.dispatch(entry, "refresh")
-    assert(ok and not message and interval == 1 and unfinished == true and consumed == 3)
+    local ok, message, interval, again, consumed = panelHost.dispatch(entry, "refresh")
+    assert(ok and not message and interval == 1 and again == true and consumed == 3)
     entry.module.refresh = function()
         return result
     end

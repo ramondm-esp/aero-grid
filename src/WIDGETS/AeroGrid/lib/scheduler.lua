@@ -62,7 +62,9 @@ function scheduler.new(dependencies)
         type(capacity) == "number" and capacity > 0 and capacity < math.huge and capacity % 1 == 0,
         "capacity must be a positive whole number"
     )
-    local self = {
+    local cursor = 1
+    local deferredTurn = setmetatable({}, { __mode = "v" })
+    local self = setmetatable({
         -- Read-only description of the callback budget, shared with panels.
         budget = {
             capacity = capacity,
@@ -71,16 +73,39 @@ function scheduler.new(dependencies)
         },
         tasks = {},
         count = 0,
-        cursor = 1,
         callbacks = 0,
         segments = 0,
         -- Slots left in the last segment of the last run.
         remaining = 0,
-    }
+    }, {
+        __index = function(_, key)
+            if key == "cursor" then
+                return cursor
+            end
+        end,
+        __newindex = function(target, key, value)
+            if key == "cursor" then
+                cursor = value
+                deferredTurn[1], deferredTurn[2] = nil, nil
+            else
+                rawset(target, key, value)
+            end
+        end,
+    })
     -- Cumulative counters since creation; readers take differences.
     local totals = { callbacks = 0, used = 0, available = 0, requested = 0, denied = 0 }
     -- Weak keys: a retired task is collectable once its owner drops it.
     local records = setmetatable({}, { __mode = "k" })
+
+    local function positionOf(tasks, count, task)
+        if task then
+            for index = 1, count do
+                if tasks[index] == task then
+                    return index
+                end
+            end
+        end
+    end
 
     local function record(task)
         local state = records[task]
@@ -105,9 +130,8 @@ function scheduler.new(dependencies)
         self.count = count
     end
 
-    --- Release every task. The scheduler keeps nothing between callbacks, so a
-    --- retired panel is collectable as soon as its owner drops it; only the
-    --- cursor, an index, persists.
+    --- Release every enrolled task. Deferred identity is weak, so retired
+    --- owners remain collectable.
     function self.clear()
         local tasks = self.tasks
         for index = self.count, 1, -1 do
@@ -163,11 +187,12 @@ function scheduler.new(dependencies)
                 end
             end
         end
-        local start = self.cursor
+        local start = positionOf(tasks, count, deferredTurn[1]) or positionOf(tasks, count, deferredTurn[2]) or cursor
         if start > count then
             start = 1
         end
-        local remaining, deferred, requested, denied = slots, nil, 0, 0
+        deferredTurn[1], deferredTurn[2] = tasks[start], tasks[start % count + 1]
+        local remaining, deferredPosition, requested, denied = slots, nil, 0, 0
 
         local progressed
         repeat
@@ -188,7 +213,7 @@ function scheduler.new(dependencies)
                     if cost == nil then
                         cost = 1
                     end
-                    local granted = grant(cost, task.minCost, deferred and 0 or remaining)
+                    local granted = grant(cost, task.minCost, deferredPosition and 0 or remaining)
                     if granted == nil then
                         failTask(task, state, cost == "variable" and "invalid minimum slot cost" or "invalid slot cost")
                     else
@@ -198,7 +223,10 @@ function scheduler.new(dependencies)
                         if granted == 0 and cost ~= 0 then
                             denied = denied + 1
                             state.refused, state.denied = callback, segment
-                            deferred = deferred or position
+                            if not deferredPosition then
+                                deferredPosition = position
+                                deferredTurn[1], deferredTurn[2] = task, tasks[position % count + 1]
+                            end
                         else
                             local ok, used, again = pcall(task.step, task, now, granted, context)
                             local spent = granted
@@ -247,7 +275,7 @@ function scheduler.new(dependencies)
             end
         until not progressed
 
-        self.cursor = deferred or start
+        cursor = deferredPosition or start
         return slots - remaining, requested, denied
     end
 

@@ -83,6 +83,100 @@ do
 end
 
 do
+    local queue = module.new()
+    local turns = { A = 0, B = 0, X = 0 }
+    local function task(name, cost)
+        return {
+            name = name,
+            cost = cost,
+            step = function(_, _, slots)
+                turns[name] = turns[name] + 1
+                return slots, false
+            end,
+        }
+    end
+    local a, b, x = task("A", 8), task("B", 8), task("X", 0)
+    for callback = 1, 20 do
+        queue.clear()
+        if callback % 2 == 0 then
+            queue.add(x)
+        end
+        queue.add(a)
+        queue.add(b)
+        queue.run(callback, 8)
+    end
+    assert(
+        turns.A == 10 and turns.B == 10 and turns.X == 10,
+        "deferred task identity stays fair as free tasks enter and leave the ring"
+    )
+end
+
+do
+    local queue = module.new()
+    local turns = { A = 0, B = 0, X = 0 }
+    local function task(name, cost)
+        return {
+            name = name,
+            cost = cost,
+            step = function(_, _, slots)
+                turns[name] = turns[name] + 1
+                return slots, false
+            end,
+        }
+    end
+    local a, b, x = task("A", 8), task("B", 8), task("X", 0)
+    queue.add(a)
+    queue.add(b)
+    queue.run(0, 8)
+    queue.clear()
+    local retired = setmetatable({ b }, { __mode = "v" })
+    b = nil
+    collectgarbage()
+    assert(retired[1] == nil, "the deferred cursor must not retain a retired task")
+    queue.add(x)
+    queue.add(a)
+    queue.run(1, 8)
+    assert(turns.A == 2, "an absent deferred task falls back to its live successor")
+end
+
+do
+    local queue = module.new()
+    local turns = { A = 0, B = 0, X = 0 }
+    local function task(name, cost)
+        return {
+            name = name,
+            cost = cost,
+            step = function(_, _, slots)
+                turns[name] = turns[name] + 1
+                return slots, false
+            end,
+        }
+    end
+    local a, b, x = task("A", 8), task("B", 8), task("X", 0)
+    queue.add(a)
+    queue.add(b)
+    local _, _, _, failure = queue.run(0, 8, nil, {
+        segments = 1,
+        cross = function(run)
+            local ok, message = pcall(run)
+            return ok, message
+        end,
+    })
+    assert(not failure and turns.A == 1 and turns.B == 1, "extended capacity resumes the deferred task")
+    queue.clear()
+    queue.add(x)
+    queue.add(a)
+    queue.add(b)
+    queue.run(1, 8)
+    assert(turns.A == 1 and turns.B == 2, "extended segments preserve the deferred successor")
+    queue.clear()
+    queue.add(a)
+    queue.add(b)
+    queue.run(2, 8)
+    assert(turns.A == 2 and turns.B == 2, "the successor gets the next turn after enrollment changes")
+end
+
+do
     local queue, calls, task = fixture()
     local free = task("free", 0, 3)
     task("paid", 8)

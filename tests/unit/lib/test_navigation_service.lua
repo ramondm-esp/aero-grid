@@ -5,6 +5,7 @@ local root = (... and ... ~= "" and ...) or "."
 local assertions = assert(loadfile(root .. "/tests/support/assertions.lua"))()
 local edgetx = assert(loadfile(root .. "/tests/support/edgetx.lua"))()
 local services = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/services.lua"))()
+local scheduler = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/scheduler.lua"))()
 local navigationService = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/navigation_service.lua"))()
 local armedService = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/armed_service.lua"))()
 local GPS_DELAY_TICKS = edgetx.firmware.GPS_DELAY_TICKS
@@ -85,6 +86,54 @@ local function testRoundContinuesUntilEverySubscriptionIsPolled()
     assert(turns == math.ceil(total / 2), "one round polls every subscription: " .. turns)
     assert(polls == total, "a continuation must not poll a subscription twice: " .. polls)
     update(100, false)
+end
+
+local function testContendedRoundSurvivesCallbacksAndSubscriptionChanges()
+    local service = captureFixture()
+    for index = 1, 3 do
+        service:subscribe("GPS" .. index, "SFv")
+    end
+    local polls = {}
+    local poll = service.poll
+    service.poll = function(self, entry, now)
+        polls[entry] = (polls[entry] or 0) + 1
+        return poll(self, entry, now)
+    end
+    local queue = scheduler.new()
+    local task = {
+        name = "navigation",
+        cost = 1,
+        due = 0,
+        step = function(self, now, slots)
+            local _, again = service:update(now)
+            self.due = now + 20
+            return slots, again
+        end,
+    }
+    local competing = {
+        name = "competing",
+        cost = 7,
+        step = function(_, _, slots)
+            return slots, false
+        end,
+    }
+    local function tick(now)
+        queue.clear()
+        queue.add(task)
+        queue.add(competing)
+        queue.run(now, 8)
+    end
+
+    tick(50)
+    assert(queue.state(task).pending, "navigation keeps its unfinished round pending")
+    service:subscribe("GPS-new", "SFv")
+    tick(70)
+    assert(not queue.state(task).pending, "a changing callback time and subscriber count cannot restart the round")
+    for index = 1, 4 do
+        assert(polls[service.entries[index]] == 1, "each round entry is polled once")
+    end
+    tick(80)
+    assert(polls[service.entries[1]] == 1, "a completed round still observes its periodic due time")
 end
 
 local function testFirstArmHome()
@@ -459,6 +508,7 @@ local function run()
     testPositionChecksAndDistance()
     testServiceCreatesRuntime()
     testRoundContinuesUntilEverySubscriptionIsPolled()
+    testContendedRoundSurvivesCallbacksAndSubscriptionChanges()
     testFirstArmHome()
     testInvalidFirstArmRetriesOnNextTransition()
     testArmObservationAndFreshness()
