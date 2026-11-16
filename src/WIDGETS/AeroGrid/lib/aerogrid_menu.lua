@@ -64,13 +64,10 @@ local function enabled(context, state)
 end
 
 local function setVisible(state, visible)
-    if state.visible ~= visible then
-        if visible then
-            lvgl.show(state.root)
-        else
-            lvgl.hide(state.root)
-        end
-        state.visible = visible
+    if visible then
+        lvgl.show(state.root)
+    else
+        lvgl.hide(state.root)
     end
 end
 
@@ -264,7 +261,6 @@ function menu.ensure(context, dimensions, handlers)
         })
         state = {
             root = root,
-            visible = true,
             generation = 1,
             iconPath = path,
             backgroundColor = color,
