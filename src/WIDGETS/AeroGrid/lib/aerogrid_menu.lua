@@ -47,13 +47,31 @@ local function matches(event, name)
     return _G[name] ~= nil and event == _G[name]
 end
 
-local function enabled(context, state)
+--- The button shows in fullscreen unless an overlay covers the dashboard.
+--- The layout editor keeps it in place.
+local function shown(context, state)
     return state.handlers.fullscreen()
         and not (state.handlers.modal and state.handlers.modal())
         and not context.modelSettingsUi
         and not context.runtimeFailed
         and not context.stage
         and not context.reloadState
+end
+
+--- While editing the button stays visible but passes touches to the editor.
+local function enabled(context, state)
+    return shown(context, state) and not (state.handlers.editing and state.handlers.editing())
+end
+
+local function setVisible(state, visible)
+    if state.visible ~= visible then
+        if visible then
+            lvgl.show(state.root)
+        else
+            lvgl.hide(state.root)
+        end
+        state.visible = visible
+    end
 end
 
 local function valid(context, state, generation)
@@ -75,7 +93,7 @@ function menu.close(context)
     if state.screen then
         lvgl.hide(state.screen)
     end
-    lvgl.hide(state.root)
+    setVisible(state, false)
 end
 
 local function inside(touch, rectangle)
@@ -246,6 +264,7 @@ function menu.ensure(context, dimensions, handlers)
         })
         state = {
             root = root,
+            visible = true,
             generation = 1,
             iconPath = path,
             backgroundColor = color,
@@ -302,12 +321,16 @@ function menu.ensure(context, dimensions, handlers)
         menu.close(context)
         state.modelFilename = filename
     end
-    if enabled(context, state) then
-        lvgl.show(state.root)
-    else
-        lvgl.hide(state.root)
-    end
+    setVisible(state, shown(context, state))
     return state, created
+end
+
+--- Show or hide the button for the current screen.
+function menu.sync(context)
+    local state = context.aerogridMenu
+    if state then
+        setVisible(state, shown(context, state))
+    end
 end
 
 function menu.handle(context, event, touch)
@@ -381,16 +404,15 @@ function menu.advance(context)
     if state.modelFilename ~= filename then
         menu.close(context)
         state.modelFilename = filename
-        if enabled(context, state) then
-            lvgl.show(state.root)
-        end
+        setVisible(state, shown(context, state))
         return false
     end
     if not valid(context, state, state.generation) then
         menu.close(context)
+        setVisible(state, shown(context, state))
         return false
     end
-    lvgl.show(state.root)
+    setVisible(state, true)
     if state.action then
         local action = state.action
         menu.close(context)
@@ -399,7 +421,7 @@ function menu.advance(context)
     end
     if state.dismiss then
         menu.close(context)
-        lvgl.show(state.root)
+        setVisible(state, true)
         return true
     end
     if state.open then

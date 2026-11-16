@@ -1669,16 +1669,21 @@ local function openModelSettings(context)
     end
 end
 
+local function syncChrome(context, fullscreen)
+    if fullscreen then
+        lvgl.show(context.chromeRoot)
+        context.aeroMenuModule.sync(context)
+    else
+        lvgl.hide(context.chromeRoot)
+    end
+end
+
 local function prepareAeroMenu(context)
     if context.editorUi and context.aeroMenuModal == true and isFullScreen() then
         return false
     end
     if context.chromeRoot then
-        if isFullScreen() then
-            lvgl.show(context.chromeRoot)
-        else
-            lvgl.hide(context.chromeRoot)
-        end
+        syncChrome(context, isFullScreen())
     end
     if not context.theme or context.runtimeFailed or context.stage or context.reloadState then
         return false
@@ -1710,10 +1715,10 @@ local function prepareAeroMenu(context)
                 context.editorTransitionRequest = "open"
             end,
             modal = function()
-                return context.modelSettingsUi ~= nil
-                    or context.locationDetails ~= nil
-                    or context.logViewer ~= nil
-                    or context.editorUi ~= nil
+                return context.modelSettingsUi ~= nil or context.locationDetails ~= nil or context.logViewer ~= nil
+            end,
+            editing = function()
+                return context.editorUi ~= nil
             end,
         }
     end
@@ -1722,7 +1727,8 @@ local function prepareAeroMenu(context)
         context.aeroMenuParent = nil
     end
     context.aeroMenuHandlers.parent = context.chromeRoot
-    local fullscreen, modal = isFullScreen(), context.aeroMenuHandlers.modal()
+    local handlers = context.aeroMenuHandlers
+    local fullscreen, modal = isFullScreen(), handlers.modal() or handlers.editing()
     if
         context.aeroMenuParent ~= context.root
         or context.aeroMenuHeight ~= height
@@ -2074,13 +2080,25 @@ local function menuWorkNeeded(context, fullscreen)
         )
 end
 
+--- A screen change first only shows or hides the built button, in one slot,
+--- so it replaces EdgeTX's own in the same callback.
+local function chromeOnly(context)
+    return context.chromeRoot and context.aerogridMenu and context.menuVisibleFullscreen ~= isFullScreen()
+end
+
 local function menuReady(task, _, hidden)
+    task.cost = chromeOnly(task.host) and 1 or task.host.scheduler.budget.slots
     return not hidden and task.host.menuDue
 end
 
 local function menuStep(task)
-    prepareAeroMenu(task.host)
-    task.host.menuVisibleFullscreen = isFullScreen()
+    local context = task.host
+    if chromeOnly(context) then
+        syncChrome(context, isFullScreen())
+    else
+        prepareAeroMenu(context)
+    end
+    context.menuVisibleFullscreen = isFullScreen()
 end
 
 -- Slots the editor's next step reserves: small build stages are cheap.
