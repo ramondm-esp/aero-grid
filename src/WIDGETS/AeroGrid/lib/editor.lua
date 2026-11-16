@@ -794,7 +794,13 @@ function editor.appendItem(session, key, path)
     -- An empty list has nothing to copy, so it starts from a blank entry
     -- whose required fields the drawer then asks for.
     local item = setting.itemDefault or value[#value] or {}
-    value[#value + 1] = copy(item)
+    item = copy(item)
+    for _, field in ipairs(setting.fields or {}) do
+        if field.type == "table" and item[field.key] == nil and field.default ~= nil then
+            item[field.key] = copy(field.default)
+        end
+    end
+    value[#value + 1] = item
     session.dirty = true
     return true
 end

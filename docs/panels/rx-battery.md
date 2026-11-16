@@ -16,7 +16,7 @@ shows two decimals, not a promise of sensor accuracy or resolution.
 | Setting | Default | What it does |
 | --- | --- | --- |
 | **Label** | PACK | Panel heading. |
-| **Voltage source** | Cels | EdgeTX source supplying individual cells or total pack voltage. The panel detects which kind of reading it receives. |
+| **Voltage source** | RxBat | EdgeTX source supplying individual cells or total pack voltage. The panel detects which kind of reading it receives. |
 | **Cell count (0 = auto)** | 0 | Series count for a numeric pack source: 0 estimates it; 1 to 16 sets it explicitly. Steps of 1. Cells monitors supply their own count and ignore this setting. |
 | **Primary reading** | cell | **cell** shows the lowest monitored cell, or the calculated average for a numeric pack source. **pack** shows total pack voltage. |
 | **Full (V/cell)** | 4.2 | Full end of the battery or bar scale, and the voltage used to estimate series count. 0 to 10, in steps of 0.01. Shown only when **Visualization** is **battery** or **bar**. |

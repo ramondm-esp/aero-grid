@@ -125,13 +125,19 @@ local function entrySummary(state, key, index, defaults, path)
     if item.states then
         local summaries = {}
         for _, condition in ipairs(item.states) do
-            summaries[#summaries + 1] = state.settingsUi.switchSummary(condition.switch) .. ": " .. condition.text
+            if condition.switch and condition.switch ~= "" then
+                summaries[#summaries + 1] = state.settingsUi.switchSummary(condition.switch)
+                    .. ": "
+                    .. (condition.text and condition.text ~= "" and condition.text or "--")
+            else
+                summaries[#summaries + 1] = "--"
+            end
         end
-        return table.concat(summaries, " / ")
+        return #summaries > 0 and table.concat(summaries, " / ") or "--"
     elseif item.switch then
         return state.settingsUi.switchSummary(item.switch)
             .. ": "
-            .. item.text
+            .. (item.text and item.text ~= "" and item.text or "--")
             .. " ("
             .. (item.background or "normal")
             .. ")"

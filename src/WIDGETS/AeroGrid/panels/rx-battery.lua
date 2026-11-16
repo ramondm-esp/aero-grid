@@ -47,7 +47,7 @@ local rxBattery = {
     refreshInterval = 20,
     settings = {
         { key = "label", label = "Label", type = "string", default = "PACK" },
-        { key = "source", label = "Voltage source", type = "string", default = "Cels" },
+        { key = "source", label = "Voltage source", type = "string", default = "RxBat" },
         {
             key = "cells",
             label = "Cell count (0 = auto)",
