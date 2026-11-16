@@ -12,16 +12,16 @@ local function above(value, threshold)
     return value - threshold > ROUNDING * math.max(1, math.abs(value), math.abs(threshold))
 end
 
-local function reliable(reading, now)
+local function reliable(reading, now, maxAge)
     return reading
         and reading.available ~= false
         and reading.fresh == true
         and type(reading.updatedAt) == "number"
         and now >= reading.updatedAt
-        and now - reading.updatedAt <= 100
+        and now - reading.updatedAt <= maxAge
 end
 
-local function smartReference(context, now, armLive, armed)
+local function smartReference(context, now, armLive, armed, maxAge)
     if not context.settings.smartDetection then
         return
     end
@@ -42,7 +42,7 @@ local function smartReference(context, now, armLive, armed)
         context.wasArmed, context.altitudeReference = false, nil
         context.altitudeSince, context.speedSince = nil, nil
         local altitude = sensors and sensors.altitude
-        if context.smartAvailable ~= false and reliable(altitude, now) then
+        if context.smartAvailable ~= false and reliable(altitude, now, maxAge) then
             -- The arm and sensor pollers are independent. Confirm the sample
             -- against a false-arm observation at or after its receipt evidence.
             if context.referencePendingAt and context.referencePendingAt <= context.arm.updatedAt then
@@ -59,7 +59,7 @@ local function smartReference(context, now, armLive, armed)
         end
     elseif context.wasArmed == false then
         local altitude = sensors and sensors.altitude
-        if context.smartAvailable ~= false and reliable(altitude, now) then
+        if context.smartAvailable ~= false and reliable(altitude, now, maxAge) then
             if
                 context.referenceCandidateAt
                 and now >= context.referenceCandidateAt
@@ -78,7 +78,7 @@ local function smartReference(context, now, armLive, armed)
     end
 end
 
-local function smartReason(context, now)
+local function smartReason(context, now, maxAge)
     if not context.settings.smartDetection then
         return nil
     end
@@ -92,9 +92,9 @@ local function smartReason(context, now)
     end
     local baro = context.smartAvailable ~= false
         and context.altitudeReference ~= nil
-        and reliable(altitude, now)
+        and reliable(altitude, now, maxAge)
         and above(altitude.value, context.altitudeReference + 3)
-    local moving = context.smartAvailable ~= false and reliable(speed, now) and above(speed.value, 4.4704)
+    local moving = context.smartAvailable ~= false and reliable(speed, now, maxAge) and above(speed.value, 4.4704)
     context.altitudeSince = baro and (context.altitudeSince or now) or nil
     context.speedSince = moving and (context.speedSince or now) or nil
     if context.altitudeSince and altitude.confirmedAt and altitude.confirmedAt - context.altitudeSince >= 200 then
@@ -105,9 +105,9 @@ local function smartReason(context, now)
 end
 
 --- The broker supplies once-only side-effect adapters for every qualification.
-function flight.advance(context, now)
+function flight.advance(context, now, maxAge)
     local armLive = context.controlAvailable ~= false
-        and reliable(context.arm, now)
+        and reliable(context.arm, now, maxAge)
         and type(context.arm.value) == "boolean"
     local armed = armLive and context.arm.value
     if context.phase == "active" or context.phase == "ending" then
@@ -124,12 +124,12 @@ function flight.advance(context, now)
                 context.startedAt, context.disarmedAt = nil, nil
                 context.wasArmed, context.altitudeReference = false, nil
                 context.altitudeSince, context.speedSince = nil, nil
-                smartReference(context, now, true, false)
+                smartReference(context, now, true, false, maxAge)
             end
         end
         return
     end
-    smartReference(context, now, armLive, armed)
+    smartReference(context, now, armLive, armed, maxAge)
     if context.detectionAvailable == false or not context.feed.available then
         context.phase, context.startedAt = "ground", nil
         context.altitudeSince, context.speedSince = nil, nil
@@ -143,7 +143,7 @@ function flight.advance(context, now)
         "flight counter requires integer GV9 FM0 in the range 0..999, with precision 0"
     )
     assert(not context.motor.telemetry, "flight counter motorSource must be a radio-local motor channel")
-    local motorLive = reliable(context.motor, now)
+    local motorLive = reliable(context.motor, now, maxAge)
         and type(context.motor.value) == "number"
         and context.motor.value == context.motor.value
         and math.abs(context.motor.value) < math.huge
@@ -152,7 +152,7 @@ function flight.advance(context, now)
         motor = -motor
     end
     local link = context.link
-    local live = link.updatedAt and now >= link.updatedAt and now - link.updatedAt <= 100 and link.live
+    local live = link.updatedAt and now >= link.updatedAt and now - link.updatedAt <= maxAge and link.live
     if
         not (
             armed
@@ -168,7 +168,7 @@ function flight.advance(context, now)
     if not context.startedAt then
         context.startedAt, context.phase = now, "starting"
     end
-    local reason = smartReason(context, now)
+    local reason = smartReason(context, now, maxAge)
     if now - context.startedAt >= context.settings.minFlightDuration * 100 then
         reason = "standard"
     end
@@ -468,7 +468,7 @@ end
 --- on a stale sample.
 function broker:readReset(now)
     local feed = self.resetFeed
-    if not reliable(feed, now) then
+    if not reliable(feed, now, self.support.MAX_SAMPLE_AGE) then
         self.resetValue = nil
         self:error("reset", "Session reset switch unavailable: " .. self.resetCondition)
         return
@@ -663,7 +663,7 @@ function broker:decide(now)
     local active = session.phase == "active" or session.phase == "ending"
     if
         self.readyAfterDisarm
-        and reliable(session.arm, now)
+        and reliable(session.arm, now, self.support.MAX_SAMPLE_AGE)
         and session.arm.value == false
         and (not self.readyAfterDisarmAt or session.arm.updatedAt >= self.readyAfterDisarmAt)
     then
@@ -680,7 +680,7 @@ function broker:decide(now)
             and (not self.output or self.output.desired)
         )
     then
-        local ok, failure = pcall(flight.advance, session, now)
+        local ok, failure = pcall(flight.advance, session, now, self.support.MAX_SAMPLE_AGE)
         if not ok then
             self:error("detection", failure)
             self.errors.count = self.errors.count or failure
@@ -698,7 +698,7 @@ function broker:decide(now)
         and session.controlAvailable
         and session.settings.flightSwitch ~= ""
         and session.phase == "ground"
-        and reliable(session.arm, now)
+        and reliable(session.arm, now, self.support.MAX_SAMPLE_AGE)
         and session.arm.value == false
     then
         session.groundAt = session.groundAt or now

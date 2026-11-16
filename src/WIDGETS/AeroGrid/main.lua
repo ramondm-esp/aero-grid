@@ -46,7 +46,9 @@
 ---@field errorLabel? any
 ---@field page any Container holding one generation of the dashboard.
 ---@field reloadState? "clear"|"rebuild"
----@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"header-migrate"|"header-finalize"|"services"|"panels"|"panel-migrate"|"panel-validate"|"panel-build" Staged loader position.
+---@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"header-migrate"|"header-finalize"|"services"|"panels"|"panel-migrate"|"panel-validate"|"panel-build"|"load-complete" Staged loader position.
+---@field foreground? boolean Whether the latest callback was visible.
+---@field firstRefreshUntil? integer Bounded foreground priority until a regular panel refresh.
 ---@field servicesModule? table Loaded lib/services.lua registry module.
 ---@field packageInfo? table Package identity and compatibility versions.
 ---@field serviceRuntime? table Registry holding every constructed service.
@@ -55,6 +57,7 @@
 ---@field tokens? table Tokens held between the tokenize and parse steps.
 ---@field pending? table[] Validated placements still awaiting construction.
 ---@field pendingIndex? integer Next placement to build.
+---@field loadConfigured? boolean Layout validation and flight registration have completed.
 ---@field scheduler table Slot scheduler that runs panels and services.
 ---@field dashboardLoader table Staged layout and panel construction.
 ---@field dashboardLifecycle table Page retirement, reflow, and rebuild.
@@ -633,7 +636,7 @@ end
 local function create(zone, widgetOptions, path)
     local flightFactory = flightFactories[path or WIDGET_PATH]
     if not flightFactory then
-        flightFactory = { members = setmetatable({}, { __mode = "k" }) }
+        flightFactory = { members = setmetatable({}, { __mode = "k" }), startupThemes = {} }
         flightFactories[path or WIDGET_PATH] = flightFactory
     end
     local context = {
@@ -643,6 +646,7 @@ local function create(zone, widgetOptions, path)
         themeMode = themeModeOf(widgetOptions.Theme),
         legacyWidgetArmed = widgetOptions.Armed or 0,
         flightFactory = flightFactory,
+        startupThemes = flightFactory.startupThemes,
         panels = {},
         rejected = {},
         errors = {},
@@ -724,13 +728,20 @@ local function modelSettingsKnown(context)
         return true
     end
     local owner, preload = factory.broker, factory.preload
-    return (owner and owner.documentLoaded) or (preload and preload.modelFilename == member.modelFilename) or false
+    return (owner and owner.filename == member.modelFilename and owner.documentLoaded)
+        or (preload and preload.modelFilename == member.modelFilename)
+        or false
 end
 
 --- Read the model's settings document ahead of the layout: one callback builds
 --- the store and the next parses the file. Failures are ignored here because the
 --- flight broker reports them when it loads the document itself.
 local function advanceModelSettings(context)
+    if modelSettingsKnown(context) then
+        context.modelSettingsPreload = nil
+        context.stage = "theme-read"
+        return
+    end
     local factory, path = context.flightFactory, context.path
     local filename = factory.members[context].modelFilename
     local store = context.modelSettingsPreload
@@ -1306,6 +1317,9 @@ local function panelStep(task, now, granted)
     if not ok then
         error(message or "panel failed", 0)
     end
+    if eventName == "refresh" then
+        context.firstRefreshUntil = nil
+    end
     return used, again
 end
 
@@ -1530,7 +1544,11 @@ local function pumpFlight(task, now, granted)
         return nil, true
     end
     local resetConfigured = owner.document and owner.document.sessionReset and owner.document.sessionReset ~= ""
-    if (context.stage or context.reloadState) and not owner.session and not resetConfigured then
+    if
+        (context.stage and not context.loadConfigured or context.reloadState)
+        and not owner.session
+        and not resetConfigured
+    then
         return
     end
     -- The broker's own tasks poll and decide after this setup.
@@ -2453,6 +2471,7 @@ local LOAD_STAGE_COST = {
     ["header"] = 2,
     ["header-finalize"] = 2,
     ["panels"] = 2,
+    ["load-complete"] = 2,
     ["tokenize"] = 3,
     ["theme-validate"] = 4,
 }
@@ -2466,6 +2485,23 @@ local function lifecycleWanted(context, kind, hidden)
         local broker = context.flightFactory and context.flightFactory.broker
         if context.stage == "services" and broker and not broker.documentLoaded then
             return false
+        end
+        if hidden and context.stage == "panel-build" and context.loadConfigured then
+            for peer in pairs(context.flightFactory.members) do
+                if
+                    peer ~= context
+                    and peer.foreground
+                    and not peer.runtimeFailed
+                    and (
+                        peer.initializing
+                        or peer.stage
+                        or peer.reloadState
+                        or peer.firstRefreshUntil and getTime() < peer.firstRefreshUntil
+                    )
+                then
+                    return false
+                end
+            end
         end
         return not context.reloadState and context.stage ~= nil
     elseif kind == "reflow" then
@@ -2492,7 +2528,7 @@ local function lifecycleReady(task, _, hidden)
     return context.stage or context.reloadState or not inputWaiting(context, hidden)
 end
 
-local function lifecycleStep(task)
+local function lifecycleStep(task, _, _, hidden)
     local context, kind = task.host, task.kind
     context.lifecycleRequest = nil
     closeDashboard(context)
@@ -2505,14 +2541,16 @@ local function lifecycleStep(task)
         startLoad(context)
         context.lifecycleRequest = "load"
     elseif kind == "load" then
+        local firstPanel = not hidden and #context.panels == 0
         if context.stage == "model-settings" then
             advanceModelSettings(context)
         else
-            context.dashboardLoader.advanceLoad(context)
+            context.dashboardLoader.advanceLoad(context, hidden)
         end
         if context.stage then
             context.lifecycleRequest = "load"
-            return nil, true
+            -- Let firmware paint the first panel before another construction burst.
+            return nil, not (firstPanel and #context.panels > 0)
         end
     elseif kind == "reflow" then
         if
@@ -2787,6 +2825,7 @@ local function enrolHost(context, hidden)
 end
 
 local function runCallback(context, hidden, widgetEvent, touchState)
+    context.foreground = not hidden
     if context.initializing then
         if not hidden then
             event(context, widgetEvent, touchState)

@@ -60,6 +60,11 @@ local first = definition.create({ x = 0, y = 0, w = 480, h = 272 }, { Layout = "
 local second = definition.create({ x = 0, y = 0, w = 480, h = 272 }, { Layout = "session-reset" }, path)
 local worst = 0
 local function measured(callback, context)
+    local settings = context.modelSettingsUi
+    local field = settings and settings.build and settings.view.fields[settings.build]
+    -- The 65-choice native picker runs extra Lua in this fixture. Its production
+    -- grant is checked by native measurements, independently of this mock envelope.
+    local limit = field and field.key == "flightSwitch" and 18000 or 16000
     fixture.lvglMock.setPropertyValidation(false)
     fixture.lvglMock.setCallCounting(false)
     fixture.lcdMock.setTextMeasurement(false)
@@ -74,7 +79,7 @@ local function measured(callback, context)
     fixture.lvglMock.setPropertyValidation(true)
     assert(ok, message)
     worst = math.max(worst, instructions)
-    assert(instructions < 16000, "session reset callback exceeded budget: " .. instructions)
+    assert(instructions < limit, "session reset callback exceeded its mock envelope: " .. instructions)
 end
 local secondVisible = true
 local function pump(count)

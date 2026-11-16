@@ -218,7 +218,7 @@ local function editing(service, now)
     return value
 end
 
-local function advance(session, now, flight, frozen)
+local function advance(session, now, flight, frozen, maxAge)
     if session.lastTime == now and (not flight or not flight.epoch or session.epoch == flight.epoch) then
         return
     end
@@ -242,7 +242,7 @@ local function advance(session, now, flight, frozen)
         and type(value) == "boolean"
         and type(updatedAt) == "number"
         and now >= updatedAt
-        and now - updatedAt <= 100
+        and now - updatedAt <= maxAge
     local associated = flight and flight.armKey == session.name
     local recording = not frozen and (associated and flight.active or available and value == true) or false
     if available then
@@ -409,7 +409,7 @@ function history:advance(now)
     self.flightState = flight and flight:state()
     local frozen = editing(self, now)
     for _, session in ipairs(self.sessions) do
-        advance(session, now, self.flightState, frozen)
+        advance(session, now, self.flightState, frozen, self.support.MAX_SAMPLE_AGE)
     end
 end
 
@@ -655,7 +655,7 @@ function history:sample(reading, now)
     end
     local frozen = editing(self, now)
     for _, entry in ipairs(entries) do
-        advance(entry.session, now, self.flightState, frozen)
+        advance(entry.session, now, self.flightState, frozen, self.support.MAX_SAMPLE_AGE)
         local session = entry.session.state
         if session.recording then
             local state = entry.state

@@ -51,6 +51,10 @@ assert(not pcall(function()
     first.value = true
 end), "published arm state must be immutable")
 now = 101
+equal(first.fresh, true, "samples remain usable beyond one second")
+now = 500
+equal(first.fresh, true, "five-second boundary is inclusive")
+now = 501
 equal(first.available, true)
 equal(first.fresh, false, "expired samples cannot remain fresh")
 assert(first.revision > initialRevision, "freshness changes advance the published revision")
@@ -58,7 +62,7 @@ equal(first.status, "unavailable")
 control:update(now)
 equal(first.fresh, true)
 values[1] = nil
-now = 120
+now = 520
 control:update(now)
 equal(first.available, false)
 equal(first.fresh, false, "missing input is not a disarm event")

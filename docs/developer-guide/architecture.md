@@ -1,433 +1,203 @@
 # Repository and architecture
 
-Start with `main.lua` for host behavior, an existing panel for presentation,
-or a service for data acquisition. AeroGrid runs as **one EdgeTX widget**;
-the dashboard's panels are modules managed by that widget, not separate
-EdgeTX widgets.
+AeroGrid is one EdgeTX widget. Its panels are modules hosted by that widget,
+not separate EdgeTX widgets. Use the implementation and tests for exact
+signatures; `plans/` contains design material, not the runtime contract.
 
 ## Find your way around
 
-| Path | What belongs here |
+| Path | Responsibility |
 | --- | --- |
-| `src/WIDGETS/AeroGrid/main.lua` | EdgeTX entry points, native options, event routing, and callback scheduling. |
-| `src/WIDGETS/AeroGrid/lib/` | Layout parsing/storage, grid geometry, panel hosting, shared services, rendering primitives, themes, and editor modules. |
-| `src/WIDGETS/AeroGrid/panels/` | Thirteen user-facing panel types plus `host-diagnostics`, `service-probe`, and the fixed-data `theme-showcase`. |
+| `src/WIDGETS/AeroGrid/main.lua` | EdgeTX entry points, native options, event routing, and task enrollment. |
+| `src/WIDGETS/AeroGrid/lib/` | Loading, scheduling, services, geometry, rendering, themes, persistence, and editor. |
+| `src/WIDGETS/AeroGrid/panels/` | Panel modules, including diagnostics and the fixed-data theme showcase. |
 | `src/WIDGETS/AeroGrid/layouts/` | Shipped layouts. |
-| `tests/fixtures/layouts/development/` | Simulator and review layouts used by tests and disposable SD images. |
-| `src/WIDGETS/AeroGrid/assets/` | Runtime editor icon and its license. |
-| `tests/unit/` | Focused module and panel tests. |
-| `tests/integration/` | Host, editor, dashboard, budget, and resource tests using mocked EdgeTX. |
-| `tests/support/` | Assertions, firmware-aware EdgeTX/LVGL mocks, and widget/layout fixture helpers. |
-| `tests/fixtures/` | Deterministic simulator SD card, test-only panels, and test layouts. |
-| `tools/` | Release packaging, native screenshots, capture recipes, and Python tooling tests. |
-| `docs/` | Website sources, reference pages, reviewed images, and hardware evidence. |
-| `.vscode/` | TX16S profile and build/test tasks; local settings are ignored. |
-| `.github/workflows/` | CI, documentation publication, and manual release workflow. |
-| `plans/` | Design specifications and planning material, not runtime input. |
-| `build/` | Ignored, generated output; never the source of truth. |
-
-The [project specification](https://github.com/thomaskistler/aero-grid/blob/main/plans/aerogrid-spec.md)
-provides design background. Check the implementation and its tests for exact
-current signatures; planning examples can describe earlier contracts.
+| `src/WIDGETS/AeroGrid/assets/` | Runtime editor assets and licenses. |
+| `tests/unit/`, `tests/integration/` | Module tests and mocked host/UI tests. |
+| `tests/support/` | Firmware-aware mocks, assertions, and fixture helpers. |
+| `tests/fixtures/` | Deterministic SD card, development layouts, and test-only modules. |
+| `tools/` | Packaging, documentation publishing, captures, videos, and tooling tests. |
+| `docs/` | Website sources and reviewed assets. |
+| `.vscode/` | TX16S profile and build/test tasks. |
+| `.github/workflows/` | CI, documentation, and release workflows. |
+| `build/` | Ignored generated output. |
 
 ## Follow a dashboard from disk to display
 
-1. EdgeTX loads `main.lua` and passes a zone and the native **Layout** and
-   **Theme** options. Layout choices use stable positions maintained by
-   `layout_registry.lua`.
-   Stable layout positions are stored in `/AEROGRID/layout-registry.txt`,
-   separately from `/AEROGRID/theme-registry.txt`.
-2. The host resolves the selected name through `layout_store.lua`. A saved
-   `/AEROGRID/layouts/<name>.yaml` takes precedence over the bundled
-   `/WIDGETS/AeroGrid/layouts/<name>.yaml`; a missing file can fall back to
-   `Default`.
-3. `yaml.lua` tokenizes the constrained YAML format; `layout.lua` validates
-   version, grid, placements, and configuration. `grid.lua` turns zero-based
-   positions and spans in the 4 x 4 grid into pixel rectangles.
-4. The host loads services and panel modules, checks compatibility, resolves
-   typed settings, and creates each panel inside its own LVGL container.
-5. Foreground/background callbacks update subscribed services and dispatch
-   panel work. A zone or fullscreen change triggers bounded reflow rather
-   than reconstructing every object in a single frame.
+1. EdgeTX loads `main.lua` with a zone and native **Layout** and **Theme**
+   options. Their stable choice positions are maintained by separate registries
+   under `/AEROGRID/`; do not reorder them.
+2. `layout_store.lua` resolves the selected layout. A saved
+   `/AEROGRID/layouts/<name>.yaml` overrides its bundled counterpart under
+   `/WIDGETS/AeroGrid/layouts/`. A missing layout can fall back to `Default`.
+3. `yaml.lua` parses the constrained YAML format, `layout.lua` validates it,
+   and `grid.lua` maps zero-based placements in the 4 x 4 grid to rectangles.
+4. `dashboard_loader.lua` stages service and panel construction, checks module
+   compatibility, and resolves typed settings.
+5. Scheduled callbacks update services and panels.
+   `dashboard_lifecycle.lua` handles bounded reflow and page replacement;
+   `editor_controller.lua` coordinates editing, previews, and saved-page adoption.
 
-Host coordination has three boundaries:
+Loading, schema conversion, construction, reflow, and save work are split across
+callbacks. Page retirement and replacement occur in separate callbacks.
+Keep these boundaries: a synchronous whole-dashboard operation can exceed the
+firmware budget or invalidate deferred native objects.
 
-| Module | Ownership |
-| --- | --- |
-| `dashboard_loader.lua` | Layout recovery, staged parsing, service/panel construction, and placement-local services. |
-| `dashboard_lifecycle.lua` | Empty-page decoration, batched reflow, fullscreen-to-App rebuilds, and page retirement/replacement. |
-| `scheduler.lua` | Generic fair slot scheduling, due checks, continuations, and charged-slot validation. It knows tasks only through their common contract. |
-| `editor_controller.lua` | Editor activation, staged advancement, dashboard previews, draft restoration, and adoption after saving. |
+`lib/package.lua` declares package, runtime API, panel API, and layout versions.
+Runtime modules expose `RUNTIME_API`; panels expose `apiVersion`. Deploy the
+complete widget directory: these checks do not detect every mixed package.
 
-Their `new` functions bind host operations once per widget. They do not capture
-another widget's context or introduce per-refresh forwarding wrappers. `main.lua`
-decides which operation advances; loading and cleanup keep their explicit stages.
-Page retirement and replacement run in separate callbacks so deferred cleanup
-cannot invalidate objects belonging to the replacement page.
+Layout conversion uses adjacent header and panel steps in `layout.lua`, at
+most one transition per respective loader/save turn. Unsupported versions or
+missing transitions are rejected. Loading converts only in memory and reports
+an upgrade notice; explicit editor **Save** persists the current schema.
 
-Panels use container-local coordinates. They must not draw at absolute screen
-coordinates or assume the TX16S's dimensions. The host reserves the same
-top-left footprint for the native App-mode menu and fullscreen AeroGrid menu.
-Use the shared geometry instead of adding panel-specific menu offsets.
+## Scheduling and callback budgets
 
-`lib/package.lua` records package, runtime API, panel API, and layout versions.
-The current layout schema is version 5. The central layout module keeps an
-adjacent migration registry: each source version provides a header step and a
-panel step for that version-to-next-version transition. A future version must
-add every intervening step; a layout is rejected if its source version is newer
-or any transition is missing.
+`scheduler.lua` is firmware-independent. Flight, host transitions, services,
+and panels share a fair round-robin ring. Host readiness gates enforce input
+and lifecycle ordering; transitions can hold service or panel work.
 
-Runtime loading validates the header, applies at most one header transition per
-loader callback, then parses each panel and applies at most one panel transition
-per callback before validating and building that panel. Staged Save follows the
-same bounded progression, keeping header migration, each panel migration,
-validation, and persistence in separate callbacks. The synchronous whole-layout
-helpers are for tests and tools, not runtime callback paths. Loading changes
-only the in-memory document and emits an upgrade notice; only explicit editor
-Save persists the current schema. Runtime modules expose `RUNTIME_API`; panels
-expose `apiVersion`. The host surfaces incompatible modules and isolates
-failures where possible. These checks detect incompatible mixtures, not every
-stale or mixed package: deploy the **complete** widget directory.
+The default callback segment has eight nominal 2,000-instruction slots
+(`CAPACITY` and `INSTRUCTIONS_PER_SLOT`). A task receives at most eight slots
+per turn (`SLOTS`). Fixed-cost tasks reserve their declared cost; variable-cost
+tasks declare a minimum and report consumption. Unused slots become available
+to later tasks. Unfinished work retains its place across callbacks.
+
+A continuation requests another turn after the other tasks have had theirs;
+it needs no separate opt-in. Pending work can run before its next due time.
+Return no continuation when work should wait for that time.
+
+The model's **Pre-release features** setting permits up to four additional
+segments for pending/deferred work in the same callback. It is disabled by
+default and also requires an explicitly enabled saved setting during startup.
+`native_budget.lua` owns the EdgeTX-specific mechanism for running those
+segments beyond the firmware instruction limit; the scheduler does not.
+
+Slots are estimates, not measured instruction limits, and exclude scheduler
+overhead. Keep normal callbacks within the
+[regression budgets](testing.md#performance-and-resource-regressions), rather
+than relying on the pre-release extension to hide excessive work.
 
 ## Shared services own firmware reads
 
-Panels subscribe in `create`, retain read-only snapshots, and render them.
-They do not each poll EdgeTX or maintain their own telemetry cache.
-Subscriptions to the same source share polling, and an unsubscribed service
-does not consume scheduled work.
+Panels subscribe in `create`, retain read-only live views, and render them.
+Do not poll firmware independently or mutate service-owned data. Shared
+subscriptions reuse polling; views can change in place without allocation.
 
-Due services, panels and host work (flight, input, menus, modals, loading and
-editor transitions) share nominal slots in one round-robin ring. Host readiness
-keeps domain-specific eligibility outside the scheduler. Options changes and
-due session resets preempt unrelated host work; actionable menu changes precede
-dependent host work; queued input precedes work that could replace its target;
-and page reconstruction waits for the native callback after retirement. Other
-independent host tasks share the ring without a separate one-host-step rule. A
-host transition that changes dashboard membership holds services or panels
-until it completes. The default
-callback capacity is eight 2,000-instruction slots, configured by `SLOTS` and
-`INSTRUCTIONS_PER_SLOT` in `lib/scheduler.lua`. Every task turn is capped at
-eight slots, even if a callback has a larger capacity. Fixed tasks reserve
-their declared cost; variable tasks declare a minimum and receive between that
-minimum and eight slots when enough remain. Each task turn reports its charged
-slots and whether it requests another turn in the same callback. A panel refresh
-returns its next interval, that same continuation boolean, and optionally its
-charged slots; there is no separate module or instance opt-in. Work that should
-wait for its next due time returns false. A panel may split work into further
-tasks: `finish`, ready while `finishPending` is true and declaring
-`finishMinCost`, runs after a refresh while refreshes wait; `finishPending` may
-also return the next stage's minimum. An unfinished service polling round keeps
-its remainder across callbacks, so a changing callback time does not restart
-the round. `background` becomes variable-cost when it declares
-`backgroundMinCost`. An instance may override the refresh and background
-minimums for the stage it needs next. Unused slots are released to later
-tasks, and pending work remains subject to the scheduler's fair rotation. A
-task's `due` time controls its next eligibility independently of same-callback
-continuation. With the per-model **Pre-release features** setting, and for every
-model until its settings document has loaded, work still pending
-or deferred after the first eight slots continues in four more eight-slot
-segments of the same callback. `scheduler.cross` first burns instructions under
-`xpcall` until EdgeTX raises its "CPU limit" error; the message handler runs with
-hooks disabled, so the extra segments are not counted. If the burn finishes
-without the error (simulator, debug firmware), the segments run directly. Slot costs are
-initial approximations, not live instruction measurements; the whole callback
-has a nominal target below 16,000 instructions; regression tests enforce the
-stricter 15,000-instruction ceiling. Callback/scheduler overhead is not separately charged.
-
-The chart uses two named cost models with one conversion to charged slots:
-`PIPELINE` keeps 20% of each slot plus 900 instructions for surrounding work,
-and `END_TO_END` uses the full slot plus 400 instructions for finishing stages.
-It limits each step to its allowance: a live append takes only the samples and
-columns that fit and leaves the rest queued, and a step that cannot fit its
-smallest unit declares a larger minimum instead of overrunning. Charts refresh
-at most four times a second. Their appends continue within one callback while
-readings are waiting; readouts, overlays and the next rescale layer are prepared
-by other turns.
-
-| Service module | Responsibility |
+| Module | Responsibility |
 | --- | --- |
-| `telemetry_service.lua` | Source resolution, readings, units, precision, freshness, and link status. |
-| `model_service.lua` | Model identity/image, timers, flight mode, and TX voltage. |
-| `control_service.lua` | Trims, final channel outputs and their trim associations, switch conditions, GV snapshots, and verified GV9 FM0 increments. |
-| `armed_service.lua` | Saved model Armed precedence, legacy switch fallback, and immutable effective arm views over shared Control polls. |
-| `flight_service.lua` | Shared model-flight detection, once-only count, optional Sticky output, and timestamped boundaries. |
-| `smart_flight.lua` | Optional protocol-identified flight sensors with per-sensor receipt/freshness and SI units. |
-| `navigation_service.lua` | GPS fix, pilot/home position, distance, and north-up bearing. |
-| `history_service.lua` | Error-bounded chart recordings, cumulative recording time, flight boundaries, raw extrema, line-only smoothing, and bounded rolling expiration. |
-| `services.lua` | Environment/snapshots, subscription registration, and bounded scheduling/update dispatch. |
+| `telemetry_service.lua` | Source resolution, values, units, precision, and link freshness. |
+| `model_service.lua` | Identity/image, timers, flight mode, and TX voltage. |
+| `control_service.lua` | Trims, channel outputs, switches, GVs, and verified flight-count increments. |
+| `armed_service.lua` | Effective model/consumer arm condition over shared Control polls. |
+| `flight_service.lua` | Shared flight detection, counting, optional Sticky output, and boundary journal. |
+| `smart_flight.lua` | Protocol-identified flight sensors and per-sensor receipt/freshness. |
+| `navigation_service.lua` | GPS fix, home/pilot position, distance, and bearing. |
+| `history_service.lua` | Bounded recordings, cumulative time, extrema, and flight intervals. |
+| `services.lua` | Service environment, subscriptions, and scheduled dispatch. |
 
-Snapshots are read-only views over service-owned state, mutated in place by
-the service to avoid per-frame allocations. Missing APIs, unknown sources, and
-missing fixes yield unavailable data; panel code must handle that explicitly.
+Handle unavailable and stale data explicitly. Zero is a valid telemetry value;
+link-wide freshness cannot prove that a particular sensor has been received.
+Local controls remain usable without a receiver. Arm consumers use the shared
+five-second maximum sample age; unknown/stale arm data is not disarmed.
+A saved model arm condition overrides consumer fallbacks; an explicit empty
+condition disables arming.
 
-`services.addSubscription` publishes an entry's live view and records its polling
-order/count. Each domain service still owns name lookup, duplicate detection,
-source resolution, and its polling metadata. Link/session-only subscriptions
-remain separate from source polling lists.
+### Shared flight tracking
 
-Telemetry zero is not inherently unavailable. EdgeTX can return zero both for
-a real reading and for a stopped stream. AeroGrid preserves the last live
-value when an ambiguous zero arrives with a down link, but accepts a live zero.
-`getRSSI()` is not reliable for every protocol; the service can stop trusting
-it when a non-zero source proves that telemetry is arriving. Staleness is
-link-wide, not per sensor, and a configured but never-received sensor can
-appear as valid zero on a live link. Local switch values remain usable
-without a receiver.
+The factory-scoped flight broker owns a non-UI Control/Telemetry runtime and
+optional Smart poller. Widgets enroll its shared tasks, which run at most once
+per tick. Dashboard declarations must agree; a qualified flight pins its arm,
+detector settings, and output through completion and cleanup. Counter panels
+only render the shared result.
 
-Chart history observes completed telemetry polls rather than reading changed
-revisions during redraw: unchanged numeric samples still occupy recording time,
-and raw spikes must not be lost between frames. Observer failures are isolated
-from telemetry polling and reported through normal service failure handling.
-`services.armed:state()` describes the saved model condition;
-`:state(legacySwitch)` resolves model-over-legacy precedence for a consumer.
-Snapshots expose `condition`, `key`, `origin`, `generation`, `configured`,
-`available`, `fresh`, `updatedAt`, Boolean `value`, `revision`, and `status`.
-An unavailable/stale reading is not disarmed. Reliability is evaluated on
-access with a one-second maximum sample age, so a failed poller cannot leave a
-permanently fresh reading. `revision` changes on observed sample/reliability
-changes; `generation` changes when the widget runtime is rebuilt.
-`status` is `unconfigured`, `ready`, or `unavailable`; invalid configuration
-is reported through normal host error isolation.
-The resolver owns no separate polling work: Control still reads each switch
-once per runtime. Configuration is model-wide; each dashboard publishes its
-own view over that same condition.
+Consumers use `services.flight:state()` and
+`:boundaries(afterSequence, epoch)`, never the Sticky output as an event bus.
+The boundary journal retains 64 start/end records. Reconcile journal gaps and
+epoch changes. Boundary `at` is the candidate/disarm time; `observedAt` is its
+confirmation time, so duration excludes the disarm grace.
 
-History keys sessions by the effective condition. A configured
-model Armed unifies their arm inputs; absent model arming retains independent legacy
-switches. Each chart arm configuration has its own cumulative session.
-It pauses on disarm unless a matching shared flight is still active, including
-its disarm grace. It also pauses while the layout editor or Model settings is
-open on any AeroGrid widget. A pause resumes the same recording;
-geometry reflow keeps it, while rebuilding the service runtime clears it.
-Each source/options subscription stores at most 6,144 connected linear knots.
-A fixed-anchor slope corridor chooses synthesized shared endpoints within half
-a displayed precision step of every observed value (filtered values if EMA is
-enabled). Numerical margin is reserved before accepting a segment; when that
-margin consumes the tolerance, exact native values are retained. Unknown sensor
-precision uses the strictest supported tolerance until discovery completes.
+Smart detection requires supported protocol metadata and per-sensor
+`getSourceValue` receipt evidence. Cached values and link-wide freshness do not
+renew it. Unsupported, ambiguous, or stale inputs fall back to standard
+detection. Keep qualification and output effects in the broker rather than
+duplicating them in panels.
 
-Packed knots retain native precision. Matching condition/source/options
-subscriptions share storage; scalar `history:point` reads avoid snapshot tables.
-Growing history freezes at capacity without relaxing accuracy; rolling
-expiration reuses storage. Raw readouts/extrema continue when plot storage is full.
+### Chart history
 
-Charts append pixel columns from live samples; they never reconstruct traces
-from recorded history. Columns preserve extrema and continuity, holding the
-last reading between updates and leaving missing/pause columns empty.
-Rescaled views are prepared in a hidden native-object layer and swapped in
-when complete.
+History observes completed polls, including unchanged values and intervening
+extrema. Matching condition/source/options subscriptions share bounded storage.
+Recording pauses on disarm unless a matching flight remains active, and while
+any AeroGrid layout editor or Model settings dialog is open.
 
-Late attachment, resize, and read-only previews start an empty plot; a fixed
-window starts where continuous sliding would have placed it. Resume-axis views
-use pause gaps and faint solid connectors. Missing telemetry remains a break,
-not a resume connector.
-
-History consumes at most one flight journal record per turn, keyed by its pinned
-`armKey`, never the Sticky output. Recording spans map actual boundary times
-to the cumulative axis; confirmation receipt times do not place boundaries.
-Grace samples remain after the mapped end. A 64-interval ring supplies scalar
-`history:flight(sessionView, index)` reads independently of metric subscriptions.
-Journal loss closes an unmatched band at its last observed time rather than
-extending it into later flights; model epochs clear intervals and mappings.
-
-Traces, bands, grid, markers, and resume connectors share the same axis.
-All drawing, preparation, and reset work is bounded by granted slots. Charts
-estimate 1,600 instructions per nominal 2,000-instruction slot and reserve 900
-per callback; these are estimates, not measured bounds.
-
-Draft previews read compatible live views without subscriptions. Compatible
-previews can become live panels after saving without losing history; new or
-incompatible subscriptions require a rebuild.
-
-## Shared flight tracking
-
-The factory-scoped broker in `flight_service.lua` owns a separate non-UI
-Control/Telemetry runtime and optional Smart sensor poller. Each live widget
-enrols the broker's setup, one task per polled service and a decision task in
-its ring. These tasks are shared, so each runs at most once per tick, whichever
-widget reaches it first. Dashboard
-registrations are weakly held; rebuilds mark proposals pending before replacing
-them. Unanimous effective arm/configuration proposals are required, not the
-first caller's settings. Saved model Armed overrides every declaration. A qualified session
-pins its arm, detector settings, and output until completion, including output
-cleanup when proposals change or conflict. Counter panels only render state.
-
-`services.flight:state()` is an immutable live view. It exposes model/epoch,
-configuration revision/status, phase (`ground`, `starting`, `active`, `ending`),
-`active`, flight ID/count, candidate/qualification/disarm/completion timestamps,
-qualification `reason` and `smartStatus`, and actionable diagnostics. `ready` describes configuration, not telemetry
-validity. Unknown/stale arm observations never confirm disarm.
-
-`services.flight:boundaries(afterSequence, epoch)` returns immutable records,
-the oldest retained sequence, and a gap flag. The journal retains 64 start/end
-records with epoch, sequence, flight ID/count, pinned `armKey`, `kind`, `at`, `observedAt`, and
-qualification `reason` (`standard`, `smart-altitude`, or `smart-speed`).
-Start `at` is the motor candidate start; end `at` is the final disarm start.
-`observedAt` is qualification or
-completion, so duration excludes the disarm grace. Consumers must reconcile a
-gap or changed epoch; they must never read Sticky output as their event bus.
-Smart shortcuts use the same qualification/effect path without moving the
-candidate timestamp. The standard timer remains an independent OR path.
-
-Model `flight.smartDetection` defaults false. Smart requires EdgeTX
-[`getSourceValue`](https://github.com/EdgeTX/edgetx/blob/2.11/radio/src/lua/api_general.cpp)
-receipt/current/fresh flags, not `getValue` zeros or link-wide freshness.
-Firmware `isFresh` spans roughly 160-320 ms; `isCurrent` only means the sensor
-is not marked old and may remain true for seconds after updates stop.
-Numeric receipt timestamps are not exposed. Smart bridges current finite
-readings for at most 1.2 seconds after positive per-sensor `isFresh` evidence;
-polling a cached value never renews that evidence. Never-received, old,
-unavailable, invalid, or expired data invalidate immediately. A shortcut can
-finish only once renewed evidence from every required source spans the full
-two-second hold; a cached value alone cannot finish it. Continuity counters
-preserve invalidations between detector ticks. This supports healthy 500ms/1s
-streams without treating the short fresh flag as a minimum update rate.
-Receipt age remains bounded evidence, not an exact timestamp or instant
-stopped-stream detector. Callbacks too infrequent to observe fresh flags
-conservatively fall back to standard detection.
-
-The Smart poller is due every 100ms and shares dashboard slots. Telemetry polls
-at most eight sources per turn, charging one slot per two sources including
-observers. Both retain round-robin progress. Loading/editor work gets separate
-per-widget slices, and pending input takes priority.
-Discovery uses numeric `telemN` sources and custom
-sensor metadata from `model.getSensor`, never names or units alone. Supported
-single-module families are CRSF (including ELRS) and native FrSky S.Port;
-unknown/MULTI or multiple active modules fall back rather than guessing.
-CRSF barometric altitude is ID `0x09`/instance 0; GPS position, groundspeed,
-and satellite count are ID `0x02`/instances 0, 2, and 5. S.Port uses the firmware
-barometric/GPS position/groundspeed ID ranges, with matching GPS/speed instances.
-Calculated sensors and GPS altitude are excluded. Ambiguous categories are
-disabled independently. GPS requires fresh valid coordinates/delay and, on CRSF,
-at least four fresh satellites. Numeric inputs reject nonfinite values and
-normalize metres/feet and knots/m/s/ft/s/km/h/mph.
-
-Altitude references require an observed disarmed-to-armed transition using
-a recent sample explicitly witnessed while disarmed, or fresh evidence at
-that transition. Merely current late readings never rebase an armed session.
-Motor interruptions preserve the reference but reset holds; unknown arm resets
-holds without inventing disarm. Metadata changes and scheduling gaps invalidate
-the reference conservatively. Fixed shortcuts are strictly above +3 m or
-10 mph for at least 200 ticks, allowing only precision-scaled conversion
-roundoff (including float32 firmware). `smartStatus` explains fallback in the native Model settings dialog;
-confirmed field changes persist and update live detection immediately.
-
-Model settings use their own schema/revision and losslessly encoded model
-filename under `/AEROGRID/models/`. Saves verify model identity and revision
-before verified file replacement. Layout saves and previews never write this
-document. Legacy detector declarations remain compatible until model settings
-are changed; retained arm metadata stays with its layout rather than becoming
-model-wide Armed. Schema version 1 has an optional top-level `armed` condition:
-missing preserves per-consumer legacy fallback, while `""` explicitly disables
-arming, including fallbacks. Nonempty values must be physical positions or
-logical switches L01–L64 (optionally inverted). Numeric channel IDs are rejected.
-The model document is loaded in a separate callback before Armed and panel
-construction. Saving a different arm condition rebuilds every registered
-dashboard and clears captured homes, preserving layout data and a pinned active
-flight's completion/cleanup. Previous per-widget Armed selections are never
-silently promoted; conflicting old selections require an explicit model choice.
-The optional top-level `sessionReset` uses the same switch syntax; missing or
-`""` disables it. A shared control poller detects false-to-true transitions
-independently of flight detection. Activation advances the flight epoch,
-cancels detection, releases its owned output, and resets each dashboard's
-session data in bounded service/panel callbacks. Subscriptions, screen objects,
-and editor drafts stay intact; charts reuse their plot buffers. Counting waits
-for a fresh disarm observation. Model changes also reset the flight epoch;
-ordinary dashboard rebuilds do not.
+Charts render live pixel columns rather than replaying stored history. Late
+attachment, resizing, and read-only previews start an empty plot; a service
+runtime rebuild clears recordings. Compatible previews can be adopted after
+saving without replacing their subscriptions. Appends, rescaling, drawing, and
+reset work must fit granted slots; charts refresh at most four times a second.
 
 ## Add or change a panel
 
-Use `panels/flight-mode.lua` as a small working example and
-`lib/panel_host.lua` as the authoritative contract.
+Start with `panels/flight-mode.lua`; `lib/panel_host.lua` defines the contract.
+Put a module at `panels/<type>.lua`, with an `id` matching that layout type.
 
-| Declaration or callback | Role |
+| Declaration or callback | Contract |
 | --- | --- |
-| `id`, `apiVersion`, `supportedSpans` | Identify the module, check compatibility, and advertise valid grid sizes. |
-| `settings` | Typed fields, defaults, bounds, and choices used by validation and the editor. |
-| `refreshInterval` | Desired foreground interval in 10 ms ticks; work still shares the host budget. |
-| `refreshCost` | Number of nominal slots, 0–8 (default 1), or `"variable"` to receive the remaining allowance. |
-| `create(parent, rect, settings, services)` | Build LVGL objects, subscribe to data, and return private instance state. |
-| `refresh(context, creating, slots)` | Optional callback to update existing objects from snapshots; scheduled calls pass `false` for `creating`. May return a whole-number interval of 1–6000 ticks; nil preserves the current interval. A second result of `true` marks the update unfinished; it resumes in the same callback only with `refreshContinuation`, otherwise at its next due time. Other panels, including panels of the same type, keep their turns. Variable tasks return consumed slots (0–grant) as a third result. |
-| `update(context, rect, settings, detailsOnly, placement)` | Optional geometry/configuration update. Host reflows and editor resizes pass the current grid placement as the fifth argument, leaving the internal `detailsOnly` argument unset. |
-| `background(context)` | Optional work when the dashboard is not visible. |
-| `resetSession(context, now)` | Optional session-data reset without rebuilding the panel. A second result of `true` requests another bounded reset turn. |
-| `event(context, event)` | Optional event handling; return true when consumed. |
-| `destroy(context)` | Optional cleanup of panel-owned references. |
-| `validateSettings(settings, span, config)` | Optional cross-field and span-dependent validation. |
+| `id`, `apiVersion`, `supportedSpans` | Identity, compatibility, and supported grid spans. |
+| `settings` | Typed fields, defaults, bounds, and choices shared by validation and the editor. |
+| `refreshInterval` | Interval in 10 ms ticks; zero or absent means every frame. |
+| `refreshCost`, `refreshMinCost` | Fixed cost of 0-8 slots (default 1), or `"variable"` with a minimum of 1-8. |
+| `create(parent, rect, settings, services)` | Construct objects, subscribe, and return instance state. |
+| `refresh(instance, creating, slots)` | Update objects; scheduled calls pass `false`. Returns next interval (1-6000 ticks, or nil to retain it), continuation, and consumed slots. Variable work must report consumption. |
+| `finish(instance, creating, slots)` | Optional variable-cost finishing task with the same results as refresh. Requires `finishPending` and `finishMinCost`. |
+| `finishPending(instance)` | Whether finishing work is ready; an optional second result sets its next minimum grant. Refresh waits while finishing is pending. |
+| `update(instance, rect, settings, detailsOnly, placement)` | Reflow/configuration update; host reflows and editor resizes pass placement as the fifth argument. |
+| `background(instance, creating, slots)` | Hidden-dashboard work; variable-cost when `backgroundMinCost` is declared, otherwise one slot. Returns an ignored first result, continuation, and consumed slots. |
+| `resetSession(instance, now)` | Reset session state; second result true requests another bounded reset turn. |
+| `event(instance, event)` | Return true when consumed. |
+| `destroy(instance)` | Release panel-owned references. |
+| `validateSettings(settings, span, config, modelArmed)` | Cross-field or span-dependent validation, with the effective model arm condition. |
 
-Put the module at `panels/<type>.lua` and reference that type in a layout.
-Regular panels declare `supportedSpans = { "any" }` and adapt their contents to
-every in-bounds span of the 4 x 4 grid. Use an explicit span list when there is a
-real rendering constraint: Host diagnostics and Service probe need at least
-2x2, Chart needs a wide or square placement at least 2x1, while Theme showcase requires 4x4. Declare only spans you actually render
-correctly. A list setting
-(`type = "table"`) declares entry `fields` with keys or nested paths, labels,
-types, and appropriate defaults/bounds/choices. The editor uses this schema
-to offer even fields omitted from the YAML, and can remove cleared optional
-fields. List declarations, including nested lists, can set `itemLabel` to a
-singular name such as `"Metric"` or `"State"`. The editor names rows using the
-first nonempty label or source, then `itemLabel` and the one-based index;
-lists without `itemLabel` use `"Entry"`. Do not build a separate settings UI
-for each panel.
+A lifecycle failure disables the affected panel and reports its error without
+repeatedly invoking the failed panel.
 
-The public `theme.lua` API composes palette/state resolution with
-`typography.lua` (measurement, font fitting, unit metrics) and `panel_layout.lua`
-(frames, slots, bands, and regions). The public `primitives.lua` API composes LVGL
-objects with `reading.lua` (reading/unit composition, redraw detection, and
-visibility/reflow reconciliation). Installed functions are direct references,
-not per-call wrappers; each widget has its own caches and mutable API tables.
+Use `supportedSpans = { "any" }` only when every in-bounds span renders
+correctly. Use container-local coordinates and shared geometry, including the
+top-left menu reservation; never assume a TX16S-sized screen.
 
-The host supplies these dependencies when executing the modules. Pure-Lua tests
-use `tests/support/module_loader.lua` to compose the same APIs without installing
-firmware globals.
+List settings (`type = "table"`) declare entry `fields` for the shared drawer.
+Use `itemLabel` for singular row names. Do not add a panel-specific settings UI.
 
-Use `theme.lua` for bands, font fitting, shared colors, and spacing, and
-`primitives.lua` for reusable LVGL objects. `primitives.reading` constructs the
-matching value/unit arrangement used by the battery and link readouts; optional
-units and differing initial geometry remain panel-specific. Keep a reading's font stable as
-its value changes, using the widest expected representation to choose it.
-When changing settings vocabulary or rendering, inspect sibling panels so
-the same setting retains the same meaning.
+Use `theme.lua` and `primitives.lua` for shared typography, geometry, colors,
+readings, and LVGL objects. They compose `typography.lua`, `panel_layout.lua`,
+and `reading.lua`; tests use `tests/support/module_loader.lua` to compose the
+same APIs. Choose stable reading fonts from the widest expected representation.
+Update a label's backing font with `primitives.setFont` rather than replacing
+its persistent callback.
 
-Add focused tests, an integration case at every declared span, a simulator
-review layout when useful, and a [panel reference page](../reference-guide/index.md).
-If adding screenshot support, add a capture recipe and adapter as described
-in [Project tools](tools.md#change-a-capture-recipe).
+Cover settings, absent data, every declared span, reflow, and editor installation.
+Add a [panel reference page](../reference-guide/index.md) and, when needed, a
+[capture recipe](tools.md#change-a-capture-recipe).
 
 ## Editor and persistence
 
-`editor.lua` owns draft operations; `editor_ui.lua` and `editor_drawer.lua`
-present them; `editor_controller.lua` coordinates them with the live dashboard.
-`layout_store.lua` handles saving, backups, and user-versus-shipped
-resolution; `layout_registry.lua` maintains name-to-choice positions.
-Keep these boundaries intact when changing save behavior.
-Panel settings drawers, including entry subdrawers, put **Label** first when
-declared, preserving the declaration order of all remaining controls.
+`editor.lua` owns drafts; `editor_ui.lua` and `editor_drawer.lua` present them.
+`editor_controller.lua` coordinates the live dashboard. Settings drawers put
+**Label** first when declared, then preserve declaration order.
 
-Editing does not overwrite bundled layouts. **Save** writes to `/AEROGRID/layouts/`,
-and **Save as...** creates a named user layout. The layout registry is initialized
-at script load, so new names require a restart before appearing in the native
-Layout picker. Save errors must preserve the draft and report failure.
-Test persistence through the store/editor suites, not just the visible dialog.
+`layout_store.lua` owns layout resolution, verified saves, and backups;
+`layout_registry.lua` maintains choice positions. **Save** writes under
+`/AEROGRID/layouts/`, never over bundled layouts. New **Save as...** names need a
+script restart to enter the native Layout picker. Failed saves preserve drafts.
 
-## Firmware constraints that affect design
+`model_settings_store.lua` separately stores revisioned documents under
+`/AEROGRID/models/`, keyed by encoded model filename. Saves verify model
+identity and revision. Layout saves and previews do not write model settings.
+Changing the arm condition rebuilds registered dashboards and clears captured
+homes, while preserving layouts and active-flight completion/cleanup.
 
-EdgeTX limits a widget callback to **20,000 Lua VM instructions**. Creation,
-parsing, panel building, reload, and reflow are staged across callbacks.
-Services have bounded subscription updates, and panel work is capped and
-phase-staggered. Do not replace this with one synchronous "simpler" loader.
-The [budget tests](testing.md#performance-and-resource-regressions) require
-strictly less than 75% of the callback allowance.
-
-Avoid object churn and retained callbacks. Shared labels install a persistent
-font callback; change its backing state through `primitives.setFont` rather
-than replacing the callback during refresh/reflow. Replacement retained Lua
-registry references in EdgeTX 2.12.4.
-
-Other firmware details already have helpers and regression coverage:
-`theme.measureText` uses `lcd.sizeText` where available and estimates otherwise;
-trim sources do not identify their axis, image decode failure is not reported
-by `lvgl.image`, and
-`lvgl.arc` positions use the center rather than the bounding-box corner.
-Reuse the existing panel logic, file checks, and `primitives.arcBounds`
-instead of introducing alternate assumptions.
+A model change or session reset advances the flight epoch. Session reset
+cancels detection, releases its owned output, and clears dashboard session
+data in bounded callbacks without replacing subscriptions, objects, or drafts.
+Counting waits for a fresh disarm observation; persistent flight totals remain.
