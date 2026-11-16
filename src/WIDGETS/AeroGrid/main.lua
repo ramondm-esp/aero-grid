@@ -2080,14 +2080,15 @@ local function menuWorkNeeded(context, fullscreen)
         )
 end
 
---- A screen change first only shows or hides the built button, in one slot,
---- so it replaces EdgeTX's own in the same callback.
+--- A screen change first only shows or hides the built button. That costs
+--- no slot, so it replaces EdgeTX's own in the same callback even when
+--- flight work has spent the budget.
 local function chromeOnly(context)
     return context.chromeRoot and context.aerogridMenu and context.menuVisibleFullscreen ~= isFullScreen()
 end
 
 local function menuReady(task, _, hidden)
-    task.cost = chromeOnly(task.host) and 1 or task.host.scheduler.budget.slots
+    task.cost = chromeOnly(task.host) and 0 or task.host.scheduler.budget.slots
     return not hidden and task.host.menuDue
 end
 

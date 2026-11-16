@@ -21,9 +21,24 @@ fixture.pump(context, 20)
 fixture.lvglMock.setFullScreen(false)
 fixture.pump(context, 20)
 assert(context.chromeRoot.hidden, "the button hides outside fullscreen")
+-- Flight work spending the whole budget first must not delay the button.
+local broker = { documentLoaded = true, filename = context.aerogridMenu.modelFilename }
+function broker.tasks()
+    return {}
+end
+context.flightFactory = { broker = broker }
+context.flightTask = {
+    broker = broker,
+    cost = context.scheduler.budget.slots,
+    step = function(_, _, slots)
+        return slots, false
+    end,
+}
+context.scheduler.cursor = 1
 fixture.lvglMock.setFullScreen(true)
 definition.refresh(context)
 assert(shown(), "the button must appear in the first fullscreen callback")
+context.flightFactory, context.flightTask = nil, nil
 fixture.pump(context, 20)
 
 context.editorTransitionRequest = "open"
