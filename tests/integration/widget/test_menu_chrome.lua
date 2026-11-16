@@ -15,12 +15,11 @@ local function shown()
     return not context.chromeRoot.hidden and not menu.root.hidden
 end
 
--- The first entry builds the button; later entries only show it.
-fixture.lvglMock.setFullScreen(true)
-fixture.pump(context, 20)
-fixture.lvglMock.setFullScreen(false)
-fixture.pump(context, 20)
-assert(context.chromeRoot.hidden, "the button hides outside fullscreen")
+local preloaded = assert(context.aerogridMenu, "the button must be built before the first fullscreen entry")
+assert(context.chromeRoot.hidden and preloaded.root.hidden, "preloading must not cover the native App icon")
+assert(not preloaded.screen, "preloading must not construct the menu popup")
+assert(type(preloaded.image.properties.file) == "string", "the hidden PNG must not wait for a visible callback")
+local children = #preloaded.root.children
 -- Flight work spending the whole budget first must not delay the button.
 local broker = { documentLoaded = true, filename = context.aerogridMenu.modelFilename }
 function broker.tasks()
@@ -39,6 +38,7 @@ context.scheduler.cursor = 1
 fixture.lvglMock.setFullScreen(true)
 definition.update(context, { Layout = "Default", Theme = "modern-dark" })
 assert(shown(), "the button must appear before EdgeTX redraws")
+assert(context.aerogridMenu == preloaded and #preloaded.root.children == children, "first entry only shows the icon")
 fixture.lvglMock.setFullScreen(false)
 definition.refresh(context)
 assert(context.chromeRoot.hidden, "the button hides as fullscreen ends")
@@ -68,4 +68,14 @@ local menu = context.aerogridMenu
 assert(taken == 0, "touches on the button must reach the editor")
 assert(not menu.open and not menu.pending, "the button does nothing while editing")
 assert(context.editorUi and shown())
+
+fixture.lvglMock.setFullScreen(false)
+local refreshOnly = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
+fixture.pump(refreshOnly, 20)
+local refreshPreloaded = assert(refreshOnly.aerogridMenu)
+assert(refreshOnly.chromeRoot.hidden and refreshPreloaded.root.hidden)
+fixture.lvglMock.setFullScreen(true)
+definition.refresh(refreshOnly)
+assert(not refreshOnly.chromeRoot.hidden and not refreshPreloaded.root.hidden)
+assert(refreshOnly.aerogridMenu == refreshPreloaded, "first refresh must show the preloaded icon even without update")
 print("AeroGrid button follows fullscreen and stays while editing")

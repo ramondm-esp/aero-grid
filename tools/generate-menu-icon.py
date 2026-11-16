@@ -67,42 +67,15 @@ def write_png(path, rows):
                      + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def mask_rectangles(mask):
-    """Merge equal-alpha row runs without changing native edge coverage."""
-    rectangles, previous = [], {}
-    for y, row in enumerate(mask):
-        current, x = {}, 0
-        while x < len(row):
-            alpha = 255 - row[x][0]
-            end = x + 1
-            while end < len(row) and 255 - row[end][0] == alpha:
-                end += 1
-            if alpha:
-                key = (x, end - x, alpha)
-                if key in previous:
-                    index = previous[key]
-                    rectangles[index][3] += 1
-                else:
-                    index = len(rectangles)
-                    rectangles.append([x, y, end - x, 1, alpha])
-                current[key] = index
-            x = end
-        previous = current
-    return rectangles
-
-
 def generate():
     output = ROOT / "build/native-logo"
     output.mkdir(parents=True, exist_ok=True)
     assets = ROOT / "src/WIDGETS/AeroGrid/assets"
-    masks = []
     for display, size in SIZES.items():
         mask_path = output / f"{display}.png"
         urllib.request.urlretrieve(f"{SOURCE}/{display}/default_theme/mask_topleft.png", mask_path)
         mask = read_png(mask_path)
         assert len(mask) == size and len(mask[0]) == size
-        packed = "".join("\\" + str(value) for rectangle in mask_rectangles(mask) for value in rectangle)
-        masks.append(f'    [{size}] = "{packed}",')
         rendered = output / f"mark-{size}.png"
         subprocess.run(["sips", "-s", "format", "png", "-z", str(size), str(size),
                         str(assets / "aerogrid.svg"), "--out", str(rendered)], check=True,
@@ -119,16 +92,6 @@ def generate():
                 row.append((*pixel[:3], (coverage * silhouette + 127) // 255))
             rows.append(row)
         write_png(assets / asset_name(size), rows)
-    runtime = ROOT / "src/WIDGETS/AeroGrid/lib/aerogrid_menu.lua"
-    source = runtime.read_text()
-    start = source.index("-- BEGIN GENERATED ICON MASKS")
-    end = source.index("-- END GENERATED ICON MASKS", start) + len("-- END GENERATED ICON MASKS")
-    source = source[:start] + (
-        "-- BEGIN GENERATED ICON MASKS (tools/generate-menu-icon.py)\n"
-        "local ICON_MASKS = {\n" + "\n".join(masks) + "\n}\n"
-        "-- END GENERATED ICON MASKS"
-    ) + source[end:]
-    runtime.write_text(source)
 
 
 if __name__ == "__main__":

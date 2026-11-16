@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Native header geometry regression tests, independent of simulator availability."""
 import importlib.util
-import hashlib
-import re
 from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
@@ -22,26 +20,6 @@ capture = load("menu_capture", "capture-editor.py")
 
 
 class MenuIconTests(unittest.TestCase):
-    def test_exact_native_background_masks(self):
-        hashes = {
-            36: "6318abc1e8fd52d4925d2997fde890487611fd3724b49a5905f16ec65e1e7738",
-            45: "73017f6acf9a91ea2589e205afef84b83ec9465e40eba776bd1b6fdc9294b7e2",
-            62: "f47a410f20c0d3cd2ff208ac1858cfa72dd91084ff09d3aab49d18a5292ec39a",
-        }
-        source = (ROOT / "src/WIDGETS/AeroGrid/lib/aerogrid_menu.lua").read_text()
-        for size, expected in hashes.items():
-            packed = re.search(rf'\[{size}\] = "([^"]+)"', source).group(1)
-            values = [int(value) for value in re.findall(r"\\(\d+)", packed)]
-            self.assertEqual(len(values) % 5, 0)
-            pixels = bytearray(size * size)
-            for index in range(0, len(values), 5):
-                x, y, width, height, alpha = values[index:index + 5]
-                for row in range(y, y + height):
-                    for column in range(x, x + width):
-                        self.assertEqual(pixels[row * size + column], 0, "mask runs must not overlap")
-                        pixels[row * size + column] = alpha
-            self.assertEqual(hashlib.sha256(pixels).hexdigest(), expected)
-
     def test_selected_straight_grid_design(self):
         svg = ET.parse(ROOT / "src/WIDGETS/AeroGrid/assets/aerogrid.svg").getroot()
         ns = {"svg": "http://www.w3.org/2000/svg"}
@@ -87,6 +65,22 @@ class MenuIconTests(unittest.TestCase):
         smaller[0] = black
         with self.assertRaisesRegex(RuntimeError, "silhouettes differ"):
             capture.verify_menu_icon_pair(rows, smaller)
+        narrower = list(rows)
+        narrower[0] = bytes([255] * (44 * 3)) + black[44 * 3:]
+        report = capture.verify_menu_icon_pair(rows, narrower)
+        self.assertEqual(report["matching_rows"], 44)
+        self.assertEqual(report["max_edge_difference"], 1)
+        narrower[0] = bytes([255] * (43 * 3)) + black[43 * 3:]
+        with self.assertRaisesRegex(RuntimeError, "silhouettes differ"):
+            capture.verify_menu_icon_pair(rows, narrower)
+        wider = list(rows)
+        wider[0] = bytes([255] * (46 * 3)) + black[46 * 3:]
+        with self.assertRaisesRegex(RuntimeError, "silhouettes differ"):
+            capture.verify_menu_icon_pair(rows, wider)
+        hole = list(rows)
+        hole[0] = rows[0][:30] + bytes(3) + rows[0][33:]
+        with self.assertRaisesRegex(RuntimeError, "silhouettes differ"):
+            capture.verify_menu_icon_pair(rows, hole)
 
 
 if __name__ == "__main__":
