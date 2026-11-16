@@ -1,25 +1,17 @@
 # Project tools
 
-These tools exist to make AeroGrid development reproducible. They do not run
-on the radio, and their generated output belongs in ignored `build/`
-directories unless you deliberately publish reviewed documentation assets.
-
-For native walkthrough recording, cached Cora narration, and radio-photo
-compositing, see [Tutorial videos](videos.md).
+Native capture tools create documentation images from Companion's TX16S
+simulator library. They use isolated widget/SD copies, not `src/` or the active
+development image. Outputs stay in ignored `build/` directories until reviewed.
+For recordings and narration, see [Tutorial videos](videos.md).
 
 ## Capture documentation images with native firmware
 
-The capture tools load Companion's native TX16S simulator library directly
-through `tools/capture-native.cpp`. They create isolated SD images and widget
-copies; they do not modify `src/` or your active `build/sdcard/`.
-VS Code is not involved.
-
-Requirements are **macOS**, EdgeTX Companion 2.12, and Xcode command-line
-tools (`clang++` and `lipo`). The tools require a single-architecture TX16S
-simulator library; an Intel library on Apple Silicon needs Rosetta.
-The default application path is `/Applications/EdgeTX Companion 2.12.app`;
-pass `--companion "/path/to/Companion.app"` to choose another installation.
-These tools are local-only and do not run in CI.
+Requirements: **macOS**, EdgeTX Companion 2.12, and Xcode command-line tools
+(`clang++`, `lipo`). The simulator library must be single-architecture;
+Intel firmware on Apple Silicon needs Rosetta. The default application is
+`/Applications/EdgeTX Companion 2.12.app`; override it with
+`--companion "/path/to/Companion.app"`. These tools do not run in CI.
 
 ### Panel screenshots
 
@@ -29,159 +21,76 @@ build/capture-venv/bin/python tools/capture-panels.py --panel trim-panel
 build/capture-venv/bin/python tools/capture-panels.py --all
 ```
 
-Choose **one** of `--panel <type>`, `--recipe <path>`, or `--all`.
-`make capture-setup` installs pinned PyYAML in a separate environment.
-All thirteen user-facing panel types, plus the Host diagnostics and Service
-probe utility panels, have bundled recipes.
+Select one of `--panel <type>`, `--recipe <path>`, or `--all`.
+The setup target installs pinned PyYAML. Bundled recipes cover user-facing
+panels, Host diagnostics, and Service probe.
 
-Each panel writes to `build/doc-capture/<panel>/`:
+Outputs go to `build/doc-capture/<panel>/`: gallery crops, `full-frame.png`,
+`frame.rgb565`, `recipe.yaml`, `provenance.json`, `sdcard/`, and `simulator.log`.
+Regeneration replaces that panel's output. `--all` runs sequentially; failure
+keeps diagnostics and any completed panels, but never publishes assets.
 
-| Output | Purpose |
-| --- | --- |
-| `1x2.png`, `2x1.png`, `2x2.png` | Gallery crops with recipe-defined borders. |
-| `full-frame.png`, `frame.rgb565` | Full display and raw framebuffer for inspection. |
-| `recipe.yaml`, `provenance.json` | Exact inputs, geometry, source/tool hashes, simulator digest, and disclosures. |
-| `sdcard/`, `simulator.log` | Isolated fixture and diagnostics. |
-
-Regenerating a panel **replaces its previous output directory**; there is no
-run history. `--all` runs recipes sequentially, so a failure leaves earlier
-successful panels updated. A failed run keeps diagnostics, raises an error,
-and does not publish documentation assets.
-
-Default captures use a 480 x 272 Modern Dark/App-mode dashboard, unscaled
-crops, and a 10-pixel border. Recipes can override the border.
-Chart omits its unsupported 1x2 placement and records two synthetic flights
-with a pause to show flight bands, arm/disarm markers, and resume connectors.
-Its recipe requires `armSwitch: SFv` and isolated motor/detection settings.
-
-The runner waits for recipe-specific readiness, not just a fixed delay.
-Timer, trim, flight-mode, and model-image samples use isolated firmware model
-settings. Other recipes use capture-only firmware API inputs passed through
-the **real services and panels**. They demonstrate actual EdgeTX rendering,
-not the correctness of a receiver's telemetry.
+Defaults are 480 x 272, Modern Dark, App mode, unscaled crops, and a 10-pixel
+border. Recipes control samples and readiness checks. Synthetic inputs pass
+through real services/panels; the images show firmware rendering, not receiver
+telemetry validation.
 
 ### Change a capture recipe
 
-Recipes live in `tools/capture-recipes/*.yaml`. Copy an existing recipe to an
-untracked experiment location and select it explicitly:
+Copy a recipe from `tools/capture-recipes/` and run it explicitly:
 
 ```sh
 build/capture-venv/bin/python tools/capture-panels.py --recipe /path/to/example.yaml
 ```
 
-The recipe specifies `panel`, `theme`, `border`, named `panels` placements,
-each placement's `config`, and `sample` inputs. Positions are zero-based in
-the 4 x 4 grid and must not overlap. Row spans are currently limited to 1 or
-2; span-shaped image names must match the placement's dimensions.
-Validation runs before startup, then the widget validates panel settings.
+Recipes specify `panel`, `theme`, `border`, named `panels` placements/config,
+and `sample`. Placements are zero-based in the 4 x 4 grid, cannot overlap, and
+have row spans of 1 or 2. Span-shaped image names must match their dimensions.
+Use bundled recipes for supported sample fields, sensor units, and precision;
+every configured source needs a sample.
 
-Use the bundled recipe for the exact sample schema. Examples include timer
-name/start/remaining seconds, signed stored trim values, TX voltage, and
-`sample.sources` with exact sensor names, values, EdgeTX units, and precision.
-Cells use a voltage list; GPS uses coordinates including pilot position.
-Every configured source needs a sample.
+`tools/capture_recipes.py` owns validation, model setup, input adapters, and
+readiness. `capture-panels.py` prepares, captures, crops, and records provenance.
+Add adapters here, not capture-specific behavior in production modules.
 
-Recipes in `tools/capture-recipes/variants/` capture extra documented views
-and run only with `--recipe`. The Host diagnostics scheduler view uses
-`variants/host-diagnostics-scheduler.yaml`; its optional `companions` list adds
-uncropped panels whose work the view measures. Publish its crop and provenance
-as `scheduler-2x2.png` and `scheduler-provenance.json`.
+Variants under `tools/capture-recipes/variants/` require `--recipe`.
+The Host diagnostics scheduler variant accepts uncropped `companions` panels;
+publish its crop/provenance as `scheduler-2x2.png` and
+`scheduler-provenance.json`.
 
-`tools/capture_recipes.py` owns recipe validation, model setup, synthetic
-inputs, and readiness adapters. `capture-panels.py` handles preparation,
-native invocation, cropping, borders, and provenance. Add an adapter, not
-production panel logic, when a new sample type needs capture support.
+Disclose capture-only presentation changes, notably
+`brighten_supporting_text: true` and the timer's `hide_bottom_bar: true`.
+Production `config.visual: none` is not a capture override.
+Model-image paths are recipe-relative and need firmware-safe PNG names;
+verify redistribution rights before publishing.
 
-Be explicit about capture-only differences:
-
-- `brighten_supporting_text: true` uses the resolved muted color for faint text
-  (`#C4CDD3` to `#DCE2E6` in Modern Dark) for computer readability; omit it or set false
-  for production colors.
-- The timer's `hide_bottom_bar: true` hides its bar without reflow. It is not
-  a supported production setting.
-- Metric/link-status examples can omit visuals through `config.visual: none`.
-  This is a production setting, not evidence that all presentations were tested.
-- The flight-counter gallery panels share one detector and reach their sample
-  count through one real GV9 FM0 increment in the isolated model.
-
-Model images resolve relative to the recipe and need a firmware-safe PNG name.
-Establish redistribution permission before publishing a replacement image;
-the bundled Crack Yak image's permission was confirmed by its contributor.
-
-Capture instrumentation follows the runtime module boundaries: panel captures
-inject synthetic service inputs and optional text-color overrides into the
-isolated `lib/dashboard_loader.lua`; editor captures call
-`context.editorController.openEditor`. Readiness checks wrap the isolated
-`main.lua` refresh export. Update these hooks when moving runtime code; do not
-add capture-specific behavior to production modules.
-
-Run the [capture-recipe tests](testing.md#python-tooling-tests) after changing
-recipes/adapters, then inspect the resulting frame and provenance.
+Capture hooks patch only isolated copies: synthetic panel inputs enter through
+`dashboard_loader.lua`, editor activation uses
+`context.editorController.openEditor`, and readiness wraps the refresh export.
+Keep those hooks aligned with runtime boundaries.
+Run [capture tests](testing.md#python-tooling-tests) and inspect frames/provenance.
 
 ### Editor and setup screenshots
 
 ```sh
-make capture-setup
-build/capture-venv/bin/python tools/capture-editor.py
 build/capture-venv/bin/python tools/capture-editor.py --scene select-layout
-build/capture-venv/bin/python tools/capture-editor.py --scene navigation-location
 build/capture-venv/bin/python tools/capture-editor.py --scene chart-settings
-build/capture-venv/bin/python tools/capture-editor.py --scene chart-metric-entry
+build/capture-venv/bin/python tools/capture-editor.py --scene navigation-location
 ```
 
-The `navigation-location` scene enters fullscreen and taps the navigation
-panel using native touch input. It closes and reopens the location overlay
-twice before capturing the frozen Google Maps QR code.
+Use `--help` for scene names. Omitting `--scene` captures the default editor/setup
+set; dashboard, theme, and model-menu scenes are opt-in. Panel drawers use the
+capture recipes and need `make capture-setup`. Inputs use native touch/key
+actions or production editor commands in the isolated copy.
 
-This tool uses the same native capture runner; panel-drawer scenes also need
-PyYAML from `make capture-setup`. It covers setup/widget/layout choices,
-editor overview, Metric/State settings, entry dialogs, exit, and **Save as...**. Every other panel has a
-`<panel>-settings` scene (for example `--scene flight-timer-settings`) that
-captures its full settings drawer from the panel's capture recipe config, for
-the panel reference pages. Use `--help` for supported scene names.
-Panel drawer scenes save **SFv** as the model-wide Arm switch, so obsolete
-panel arm controls are not shown. The Chart scenes use a native GV1 source
-labeled **Reading**.
-`chart-settings` shows the default **Auto** window;
-`chart-metric-entry` opens Chart's own entry drawer, not Metric's.
-The `aero-menu`, `model-settings`, `model-settings-reset`, and
-`model-settings-bottom` scenes show the shared model menu and settings.
+Each scene writes its PNG, SD card, framebuffer, and log under
+`build/editor-capture/<scene>/`. Selected directories are replaced; the root
+`provenance.json` describes only that invocation.
 
-It also captures the telemetry-free **Palette** layout with real production
-primitives. These scenes are opt-in and do not open the editor:
-
-```sh
-build/capture-venv/bin/python tools/capture-editor.py --scene theme-modern-dark
-build/capture-venv/bin/python tools/capture-editor.py --scene theme-modern-light
-build/capture-venv/bin/python tools/capture-editor.py --scene theme-custom
-```
-
-The custom scene uses a fixed blue-gray palette with warm text and green
-default accents. To experiment interactively, add a `.yml` file in the user
-theme directory described
-in [Customize themes](../user-guide/customize-themes.md).
-Panel recipes also accept `theme: modern-light` for checking individual
-instruments in the built-in light palette.
-
-Each selected scene writes a PNG, isolated SD card, framebuffer, and log
-under `build/editor-capture/<scene>/`. The root `provenance.json` records
-the selected scenes and source/simulator hashes. Selected scene directories
-are replaced on regeneration, and the root provenance describes the current
-invocation, not a merged history of earlier runs.
-
-Setup scenes automate native touch input. Editor scenes enter fullscreen
-through a native long-press and automate production editor commands in the
-isolated copy. Check images manually: capture success is not a replacement
-for interactive editor/persistence tests.
-
-The `settings`, `<kind>-settings`, `state-entry`, `state-condition`,
-`metric-entry`, and `chart-metric-entry` scenes capture the whole
-configuration drawer, cropped to the dialog. When its rows do not fit on the
-screen, the tool captures further pages in `<scene>-page<N>/`, each hiding
-leading rows in the isolated copy so later rows move into view, and stitches
-them into one taller PNG. Hidden rows are used instead of scrolling because the
-native dialog keeps its focused row in view. The scrollbar is painted over,
-since it reflects only one page.
+Tall settings drawers are stitched from captures with leading rows hidden in
+the isolated copy, not scrolled screenshots. The tool removes the scrollbar;
+review the resulting image before publication. `navigation-location` captures
+the location overlay and its frozen QR code.
 
 ### Full dashboard screenshot
 
@@ -189,53 +98,36 @@ since it reflects only one page.
 build/capture-venv/bin/python tools/capture-editor.py --scene dashboard
 ```
 
-This opt-in scene captures the entire 480 x 272 display, not a composition of
-panel crops. It uses the shipped **Default** layout and **Modern Dark** theme
-without color or presentation overrides, entering fullscreen through native
-touch input without opening the editor.
+This captures the full display with **Default** and **Modern Dark**, without
+color/presentation overrides or an open editor. It uses fixture model data and
+synthetic telemetry through real services. Readiness checks cover all nine
+panels and their primary readings. Outputs are under
+`build/editor-capture/dashboard/`, with inputs/hashes in the root provenance.
 
-The isolated model uses the permitted bundled Crack Yak image, a stopped timer
-at 5:47 of 10:00, GV9 flight count 42, and GV1 expo 30. Capture-only firmware API
-inputs supply telemetry, transmitter voltage, and a disarmed SF switch through
-the real services. Readiness checks verify all nine panels and their primary
-readings before the native runner waits for the full frame to stabilize.
-These are illustrative readings, not live receiver telemetry.
-
-The PNG and diagnostics are in `build/editor-capture/dashboard/`; the root
-`provenance.json` also records the sample inputs, bitmap digest, capture tool
-hashes, and unmodified production source hashes.
+Theme samples use `--scene theme-modern-dark`, `theme-modern-light`, or
+`theme-custom`; panel recipes also accept `theme: modern-light`.
 
 ### Publish reviewed images
 
-Panel reference images live in `docs/assets/panels/<panel>/`.
-After reviewing the full frame, crops, and provenance, copy only the intended
-gallery PNGs and matching `provenance.json` there. Update the reference-page captions if samples,
-synthetic inputs, or presentation overrides changed.
+Review the full frame, crops, sample disclosures, and provenance, then copy
+only intended PNGs and matching provenance:
 
-Editor images live in `docs/assets/editor/`. Copy the selected PNGs and the
-corresponding provenance, taking care not to describe images from several
-runs with a provenance file for only one scene.
+| Asset | Destination |
+| --- | --- |
+| Panel galleries | `docs/assets/panels/<panel>/` |
+| Editor/setup captures | `docs/assets/editor/` |
+| Full dashboard shared by README/home | `docs/assets/dashboard/` |
+| Theme samples | `docs/assets/theme/` |
 
-The reviewed full-dashboard image and its corresponding provenance live in
-`docs/assets/dashboard/`. The README and website home page share this PNG.
-
-Keep SD images, raw framebuffers, logs, and incidental full frames in ignored
-output. Run `make docs` after publishing assets. Website builds use the
-checked-in images and need neither Companion nor capture dependencies.
+Keep captions consistent with synthetic inputs and overrides. Do not use
+single-scene provenance to describe unrelated captures. Leave SD cards, logs,
+raw frames, and incidental images in `build/`. Run `make docs` after publishing.
 
 ## Package a release deterministically
 
-```sh
-make release-package
-python3 tools/package-release.py --version-only
-python3 -m unittest discover -s tools -p 'test_release_*.py'
-```
-
-`tools/package-release.py` reads the package version, checks required
-layouts/assets, rejects unexpected runtime files and symlinks, and writes
-a deterministic source-only ZIP plus SHA-256 checksum. Its explicit allowlists
-include `Default`, `Empty`, `Diagnostics`, and `Palette`, excluding review layouts and mutable
-simulator data. Use `--output <directory>` to choose another output location.
-
-See [Issues, changes, and releases](contributing.md#publish-a-release)
-for publishing; making a local ZIP does not tag or upload anything.
+See [Build an installable package](build.md#build-an-installable-package) for
+the command and contents. `tools/package-release.py` enforces explicit runtime
+allowlists, required layouts/assets, and symlink rejection.
+Use `--version-only` to print the version or `--output <directory>` to relocate
+the ZIP/checksum. Run the
+[packaging tests](testing.md#python-tooling-tests) when changing it.
