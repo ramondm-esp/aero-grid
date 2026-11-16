@@ -71,6 +71,24 @@ Chart performance is evaluated on the real radio. Automated chart tests check
 functional behavior, including gaps, axes, and right-edge preservation;
 they do not establish hardware responsiveness.
 
+On macOS with Companion 2.12, measure Model drawer row creation with:
+
+```sh
+python3 tools/measure-model-settings.py
+python3 tools/measure-model-settings.py --mode callbacks --output build/model-settings-callbacks.json
+```
+
+The report at `build/model-settings-measurement.json` includes each row's
+reservation and native simulator instruction usage. Each measured refresh builds
+one row and includes firmware property polling; it excludes other host work.
+The callback mode measures complete production refreshes, including scheduler and
+host work, and rejects callbacks reaching 15,000 Lua instructions.
+This is not physical-radio timing or safety evidence. Construction reserves one
+slot per step except the logical-switch list, which reserves two: 13 slots total.
+Save and close operations retain full grants. The Model UI unit suite checks
+separate mock regression envelopes; the stage-reservation suite checks exact
+grants and bounded construction under normal scheduler contention.
+
 The resource suites check reload collectibility, object counts, sustained
 updates, and font callback retention. They cannot measure native LVGL/bitmap
 memory, firmware GC cadence, or radio timing. A short green mock run is not

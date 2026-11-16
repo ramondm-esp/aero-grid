@@ -95,7 +95,9 @@ end
 local function queue(context, state, action)
     if active(context, state) then
         state.pending = action
+        return true
     end
+    return false
 end
 
 local function dialog(context, state)
@@ -345,11 +347,14 @@ local function buildField(context, state, field)
         end
     end
     local apply = properties.set
-    properties.set = function(value)
-        queue(context, state, { apply = apply, value = value })
-    end
     local getValue = properties.get
     local value = getValue()
+    properties.set = function(selected)
+        if queue(context, state, { apply = apply, value = selected }) and field.kind == "toggle" then
+            -- EdgeTX polls get() while the deferred save is still pending.
+            value = selected ~= 0 and selected ~= false and 1 or 0
+        end
+    end
     properties.get = function()
         return value
     end
@@ -364,14 +369,9 @@ end
 function ui.cost(context)
     local state, capacity = context.modelSettingsUi, context.scheduler.budget.slots
     local field = state and state.build and fields[state.build]
-    -- Switch controls resolve firmware names; the output list also builds 65 choices.
-    if
-        state
-        and state.build
-        and not state.closing
-        and not (field and (field.kind == "switch" or field.key == "flightSwitch"))
-    then
-        return math.min(3, capacity)
+    if state and state.build and not state.closing then
+        -- Native row measurements include firmware property polling.
+        return math.min(field and field.key == "flightSwitch" and 2 or 1, capacity)
     end
     return capacity
 end
@@ -467,6 +467,7 @@ function ui.advance(context)
             state.handlers.saved(result)
         end
     else
+        state.readControls[command.key]()
         if state.dialog then
             state.status:set({ text = tostring(result) })
         end

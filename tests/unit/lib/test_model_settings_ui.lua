@@ -32,6 +32,7 @@ local function fixture(width)
     local c = {
         root = lvgl.box({ x = 0, y = 0, w = 480, h = 272 }),
         zone = { w = width or 480, h = 272 },
+        scheduler = { budget = { slots = 8 } },
         flightConfig = config,
         armedConfig = armedConfig,
         armControl = {
@@ -83,11 +84,23 @@ local function fixture(width)
         end,
     })
     assert(state.nextY == 4 and state.smartStatus.hidden)
-    for _ = 1, 13 do
+    local grants = { 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1 }
+    -- Fixture text measurement and firmware API stand-ins execute extra Lua.
+    -- These regression envelopes are independent of production reservations.
+    local mockLimits = { 4000, 4000, 1000, 1000, 1000, 1000, 1000, 1000, 13000, 7500, 6000, 1000 }
+    for row, grant in ipairs(grants) do
+        assert(ui.cost(c) == grant, "each row must reserve its own bounded grant")
+        local instructions = 0
+        debug.sethook(function()
+            instructions = instructions + 100
+        end, "", 100)
         ui.advance(c)
+        debug.sethook()
+        assert(instructions + 100 < mockLimits[row], "row " .. row .. " exceeds its mock envelope")
         mock.settle()
     end
     assert(not state.build and not state.save and not state.cancel, "no draft-form buttons")
+    assert(ui.cost(c) == 8, "save and close work must retain a full grant")
     local smart = state.controls.smartDetection.parent.properties
     assert(state.smartStatus.properties.y >= smart.y + smart.h, "Smart status follows Smart detection")
     assert(
@@ -158,6 +171,52 @@ end
 
 do
     local c = fixture(320)
+    ui.close(c)
+end
+
+do
+    local c, state, control, document = fixture()
+    for _, key in ipairs({ "motorReversed", "requireReceiver", "smartDetection", "liveDangerously" }) do
+        local properties = state.controls[key].properties
+        local selected = properties.get() == 0 and 1 or 0
+        properties.set(selected)
+        assert(properties.get() == selected, "the native getter must immediately acknowledge a toggle")
+        assert(control.attempts == control.published, "native callbacks must not write")
+        properties.set(1 - selected)
+        assert(properties.get() == selected, "blocked input must not replace the displayed pending value")
+        for _ = 1, 3 do
+            ui.advance(c)
+            assert(properties.get() == selected, "polling between save stages must not animate the toggle back")
+        end
+        assert(document().flight[key] == (selected == 1))
+    end
+    for _, failure in ipairs({ "prepare", "commit", "exception" }) do
+        local properties = state.controls.motorReversed.properties
+        local previous = properties.get()
+        local prepare = state.handlers.prepare
+        if failure == "prepare" then
+            state.handlers.prepare = function()
+                return false, "Cannot prepare settings"
+            end
+        elseif failure == "commit" then
+            control.failure = "SD card unavailable"
+        else
+            control.exception = true
+        end
+        local errors = control.errors
+        properties.set(1 - previous)
+        assert(properties.get() == 1 - previous)
+        for _ = 1, 3 do
+            if state.pending then
+                ui.advance(c)
+            end
+        end
+        assert(not state.pending, "a failed save must release input within its three stages")
+        assert(properties.get() == previous, "a failed save must restore the committed toggle value")
+        assert(document().flight.motorReversed == (previous == 1))
+        assert(control.errors == errors + 1 and state.status.properties.text ~= "")
+        state.handlers.prepare, control.failure, control.exception = prepare, nil, nil
+    end
     ui.close(c)
 end
 

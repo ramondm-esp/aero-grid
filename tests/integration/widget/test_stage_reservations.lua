@@ -85,8 +85,9 @@ definition.refresh(context)
 assert(not editor.previewPending)
 assert(#context.errors == 0, table.concat(context.errors, "\n"))
 
--- Check reduced task windows against their nominal grants in the mocked VM.
--- These guards are not a substitute for native-radio instruction measurement.
+-- Model rows have separate fixture envelopes: their production grants come from
+-- native simulator measurements, not Lua stand-ins for firmware text/API calls.
+local modelMockLimits = { 4000, 4000, 1000, 1000, 1000, 1000, 1000, 1000, 13000, 7500, 6000, 2000 }
 local measured, peaks = 0, {}
 for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagnostics", "Empty" }) do
     local host = definition.create({ x = 0, y = 0, w = 480, h = 272 }, {
@@ -94,12 +95,18 @@ for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagn
         Theme = "modern-light",
     }, context.path)
     local add = host.scheduler.add
-    local wrapped = {}
+    local wrapped, modelRows, modelSlots = {}, 0, 0
     host.scheduler.add = function(work)
         if not wrapped[work] then
             wrapped[work] = true
             local step = work.step
             work.step = function(task, now, slots, hidden)
+                local row = task.kind == "model settings" and task.ui.build
+                if row then
+                    assert(row == modelRows + 1, "contention must neither skip nor repeat drawer rows")
+                    assert(slots == host.modelSettingsUiModule.cost(host), "each row needs its own reservation")
+                    modelRows, modelSlots = row, modelSlots + slots
+                end
                 local name = task.name .. "/" .. tostring(host.stage or host.uiRequest or "")
                 if task.ui then
                     name = name .. "/" .. tostring(task.ui.build or task.ui.buildStage)
@@ -118,10 +125,17 @@ for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagn
                 local ok, used, again = pcall(step, task, now, slots, hidden)
                 debug.sethook()
                 assert(ok, used)
+                if row then
+                    assert(
+                        task.ui.build == row + 1 or row == 12 and not task.ui.build,
+                        "one advancement must build only one row, even with slots left"
+                    )
+                end
                 if count > 0 then
                     measured = measured + 1
                     peaks[name] = math.max(peaks[name] or 0, count)
-                    assert(count + 100 < slots * 2000, name .. " exceeds its reduced grant: " .. count)
+                    local limit = row and modelMockLimits[row] or slots * 2000
+                    assert(count + 100 < limit, name .. " exceeds its mock envelope: " .. count)
                 end
                 return used, again
             end
@@ -147,6 +161,7 @@ for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagn
     local settings = untilDone(function()
         return host.modelSettingsUi and not host.modelSettingsUi.build
     end)
+    assert(modelRows == 12 and modelSlots == 13, "drawer construction must reserve exactly 13 slots")
     host.modelSettingsUi.closing = true
     untilDone(function()
         return not host.modelSettingsUi
