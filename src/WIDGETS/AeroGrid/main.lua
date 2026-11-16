@@ -969,6 +969,14 @@ local function update(context, widgetOptions)
     if context.runtimeFailed then
         return
     end
+    -- EdgeTX calls update as it enters fullscreen, before it redraws without
+    -- its own icon. Showing the built button here, outside the scheduler,
+    -- is the one native call update makes, and only on that entry.
+    if context.aerogridMenu and context.chromeRoot and isFullScreen() and context.menuVisibleFullscreen ~= true then
+        lvgl.show(context.chromeRoot)
+        context.aeroMenuModule.sync(context)
+        context.menuVisibleFullscreen = true
+    end
 
     if name ~= context.layoutName or themeMode ~= context.themeMode then
         context.optionsRequest = { layoutName = name, themeMode = themeMode }

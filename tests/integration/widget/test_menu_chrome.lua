@@ -35,6 +35,13 @@ context.flightTask = {
     end,
 }
 context.scheduler.cursor = 1
+-- EdgeTX calls update while entering fullscreen, before its next redraw.
+fixture.lvglMock.setFullScreen(true)
+definition.update(context, { Layout = "Default", Theme = "modern-dark" })
+assert(shown(), "the button must appear before EdgeTX redraws")
+fixture.lvglMock.setFullScreen(false)
+definition.refresh(context)
+assert(context.chromeRoot.hidden, "the button hides as fullscreen ends")
 fixture.lvglMock.setFullScreen(true)
 definition.refresh(context)
 assert(shown(), "the button must appear in the first fullscreen callback")
