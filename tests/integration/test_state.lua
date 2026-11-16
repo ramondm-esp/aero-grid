@@ -19,7 +19,7 @@ local function entry(source, label, middle)
     return { label = label, states = states }
 end
 
-for count = 1, 3 do
+for count = 0, 3 do
     local entries = {}
     for index = 1, count do
         entries[index] = entry("sa", "MODE", "MID")
@@ -28,21 +28,18 @@ for count = 1, 3 do
 end
 local invalid = {
     {},
-    { entries = {} },
     { entries = { entry("sa", "MODE"), entry("sb", "RATE"), entry("sf", "FLAP"), entry("sa", "EXTRA") } },
     { entries = { [1] = entry("sa", "MODE"), [3] = entry("sb", "RATE") } },
     { entries = { extra = entry("sa", "MODE") } },
     { entries = { "bad" } },
     { entries = { entry("RxBt", "MODE") } },
-    { entries = { entry("sa", "") } },
+    { entries = { entry("sa", false) } },
     { entries = { entry("sa", "LINE\nBREAK") } },
     { entries = { { label = "MODE" } } },
-    { entries = { { label = "MODE", states = {} } } },
 }
 for _, states in ipairs({
     { "bad" },
     { { switch = "sa", text = "LOW" } },
-    { { switch = "SA^", text = "" } },
     { { switch = "SA^", text = "LINE\nBREAK" } },
     { { switch = "SA^", text = true } },
     { { switch = "SA^", text = "LOW", background = "red" } },
@@ -52,6 +49,13 @@ for _, states in ipairs({
     { {}, {}, {}, {} },
 }) do
     invalid[#invalid + 1] = { entries = { { label = "MODE", states = states } } }
+end
+for _, settings in ipairs({
+    { entries = { { states = {} } } },
+    { entries = { { label = "", states = { {} } } } },
+    { entries = { { states = { { switch = "", text = "" } } } } },
+}) do
+    equal(#panel.validateSettings(settings), 0, "unfinished entries can be saved")
 end
 for index, settings in ipairs(invalid) do
     assert(#panel.validateSettings(settings) > 0, "accepted invalid text configuration " .. index)
@@ -86,6 +90,13 @@ equal(panel.reading(priority, { feed(true), {}, {} }), "FIRST", "unknown later c
 local stale = feed(false)
 stale.fresh = false
 equal(panel.reading(priority, { stale, feed(true), feed(true) }), "--", "stale earlier condition blocks fallthrough")
+equal(panel.reading(nil), "--", "empty panel has no inferred state")
+equal(panel.reading({ states = {} }), "--", "empty entry has no inferred state")
+equal(
+    panel.reading({ states = { {}, { switch = "L01", text = "ARMED" } } }, { feed(true), feed(true) }),
+    "--",
+    "unfinished earlier condition blocks fallthrough"
+)
 
 local function create(entries, cols, rows, theme)
     fixture.reset()
@@ -104,14 +115,14 @@ local function create(entries, cols, rows, theme)
         "    rowSpan: " .. (rows or 2),
         "    config:",
         "      accent: green",
-        "      entries:",
+        "      entries:" .. (#entries == 0 and " []" or ""),
     }
     for _, item in ipairs(entries) do
-        lines[#lines + 1] = "        - label: " .. item.label
-        lines[#lines + 1] = "          states:"
+        lines[#lines + 1] = '        - label: "' .. (item.label or "") .. '"'
+        lines[#lines + 1] = "          states:" .. (#item.states == 0 and " []" or "")
         for _, condition in ipairs(item.states) do
-            lines[#lines + 1] = "            - switch: " .. condition.switch
-            lines[#lines + 1] = '              text: "' .. condition.text .. '"'
+            lines[#lines + 1] = '            - switch: "' .. (condition.switch or "") .. '"'
+            lines[#lines + 1] = '              text: "' .. (condition.text or "") .. '"'
             if condition.background then
                 lines[#lines + 1] = "              background: " .. condition.background
             end
@@ -139,6 +150,21 @@ local function fits(instance, object)
         properties.x + width <= instance.panel.root.properties.w - instance.area.frame.padRight,
         "text left the panel"
     )
+end
+
+local emptyContext, emptyInstance = create({})
+equal(emptyInstance.text, "--")
+equal(emptyInstance.label.properties.text, "STATE")
+equal(emptyInstance.stateName, "unavailable")
+equal(emptyContext.serviceRuntime.byId.control.count, 0, "empty panel subscribes to no switches")
+panel.update(emptyInstance, { x = 0, y = 0, w = 95, h = 65 })
+panel.refresh(emptyInstance)
+equal(emptyInstance.text, "--", "empty panel survives resizing and refreshing")
+for _, states in ipairs({ {}, { {} }, { { switch = "SA^" } }, { { text = "ARMED" } } }) do
+    local blankContext, blankInstance = create({ { states = states } })
+    equal(blankInstance.text, "--", "unfinished condition cannot claim a state")
+    equal(blankInstance.stateName, "unavailable")
+    equal(#blankContext.errors, 0)
 end
 
 local twoPosition = entry("sf", "MODE")

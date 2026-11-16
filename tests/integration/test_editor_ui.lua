@@ -1384,7 +1384,7 @@ settleDrawer()
 local editedEntries = context.editorSession.draft.panels[1].config.entries
 equal(#editedEntries[1].states, 3, "new condition appends")
 equal(editedEntries[1].states[2].text, "LAND", "append preserves existing order")
-equal(editedEntries[1].states[3].switch, "SA^", "new condition starts with a configurable default")
+equal(editedEntries[1].states[3].switch, nil, "new condition starts without a switch")
 equal(action("append", "entries").properties.active(), false, "three-condition limit disables add")
 action("item", "entries").properties.press()
 settleDrawer()
@@ -1399,7 +1399,7 @@ equal(state.drawerControls[2].row.children[1].properties.text, "FLIGHT", "parent
 equal(state.drawerItemPath, nil, "entry Return goes to widget settings")
 equal(
     action("item", "entries").properties.text(),
-    "SA" .. CHAR_DOWN .. ": LAND / SA" .. CHAR_UP .. ": UP",
+    "SA" .. CHAR_DOWN .. ": LAND / --",
     "widget summary follows new order with firmware glyphs"
 )
 for _ = 1, 2 do
@@ -1447,6 +1447,56 @@ equal(
     "!L04",
     "negated condition summary preserves inversion"
 )
+
+-- A new State panel and its first entry and condition all start blank.
+load("edit-state")
+open()
+state = context.editorUi
+local stateFree = assert(state.addRect)
+tap(stateFree.x + 50, stateFree.y + 40)
+settleDrawer()
+local stateSelection = widget.lvglMock.menu()
+for index, item in ipairs(state.handlers.editor.CATALOG) do
+    if item.type == "state" then
+        stateSelection.set(index)
+        break
+    end
+end
+settleDrawer()
+local blankStateIndex = context.editorSession.selected
+local blankStateId = context.editorSession.draft.panels[blankStateIndex].id
+equal(#context.editorSession.draft.panels[blankStateIndex].config.entries, 0, "new State panel has no entries")
+action("append", "entries").properties.press()
+settleDrawer()
+equal(action("item", "entries").properties.text(), "--", "empty entry summary is safe to draw")
+action("item", "entries").properties.press()
+settleDrawer()
+action("append", "entries").properties.press()
+settleDrawer()
+equal(action("item", "entries").properties.text(), "--", "blank state summary is safe to draw")
+action("item", "entries").properties.press()
+settleDrawer()
+equal(control("entries", "switch").properties.get(), 0, "blank state has no selected switch")
+control("entries", "text").properties.set("CUSTOM")
+settleDrawer()
+back()
+equal(action("item", "entries").properties.text(), "--", "text alone does not select a switch")
+action("item", "entries").properties.press()
+settleDrawer()
+action("remove-item").properties.press()
+settleDrawer()
+equal(#context.editorSession.draft.panels[blankStateIndex].config.entries[1].states, 0, "last state can be removed")
+action("remove-item").properties.press()
+settleDrawer()
+equal(#context.editorSession.draft.panels[blankStateIndex].config.entries, 0, "last entry can be removed")
+back()
+assert(not state.previewError, tostring(state.previewError))
+local blankStateInstance = assert(widget.instanceOf(context, blankStateId))
+equal(blankStateInstance.text, "--", "empty State preview shows no mapped reading")
+exitWith("Save")
+settleSave()
+context = widget.createLoaded(nil, { Layout = "edit-state", Theme = "modern-dark" }, path)
+equal(#context.document.panels[blankStateIndex].config.entries, 0, "empty State panel survives saving and reloading")
 
 -- Exit menu: Discard, Save As with a suggested name, overwrite confirmation.
 local function changeFirstLabel(text)

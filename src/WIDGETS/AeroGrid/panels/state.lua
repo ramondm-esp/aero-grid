@@ -13,7 +13,7 @@ local statePanel = {
             key = "entries",
             label = "Entries",
             type = "table",
-            minItems = 1,
+            minItems = 0,
             maxItems = 3,
             fields = {
                 { key = "label", label = "Label", type = "string", required = true },
@@ -22,8 +22,9 @@ local statePanel = {
                     label = "States",
                     itemLabel = "State",
                     type = "table",
-                    minItems = 1,
+                    minItems = 0,
                     maxItems = 3,
+                    default = {},
                     fields = {
                         { key = "switch", label = "When", type = "string", required = true },
                         { key = "text", label = "Text", type = "string", required = true },
@@ -35,19 +36,10 @@ local statePanel = {
                             choices = { "normal", "active", "warning", "critical" },
                         },
                     },
-                    itemDefault = { switch = "SA^", text = "UP" },
+                    itemDefault = {},
                 },
             },
-            default = {
-                {
-                    label = "SW1",
-                    states = {
-                        { switch = "SA^", text = "UP" },
-                        { switch = "SA-", text = "MID" },
-                        { switch = "SAv", text = "DOWN" },
-                    },
-                },
-            },
+            default = {},
         },
         {
             key = "accent",
@@ -74,22 +66,22 @@ local function list(value)
         end
         count = count + 1
     end
-    return count >= 1 and count <= 3 and #value == count
+    return count <= 3 and #value == count
 end
 
 function statePanel.validateSettings(settings)
     local warnings = {}
     local entries = settings.entries
     if not list(entries) then
-        return { "entries must contain a contiguous list of 1 to 3 entries" }
+        return { "entries must contain a contiguous list of up to 3 entries" }
     end
     for key, entry in ipairs(entries) do
         local prefix = "entries[" .. key .. "]"
         if type(entry) ~= "table" then
             warnings[#warnings + 1] = prefix .. " must be a mapping"
         else
-            if not singleLine(entry.label) then
-                warnings[#warnings + 1] = prefix .. ".label must be a nonempty single-line string"
+            if entry.label ~= nil and entry.label ~= "" and not singleLine(entry.label) then
+                warnings[#warnings + 1] = prefix .. ".label must be a single-line string"
             end
             for field in pairs(entry) do
                 if field ~= "label" and field ~= "states" then
@@ -97,18 +89,18 @@ function statePanel.validateSettings(settings)
                 end
             end
             if not list(entry.states) then
-                warnings[#warnings + 1] = prefix .. ".states must contain a contiguous list of 1 to 3 conditions"
+                warnings[#warnings + 1] = prefix .. ".states must contain a contiguous list of up to 3 conditions"
             else
                 for index, condition in ipairs(entry.states) do
                     local path = prefix .. ".states[" .. index .. "]"
                     if type(condition) ~= "table" then
                         warnings[#warnings + 1] = path .. " must be a mapping"
                     else
-                        if not singleLine(condition.text) then
-                            warnings[#warnings + 1] = path .. ".text must be a nonempty single-line string"
+                        if condition.text ~= nil and condition.text ~= "" and not singleLine(condition.text) then
+                            warnings[#warnings + 1] = path .. ".text must be a single-line string"
                         end
                         local switch = condition.switch
-                        if type(switch) ~= "string" or switch == "" or not validSwitch(switch) then
+                        if switch ~= nil and switch ~= "" and (type(switch) ~= "string" or not validSwitch(switch)) then
                             warnings[#warnings + 1] = path
                                 .. ".switch must name a position such as SF^ or a logical switch L01-L64, optionally prefixed with !"
                         end
@@ -130,7 +122,13 @@ function statePanel.validateSettings(settings)
 end
 
 function statePanel.reading(entry, feeds)
+    if not entry or not entry.states[1] then
+        return "--", "unavailable", "normal"
+    end
     for index, condition in ipairs(entry.states) do
+        if not singleLine(condition.switch) or not singleLine(condition.text) then
+            return "--", "unavailable", "normal"
+        end
         local feed = feeds and feeds[index]
         if not feed or not feed.known or not feed.available or not feed.fresh then
             return "--", "unavailable", "normal"
@@ -142,12 +140,16 @@ function statePanel.reading(entry, feeds)
     return "UNMAPPED", "unavailable", "normal"
 end
 
+local function entryLabel(entry)
+    return entry and singleLine(entry.label) and entry.label or "STATE"
+end
+
 local function widest(builder, font, entry, supporting)
-    local prefix = supporting and (entry.label .. " ") or ""
+    local prefix = supporting and (entryLabel(entry) .. " ") or ""
     local sample = prefix .. "--"
     local width = builder.measureText(font, sample)
-    for _, condition in ipairs(entry.states) do
-        local candidate = prefix .. condition.text
+    for _, condition in ipairs(entry and entry.states or {}) do
+        local candidate = prefix .. (condition.text or "--")
         local measured = builder.measureText(font, candidate)
         if measured > width then
             sample, width = candidate, measured
@@ -215,7 +217,7 @@ function statePanel.render(context, out)
             if state == "unavailable" and value == "UNMAPPED" then
                 value = "?"
             end
-            out["text" .. index] = entry.label .. " " .. value
+            out["text" .. index] = entryLabel(entry) .. " " .. value
             out["state" .. index] = state
         end
     end
@@ -284,7 +286,9 @@ function statePanel.create(parent, rect, settings, services)
         context.feeds[index] = {}
         if services.control then
             for conditionIndex, condition in ipairs(entry.states) do
-                context.feeds[index][conditionIndex] = services.control:switch(condition.switch)
+                if singleLine(condition.switch) then
+                    context.feeds[index][conditionIndex] = services.control:switch(condition.switch)
+                end
             end
         end
     end
@@ -300,7 +304,7 @@ function statePanel.create(parent, rect, settings, services)
         presentation,
         area.frame,
         services.fonts,
-        settings.entries[1].label,
+        entryLabel(settings.entries[1]),
         services.themeBuilder
     )
     context.value = primitives.value(context.panel.root, services.theme, {
@@ -341,7 +345,7 @@ function statePanel.update(context, rect)
     local area = statePanel.regionsFor(context, rect)
     local previous = context.area
     context.area = area
-    primitives.resizeHeader(context, rect, area.frame, context.settings.entries[1].label)
+    primitives.resizeHeader(context, rect, area.frame, entryLabel(context.settings.entries[1]))
     primitives.setFont(context.value, area.value)
     context.value:set({ x = area.valueX, y = area.valueY, w = area.valueWidth })
     context.readingAnchor, context.readingUnitAnchor = nil, nil

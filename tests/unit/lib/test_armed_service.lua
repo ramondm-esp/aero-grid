@@ -136,7 +136,7 @@ for _, panelName in ipairs({ "state", "chart", "navigation", "flight-counter" })
     for _, name in ipairs(switchNames) do
         assert(armedModule.valid(name))
         local _, warnings = host.resolveSettings(panel, settings(name))
-        equal(#warnings, panelName == "state" and name == "" and 1 or 0, panelName .. " condition " .. name)
+        equal(#warnings, 0, panelName .. " condition " .. name)
     end
     for _, name in ipairs(invalidNames) do
         assert(not armedModule.valid(name))
