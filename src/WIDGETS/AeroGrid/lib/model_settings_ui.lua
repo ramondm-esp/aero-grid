@@ -33,6 +33,7 @@ local fields = {
         key = "flightSwitch",
         label = "Flight status switch",
         kind = "choice",
+        slots = 2,
         description = "On during a detected flight. Use for your own special functions. Choose a dedicated Sticky logical switch, or None.",
     },
     {
@@ -51,6 +52,8 @@ local fields = {
     },
 }
 
+local nativeProperties
+
 local function outputAvailable(index)
     if index == 1 then
         return true
@@ -67,14 +70,6 @@ local function active(context, state)
         and (not state.handlers.fullscreen or state.handlers.fullscreen())
 end
 
-local function retireHost(state)
-    if state.host then
-        state.host:clear()
-        lvgl.hide(state.host)
-        state.host = nil
-    end
-end
-
 function ui.close(context)
     local state = context.modelSettingsUi
     if not state then
@@ -82,12 +77,8 @@ function ui.close(context)
     end
     context.modelSettingsUi = nil
     state.generation = state.generation + 1
-    local dialog = state.dialog
     state.dialog = nil
-    if dialog then
-        lvgl.close(dialog)
-    end
-    retireHost(state)
+    context.settingsUiModule.close(state.view)
     state.screen:clear()
     lvgl.hide(state.screen)
 end
@@ -95,44 +86,9 @@ end
 local function queue(context, state, action)
     if active(context, state) then
         state.pending = action
+        return true
     end
-end
-
-local function dialog(context, state)
-    local generation = state.generation
-    local properties = {
-        title = "Model settings",
-        close = function()
-            if context.modelSettingsUi == state and state.generation == generation and state.dialog then
-                state.dialog:clear()
-                state.dialog = nil
-                retireHost(state)
-                state.closing = true
-            end
-        end,
-    }
-    state.host = lvgl.box(state.screen, { x = 0, y = 0, w = 0, h = 0 })
-    local attempted, result
-    lvgl.box(state.host, {
-        x = 0,
-        y = 0,
-        w = 0,
-        h = 0,
-        visible = function()
-            if not attempted then
-                attempted = true
-                result = lvgl.dialog(properties)
-            end
-            return true
-        end,
-    })
-    if not attempted then
-        attempted = true
-        retireHost(state)
-        context.nativeDialogsCreated = true
-        result = lvgl.dialog(properties)
-    end
-    return assert(result, "cannot open Model settings dialog")
+    return false
 end
 
 function ui.open(context, document, handlers)
@@ -151,12 +107,36 @@ function ui.open(context, document, handlers)
         generation = 1,
         build = 1,
         controls = {},
+        readControls = {},
         width = math.floor(context.zone.w * 0.8) - 16,
         height = lvgl.UI_ELEMENT_HEIGHT or 32,
         screen = lvgl.box(handlers.parent or context.root, { x = 0, y = 0, w = context.zone.w, h = context.zone.h }),
     }
     context.modelSettingsUi = state
-    state.dialog = dialog(context, state)
+    state.view = context.settingsUiModule.open(context, state.screen, {
+        title = "Model settings",
+        close = function()
+            state.dialog = nil
+            state.closing = true
+        end,
+    }, {
+        fields = fields,
+        rowHeight = state.height + 4,
+        controlFraction = 0.52,
+        controlWidthFraction = 0.48,
+        controlInset = 4,
+        gap = 2,
+        active = function()
+            return active(context, state)
+        end,
+        enqueue = function(apply, value)
+            return queue(context, state, { apply = apply, value = value })
+        end,
+        nativeProperties = function(field, properties)
+            return nativeProperties(state, field, properties)
+        end,
+    })
+    state.dialog = state.view.dialog
     state.status = lvgl.label(state.dialog, {
         x = 4,
         y = 4,
@@ -190,145 +170,77 @@ function ui.open(context, document, handlers)
     return state
 end
 
-local function description(state, text)
-    local lines, line = {}, ""
-    for word in string.gmatch(text, "%S+") do
-        local candidate = line == "" and word or line .. " " .. word
-        if line ~= "" and lcd.sizeText(candidate, SMLSIZE) > state.width - 4 then
-            lines[#lines + 1], line = line, word
-        else
-            line = candidate
+nativeProperties = function(state, field, properties)
+    properties.min, properties.max = field.min, field.max
+    properties.get = function()
+        if field.kind == "switch" then
+            local condition = state[field.key]
+            return condition and condition ~= "" and state.armControl:switchIndex(condition) or 0
         end
-    end
-    lines[#lines + 1] = line
-    local _, lineHeight = lcd.sizeText("Ag", SMLSIZE)
-    local height = #lines * (lineHeight + 2)
-    lvgl.label(state.dialog, {
-        x = 4,
-        y = state.nextY,
-        w = state.width,
-        h = height,
-        text = table.concat(lines, "\n"),
-        font = function()
-            return SMLSIZE
-        end,
-    })
-    state.nextY = state.nextY + height + 4
-end
-
-local function buildField(context, state, field)
-    if field.section then
-        if state.build > 1 then
-            state.nextY = state.nextY + 12
+        local value = state.values[field.key]
+        if field.kind == "toggle" then
+            return value and 1 or 0
         end
-        lvgl.label(state.dialog, {
-            x = 4,
-            y = state.nextY,
-            w = state.width,
-            h = state.height,
-            text = field.section,
-            font = function()
-                return _G.BOLD
-            end,
-        })
-        state.nextY = state.nextY + state.height
-        description(state, field.description)
-    elseif field.description then
-        description(state, field.description)
+        if field.key == "flightSwitch" then
+            return value ~= "" and tonumber(string.sub(value, 2)) + 1 or 1
+        end
+        if field.kind == "source" then
+            if type(value) == "number" then
+                return value
+            end
+            local info = getFieldInfo(value)
+            return type(info) == "table" and info.id or getSourceIndex(value) or 0
+        end
+        if field.kind == "numberEdit" then
+            return math.max(field.min, math.min(field.max, math.floor(value + 0.5)))
+        end
+        return value
     end
-    local row = lvgl.setting(state.dialog, {
-        x = 4,
-        y = state.nextY,
-        w = state.width,
-        h = state.height + 4,
-        title = field.label,
-    })
-    local properties = {
-        x = math.floor(state.width * 0.52),
-        y = 0,
-        w = math.floor(state.width * 0.48) - 4,
-        h = state.height,
-        min = field.min,
-        max = field.max,
-        active = function()
-            return active(context, state) and not state.build
-        end,
-        get = function()
-            if field.kind == "switch" then
-                local condition = state[field.key]
-                return condition and condition ~= "" and state.armControl:switchIndex(condition) or 0
+    properties.set = function(value)
+        local function commit(command)
+            state.pending = command
+        end
+        if field.kind == "switch" then
+            local ok, name = pcall(state.armedConfig.name, value, state.armControl)
+            if ok then
+                commit({ key = field.key, value = name })
+            elseif state.dialog then
+                state.status:set({ text = "Choose a physical switch position or logical switch (L01-L64)" })
             end
-            local value = state.values[field.key]
-            if field.kind == "toggle" then
-                return value and 1 or 0
-            end
-            if field.key == "flightSwitch" then
-                return value ~= "" and tonumber(string.sub(value, 2)) + 1 or 1
-            end
-            if field.kind == "source" then
-                if type(value) == "number" then
-                    return value
-                end
-                local info = getFieldInfo(value)
-                return type(info) == "table" and info.id or getSourceIndex(value) or 0
-            end
-            if field.kind == "numberEdit" then
-                return math.max(field.min, math.min(field.max, math.floor(value + 0.5)))
-            end
-            return value
-        end,
-        set = function(value)
-            local function commit(command)
-                state.pending = command
-            end
-            if field.kind == "switch" then
-                local ok, name = pcall(state.armedConfig.name, value, state.armControl)
-                if ok then
-                    commit({ key = field.key, value = name })
-                elseif state.dialog then
-                    state.status:set({ text = "Choose a physical switch position or logical switch (L01-L64)" })
+            return
+        end
+        if field.kind == "toggle" then
+            value = value ~= 0 and value ~= false
+        elseif field.key == "flightSwitch" then
+            if type(value) ~= "number" or value % 1 ~= 0 or value < 1 or value > 65 or not outputAvailable(value) then
+                if state.dialog then
+                    state.status:set({ text = "Choose a configured logical switch (L01-L64), or None" })
                 end
                 return
             end
-            if field.kind == "toggle" then
-                value = value ~= 0 and value ~= false
-            elseif field.key == "flightSwitch" then
-                if
-                    type(value) ~= "number"
-                    or value % 1 ~= 0
-                    or value < 1
-                    or value > 65
-                    or not outputAvailable(value)
-                then
-                    if state.dialog then
-                        state.status:set({ text = "Choose a configured logical switch (L01-L64), or None" })
-                    end
-                    return
+            value = value == 1 and "" or string.format("L%02d", value - 1)
+        elseif field.kind == "source" then
+            local name
+            for channel = 1, 32 do
+                local candidate = "ch" .. channel
+                local info = getFieldInfo(candidate)
+                if type(info) == "table" and info.id == value then
+                    name = candidate
+                    break
                 end
-                value = value == 1 and "" or string.format("L%02d", value - 1)
-            elseif field.kind == "source" then
-                local name
-                for channel = 1, 32 do
-                    local candidate = "ch" .. channel
-                    local info = getFieldInfo(candidate)
-                    if type(info) == "table" and info.id == value then
-                        name = candidate
-                        break
-                    end
-                end
-                if not name then
-                    if state.dialog then
-                        state.status:set({ text = "Cannot resolve selected motor channel" })
-                    end
-                    return
-                end
-                value = string.lower(name)
-            elseif field.kind == "numberEdit" then
-                value = math.floor(value + 0.5)
             end
-            commit({ key = field.key, value = value })
-        end,
-    }
+            if not name then
+                if state.dialog then
+                    state.status:set({ text = "Cannot resolve selected motor channel" })
+                end
+                return
+            end
+            value = string.lower(name)
+        elseif field.kind == "numberEdit" then
+            value = math.floor(value + 0.5)
+        end
+        commit({ key = field.key, value = value })
+    end
     if field.kind == "source" then
         properties.filter = lvgl.SRC_CHANNEL
     elseif field.key == "flightSwitch" then
@@ -344,34 +256,13 @@ local function buildField(context, state, field)
             return available[index] == true
         end
     end
-    local apply = properties.set
-    properties.set = function(value)
-        queue(context, state, { apply = apply, value = value })
-    end
-    local getValue = properties.get
-    local value = getValue()
-    properties.get = function()
-        return value
-    end
-    state.readControls = state.readControls or {}
-    state.readControls[field.key] = function()
-        value = getValue()
-    end
-    state.controls[field.key] = lvgl[field.kind](row, properties)
-    state.nextY = state.nextY + state.height + 6
+    return properties
 end
 
 function ui.cost(context)
     local state, capacity = context.modelSettingsUi, context.scheduler.budget.slots
-    local field = state and state.build and fields[state.build]
-    -- Switch controls resolve firmware names; the output list also builds 65 choices.
-    if
-        state
-        and state.build
-        and not state.closing
-        and not (field and (field.kind == "switch" or field.key == "flightSwitch"))
-    then
-        return math.min(3, capacity)
+    if state and state.build and not state.closing then
+        return context.settingsUiModule.cost(state.view, capacity)
     end
     return capacity
 end
@@ -399,15 +290,17 @@ function ui.advance(context)
         return true
     end
     if state.build then
-        local field = fields[state.build]
+        local shared = context.settingsUiModule
+        local field, entry = shared.advance(state.view)
+        state.build, state.nextY = state.view.build, state.view.nextY
         if field then
-            buildField(context, state, field)
+            state.controls[field.key], state.readControls[field.key] = entry.object, entry.readNative
             if field.key == "smartDetection" then
                 state.smartStatus:set({ y = state.nextY })
                 lvgl.show(state.smartStatus)
                 state.nextY = state.nextY + state.smartStatusHeight + 4
             end
-            state.build = state.build + 1
+            state.view.nextY = state.nextY
         else
             state.nextY = state.nextY + 12
             state.status:set({ y = state.nextY })
@@ -467,6 +360,7 @@ function ui.advance(context)
             state.handlers.saved(result)
         end
     else
+        state.readControls[command.key]()
         if state.dialog then
             state.status:set({ text = tostring(result) })
         end

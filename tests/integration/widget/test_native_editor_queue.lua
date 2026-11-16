@@ -16,12 +16,23 @@ EVT_VIRTUAL_ENTER = 9601
 local definition = fixture.module("main.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(context, 30)
+local maxRowsPerCallback = 0
 local function untilState(predicate)
-    for _ = 1, 200 do
+    for callback = 1, 200 do
         if predicate() then
-            return
+            return callback - 1
         end
+        local state = context.editorUi
+        local view = state and state.drawerView
+        local rows = view and #view.controls or 0
         definition.refresh(context)
+        state = context.editorUi
+        local nextView = state and state.drawerView
+        if nextView and nextView == view then
+            maxRowsPerCallback = math.max(maxRowsPerCallback, #view.controls - rows)
+        elseif nextView and nextView.build then
+            assert(#nextView.controls == 0, "opening or replacing a native dialog must retain its callback boundary")
+        end
     end
     error("native editor work did not complete")
 end
@@ -44,10 +55,15 @@ menu.set(assert(index))
 assert(state.nativeInput and not state.drawerPending and #state.session.draft.panels == 0)
 definition.background(context)
 assert(state.nativeInput and #state.session.draft.panels == 0, "hidden callbacks cannot apply native editor commands")
-untilState(function()
+local openingCallbacks = untilState(function()
     return #state.session.draft.panels == 1 and not state.drawerBuild
 end)
 assert(not state.nativeInput and state.mode == "configure")
+assert(openingCallbacks <= 5, "Navigation opening must not regress to one callback per row")
+assert(
+    maxRowsPerCallback > 1,
+    "panel construction must batch rows like Model settings instead of yielding after each row"
+)
 local source
 for _, row in ipairs(state.drawerControls) do
     if row.kind == "source" then
@@ -77,6 +93,39 @@ untilState(function()
 end)
 assert(lookups > before, "source resolution must run in a granted editor task")
 getFieldInfo = originalFieldInfo
+local toggle
+for _, row in ipairs(state.drawerControls) do
+    if row.field.key == "showTape" then
+        toggle = row
+    end
+end
+assert(toggle)
+local properties = toggle.object.properties
+assert(properties.get() == 0)
+properties.set(1)
+assert(state.nativeInput and properties.get() == 1, "panel toggles must acknowledge accepted input immediately")
+properties.set(0)
+assert(properties.get() == 1, "blocked repeated input must not bounce the native toggle")
+untilState(function()
+    return not state.nativeInput and not state.drawerPending
+end)
+assert(state.session.draft.panels[1].config.showTape and properties.get() == 1)
+local write, log = state.handlers.editor.setValue, state.handlers.logError
+local failure
+state.handlers.editor.setValue = function()
+    return false, "rejected toggle"
+end
+state.handlers.logError = function(_, message)
+    failure = message
+end
+properties.set(0)
+assert(properties.get() == 0 and state.nativeInput)
+untilState(function()
+    return not state.nativeInput and not state.drawerPending
+end)
+assert(failure == "rejected toggle" and toggle.errorLabel.properties.text == failure)
+assert(properties.get() == 1, "a rejected panel edit must restore the committed toggle value")
+state.handlers.editor.setValue, state.handlers.logError = write, log
 local setter = source.properties.set
 context.editorUiModule.close(context, true)
 setter(value)

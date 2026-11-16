@@ -44,6 +44,9 @@ write("shared-armed-copy", document)
 
 local worst, callbacks = 0, 0
 local function measured(callback, context, draining)
+    -- Native controls execute Lua stand-ins here; construction has separate
+    -- mock envelopes and native reservation checks in the Model UI coverage.
+    local limit = context.modelSettingsUi and context.modelSettingsUi.build and 33000 or 15000
     fixture.lvglMock.setPropertyValidation(false)
     fixture.lvglMock.setCallCounting(false)
     fixture.lcdMock.setTextMeasurement(false)
@@ -58,7 +61,7 @@ local function measured(callback, context, draining)
     fixture.lvglMock.setPropertyValidation(true)
     assert(ok, message)
     worst, callbacks = math.max(worst, instructions), callbacks + 1
-    assert(instructions < 15000, "model Armed callback exceeded budget: " .. instructions)
+    assert(instructions < limit, "model Armed callback exceeded its mock envelope: " .. instructions)
     if not draining then
         for _ = 1, 20 do
             local uiTask = context.uiTasks and context.uiTasks[context.uiRequest]

@@ -2,12 +2,24 @@
 
 local drawer = { RUNTIME_API = 1 }
 
-local function deferredSetter(context, state, generation, apply)
-    return function(value)
-        if context.editorUi == state and generation == state.drawerGeneration and not state.nativeInput then
-            state.nativeInput = { apply = apply, value = value, generation = generation }
-        end
+local function queueNative(context, state, generation, apply, value)
+    if
+        context.editorUi == state
+        and generation == state.drawerGeneration
+        and not state.nativeInput
+        and not state.drawerPending
+        and not state.drawerBuild
+    then
+        state.nativeInput = { apply = apply, value = value, generation = generation }
+        return true
     end
+    return false
+end
+
+local function deferredSetter(context, state, generation, apply)
+    return context.settingsUiModule.defer(apply, function(callback, value)
+        return queueNative(context, state, generation, callback, value)
+    end)
 end
 
 function drawer.applyNative(context, state)
@@ -44,31 +56,6 @@ local function current(state, field)
     return value
 end
 
---- The live value of another field in the same entry, by its key.
----@param state table
----@param field table
----@param leaf string
----@return any
-local function sibling(state, field, leaf)
-    local path = field.path
-    for _, other in ipairs(state.drawerFields or {}) do
-        local otherPath = other.path
-        if other.key == field.key and otherPath and path and #otherPath == #path and otherPath[#otherPath] == leaf then
-            local same = true
-            for index = 1, #path - 1 do
-                if otherPath[index] ~= path[index] then
-                    same = false
-                    break
-                end
-            end
-            if same then
-                return current(state, other)
-            end
-        end
-    end
-    return nil
-end
-
 local function enqueue(state, action, generation)
     if
         (state.nativeDrawer or state.applyingNative)
@@ -80,70 +67,45 @@ local function enqueue(state, action, generation)
     end
 end
 
--- EdgeTX keeps a dismissed dialog's Lua wrapper registered after deleting its
--- native window, and a later refresh dereferences that window. Clearing the
--- dialog's registration parent unregisters the wrapper without touching it.
-local function retireDialogHost(state)
-    local host = state.nativeDrawerHost
-    state.nativeDrawerHost = nil
-    if host then
-        host:clear()
-        lvgl.hide(host)
-    end
-end
-
 local function closeDialog(state)
-    local dialog = state.nativeDrawer
     state.nativeDrawer = nil
     state.drawerGeneration = (state.drawerGeneration or 0) + 1
     state.drawerBuild = nil
-    if dialog then
-        state.drawerClosing = true
-        lvgl.close(dialog)
-        state.drawerClosing = nil
+    if state.drawerView then
+        state.settingsUi.close(state.drawerView)
+        state.drawerView = nil
     end
-    retireDialogHost(state)
+    state.nativeDrawerHost = nil
 end
 
--- Objects created while EdgeTX constructs a parented object are registered
--- under that parent, so the dialog is created from a child's visibility probe.
 local function hostedDialog(context, state, properties)
-    local host = lvgl.box(state.screen, { x = 0, y = 0, w = 0, h = 0 })
-    local dialog, failure, attempted
-    lvgl.box(host, {
-        x = 0,
-        y = 0,
-        w = 0,
-        h = 0,
-        visible = function()
-            if not attempted then
-                attempted = true
-                local ok, result = pcall(lvgl.dialog, properties)
-                if ok then
-                    dialog = result
-                else
-                    failure = result
-                end
-            end
-            return true
+    local generation = state.drawerGeneration
+    local closed = properties.close
+    properties.close = function()
+        state.nativeDrawerHost = nil
+        closed()
+    end
+    state.settingsUi = context.settingsUiModule
+    state.drawerView = state.settingsUi.open(context, state.screen, properties, {
+        active = function()
+            return context.editorUi == state
+                and generation == state.drawerGeneration
+                and not state.drawerPending
+                and not state.nativeInput
+        end,
+        enqueue = function(apply, value)
+            return queueNative(context, state, generation, apply, value)
+        end,
+        config = function()
+            local _, config = state.handlers.editor.settings(state.session)
+            return config
+        end,
+        fontHeight = function()
+            return context.themeBuilder.fontHeight(0)
         end,
     })
-    if failure then
-        host:clear()
-        lvgl.hide(host)
-        error(failure, 0)
-    end
-    if not attempted then
-        attempted = true
-        -- Firmware without construction-time probes registers dialogs at top
-        -- level; only the host-wide reload on App return can retire those.
-        host:clear()
-        lvgl.hide(host)
-        context.nativeDialogsCreated = true
-        return lvgl.dialog(properties)
-    end
-    state.nativeDrawerHost = host
-    return dialog
+    state.nativeDrawerHost = state.drawerView.host
+    return state.drawerView.dialog
 end
 
 function drawer.close(state)
@@ -151,26 +113,6 @@ function drawer.close(state)
     state.drawerPending = nil
     state.drawerDismiss = nil
     state.nativeInput = nil
-end
-
-local function firmwareSwitchName(name)
-    local physical, position = string.match(name, "^(S[A-Z])([%^v%-])$")
-    if physical then
-        return physical .. (position == "^" and CHAR_UP or position == "v" and CHAR_DOWN or "-")
-    end
-    return name
-end
-
-local function switchSummary(name)
-    assert(type(getSwitchIndex) == "function" and type(getSwitchName) == "function", "switch display APIs unavailable")
-    local index = getSwitchIndex(firmwareSwitchName(name))
-    if type(index) == "number" and index ~= 0 then
-        local displayed = getSwitchName(index)
-        if type(displayed) == "string" and displayed ~= "" then
-            return displayed
-        end
-    end
-    return name
 end
 
 local function entrySummary(state, key, index, defaults, path)
@@ -183,11 +125,16 @@ local function entrySummary(state, key, index, defaults, path)
     if item.states then
         local summaries = {}
         for _, condition in ipairs(item.states) do
-            summaries[#summaries + 1] = switchSummary(condition.switch) .. ": " .. condition.text
+            summaries[#summaries + 1] = state.settingsUi.switchSummary(condition.switch) .. ": " .. condition.text
         end
         return table.concat(summaries, " / ")
     elseif item.switch then
-        return switchSummary(item.switch) .. ": " .. item.text .. " (" .. (item.background or "normal") .. ")"
+        return state.settingsUi.switchSummary(item.switch)
+            .. ": "
+            .. item.text
+            .. " ("
+            .. (item.background or "normal")
+            .. ")"
     end
     local source = item.source
     -- A newly added entry has no source yet; getFieldInfo raises on nil.
@@ -298,6 +245,7 @@ local function fieldsFor(state, listKey, itemIndex, itemPath, groupKey)
 end
 
 function drawer.open(context, state, mode, listKey, itemIndex, itemPath, groupKey)
+    state.settingsUi = context.settingsUiModule
     closeDialog(state)
     if mode == "add" then
         assert(type(lvgl.menu) == "function", "panel selection requires EdgeTX Lua LVGL menu")
@@ -368,10 +316,7 @@ function drawer.open(context, state, mode, listKey, itemIndex, itemPath, groupKe
             title = title,
             close = function()
                 if not state.drawerClosing then
-                    -- RTN deletes native children; retire their Lua callbacks first.
-                    state.nativeDrawer:clear()
                     state.nativeDrawer = nil
-                    retireDialogHost(state)
                     state.drawerBuild = nil
                     local command = {
                         action = (listKey or groupKey) and "parent" or "back",
@@ -394,6 +339,23 @@ function drawer.open(context, state, mode, listKey, itemIndex, itemPath, groupKe
         "cannot open editor dialog"
     )
     state.drawerWidth = math.floor(context.zone.w * 0.8)
+    local view = state.drawerView
+    view.fields, view.build = fields, 1
+    view.errorHeight, view.errorColor = state.drawerErrorHeight, context.theme.color.critical
+    local generation = state.drawerGeneration
+    view.read = function(field)
+        return current(state, field)
+    end
+    view.write = function(field, value, control)
+        enqueue(state, { action = "write", field = field, value = value, control = control }, generation)
+    end
+    view.action = function(command)
+        enqueue(state, command, generation)
+    end
+    view.report = function(message, control)
+        enqueue(state, { action = "error", message = message, control = control }, generation)
+    end
+    state.drawerControls = view.controls
 end
 
 --- Queue an exit-flow command from a native callback of this generation.
@@ -443,9 +405,7 @@ function drawer.openName(context, state, name, message)
             title = "Save layout as",
             close = function()
                 if not state.drawerClosing then
-                    state.nativeDrawer:clear()
                     state.nativeDrawer = nil
-                    retireDialogHost(state)
                     exitCommand(context, state, generation, { action = "exit" })
                 end
             end,
@@ -515,43 +475,8 @@ local function writeField(state, field, value)
     return editor.setValue(state.session, field.key, value)
 end
 
-local function visible(state, field)
-    local condition = field.visibleWhen
-    if not condition then
-        return true
-    end
-    local _, config = state.handlers.editor.settings(state.session)
-    if type(condition) == "function" then
-        return condition(config)
-    end
-    if type(condition) ~= "table" then
-        return true
-    end
-    local matches = config[condition.key] == condition.value
-    if condition.invert then
-        return not matches
-    end
-    return matches
-end
-
 local function relayout(state)
-    local y = state.drawerPadding * 2
-    for _, entry in ipairs(state.drawerControls or {}) do
-        local show = visible(state, entry.field)
-        local visibility = show and lvgl.show or lvgl.hide
-        visibility(entry.row)
-        if show then
-            entry.row:set({ y = y })
-            y = y + entry.height
-        end
-        if entry.errorShown and show then
-            entry.errorLabel:set({ y = y })
-            lvgl.show(entry.errorLabel)
-            y = y + state.drawerErrorHeight
-        else
-            lvgl.hide(entry.errorLabel)
-        end
-    end
+    state.settingsUi.relayout(state.drawerView)
 end
 
 local function refreshVisibility(state)
@@ -567,334 +492,15 @@ local function refreshVisibility(state)
     end
 end
 
-local function addControl(context, state, field, index)
-    local generation = state.drawerGeneration
-    local function queue(command)
-        enqueue(state, command, generation)
-    end
-    local width = state.drawerWidth - 16
-    local y = state.drawerNextY
-    local rowHeight = field.type == "section" and math.floor(state.drawerControlHeight * 0.625) or state.drawerRowHeight
-    state.drawerNextY = y + rowHeight
-    local fullWidth = field.action == "remove"
-        or field.action == "remove-item"
-        or field.action == "append"
-        or field.type == "section"
-    local row = lvgl.setting(state.nativeDrawer, {
-        x = 4,
-        y = y,
-        w = width,
-        h = rowHeight,
-        title = (fullWidth or field.action == "item") and "" or field.label,
-    })
-    local controlX = fullWidth and 0 or math.floor(width * (field.action == "item" and 0.28 or 0.48))
-    if field.action == "item" then
-        lvgl.label(row, {
-            x = 0,
-            y = math.floor((state.drawerControlHeight - context.themeBuilder.fontHeight(0)) / 2),
-            w = controlX - 8,
-            h = state.drawerControlHeight,
-            text = field.label,
-        })
-    end
-    local options = {
-        x = controlX,
-        y = 0,
-        w = width - controlX - 8,
-        h = state.drawerControlHeight,
-        active = function()
-            return generation == state.drawerGeneration
-                and state.nativeDrawer ~= nil
-                and state.drawerBuild == nil
-                and not state.drawerPending
-                and field.active ~= false
-        end,
-    }
-    local function get()
-        return current(state, field)
-    end
-    local function set(value)
-        queue({ action = "write", field = field, value = value, control = state.drawerControls[index] })
-    end
-    local kind, control
-    local leaf = field.path and field.path[#field.path] or field.key
-    if field.type == "section" then
-        kind = "label"
-        options.active = nil
-        options.text = field.label
-        options.h = rowHeight
-        options.font = function()
-            return SMLSIZE
-        end
-    elseif field.action then
-        kind = "button"
-        options.text = field.text or field.label
-        options.press = function()
-            queue(field)
-        end
-    elseif field.choices then
-        kind = "choice"
-        -- A setting may name its stored values for display; YAML keeps the value.
-        options.title, options.values = field.label, field.choiceLabels or field.choices
-        options.get = function()
-            for choiceIndex, value in ipairs(field.choices) do
-                if value == get() then
-                    return choiceIndex
-                end
-            end
-            return 1
-        end
-        options.set = function(choiceIndex)
-            set(field.choices[choiceIndex])
-        end
-    elseif field.type == "boolean" then
-        kind = "toggle"
-        options.get = function()
-            return get() and 1 or 0
-        end
-        options.set = function(value)
-            set(value ~= 0 and value ~= false)
-        end
-    elseif leaf == "source" or leaf == "switch" or string.match(leaf, "Source$") or string.match(leaf, "Switch$") then
-        kind = (leaf == "source" or string.match(leaf, "Source$")) and "source" or "switch"
-        local indexOf = kind == "source" and getSourceIndex or getSwitchIndex
-        local nameOf = kind == "source" and getSourceName or getSwitchName
-        if
-            type(lvgl[kind]) ~= "function"
-            or type(indexOf) ~= "function"
-            or type(nameOf) ~= "function"
-            or kind == "source" and type(getFieldInfo) ~= "function"
-        then
-            error("native " .. leaf .. " picker APIs unavailable")
-        end
-        -- Panels read sources through getFieldInfo, whose names ("gvar1", "ch3",
-        -- "sf") differ from the menu names the picker shows ("GV1:Thr", "CH3").
-        -- Both share one index, so a name is stored only if it maps back to it.
-        local function fieldId(name)
-            local info = getFieldInfo(name)
-            return type(info) == "table" and type(info.id) == "number" and info.id or nil
-        end
-        options.get = function()
-            local value = get()
-            if value == nil or value == "" then
-                return 0
-            end
-            if kind == "switch" and type(value) == "string" then
-                value = firmwareSwitchName(value)
-            end
-            if type(value) == "number" then
-                return value
-            end
-            if kind == "source" and type(value) == "string" and value ~= "" then
-                local id = fieldId(value)
-                if id then
-                    return id
-                end
-            end
-            return indexOf(value or "") or 0
-        end
-        options.set = function(value)
-            local name = nameOf(value)
-            if value == 0 and not field.required then
-                set("")
-            elseif type(name) ~= "string" or name == "" then
-                queue({ action = "error", message = "Cannot resolve selected " .. leaf, control = field.control })
-            elseif type(get()) == "number" then
-                set(value)
-            elseif kind == "switch" then
-                local physical, position = string.match(name, "^(S[A-Z])(.+)$")
-                if physical then
-                    name = physical .. (position == CHAR_UP and "^" or position == CHAR_DOWN and "v" or position)
-                end
-                set(name)
-            else
-                local info = getFieldInfo(value)
-                local plain = string.match(name, "^\194[\128-\191](.+)$") or name
-                local readable
-                for _, candidate in ipairs({
-                    type(info) == "table" and info.name or nil,
-                    plain,
-                    string.lower(plain),
-                }) do
-                    if type(candidate) == "string" and candidate ~= "" and fieldId(candidate) == value then
-                        readable = candidate
-                        break
-                    end
-                end
-                if readable then
-                    set(readable)
-                else
-                    queue({
-                        action = "error",
-                        message = "Lua cannot read source " .. plain,
-                        control = field.control,
-                    })
-                end
-            end
-        end
-        if leaf == "motorSource" then
-            options.filter = lvgl.SRC_CHANNEL
-        end
-    elseif leaf == "timer" then
-        kind, options.get, options.set = "timer", get, set
-    elseif field.type == "number" and (leaf == "rangeMin" or leaf == "rangeMax") then
-        kind, options.value, options.length = "textEdit", tostring(get() or ""), 32
-        options.set = function(text)
-            if string.match(text, "^%s*$") then
-                set(nil)
-                return
-            end
-            local value = tonumber(text)
-            if not value or value ~= value or value == math.huge or value == -math.huge then
-                queue({
-                    action = "error",
-                    message = field.label .. " must be a finite number",
-                    control = field.control,
-                })
-                return
-            end
-            set(value)
-        end
-    elseif field.type == "number" then
-        kind = "numberEdit"
-        local scale = field.step and field.step < 1 and math.floor(1 / field.step + 0.5) or 1
-        if ((get() or 0) * scale) % 1 ~= 0 then
-            scale = 100
-        end
-        options.min = math.floor((field.min or -100000) * scale)
-        options.max = math.floor((field.max or 100000) * scale)
-        -- An optional field without a default is shown below its minimum as
-        -- "unset", and choosing that entry removes the field again.
-        local unset = field.empty and options.min - 1
-        if unset then
-            options.min = unset
-        end
-        -- A field bounded by two others, such as a threshold by its range. The
-        -- native control fixes its limits when built, so the live bounds are
-        -- read on every step instead: one step below the low bound is unset,
-        -- and anything outside the bounds shows and stores as unset.
-        local function bounds()
-            if not field.within then
-                return nil
-            end
-            local low = sibling(state, field, field.within[1])
-            local high = sibling(state, field, field.within[2])
-            if type(low) ~= "number" or type(high) ~= "number" then
-                return nil
-            end
-            if high < low then
-                low, high = high, low
-            end
-            return math.floor(low * scale + 0.5), math.floor(high * scale + 0.5)
-        end
-        local function outside(value)
-            local low, high = bounds()
-            return low ~= nil and (value < low or value > high)
-        end
-        options.get = function()
-            local value = get()
-            local low = bounds()
-            if value ~= nil then
-                value = math.floor(value * scale + 0.5)
-            end
-            if low and (value == nil or outside(value)) then
-                return low - 1
-            end
-            if value == nil then
-                return unset or 0
-            end
-            return value
-        end
-        options.set = function(value)
-            if unset and (value <= unset or outside(value)) then
-                set(nil)
-                return
-            end
-            local step = field.step or (1 / scale)
-            set(math.floor(value / scale / step + 0.5) * step)
-        end
-        if scale ~= 1 or unset then
-            options.display = function(value)
-                if unset and (value <= unset or outside(value)) then
-                    return field.empty
-                end
-                return tostring(value / scale)
-            end
-        end
-    else
-        kind, options.value, options.length = "textEdit", tostring(get() or ""), 128
-        options.set = function(value)
-            -- Clearing an optional text removes it, so the panel's own
-            -- fallback applies again.
-            if value == "" and field.path and not field.required then
-                value = nil
-            end
-            set(value)
-        end
-    end
-    if options.set then
-        options.set = deferredSetter(context, state, generation, options.set)
-    end
-    local readNative
-    if options.get then
-        local getValue = options.get
-        local value = getValue()
-        options.get = function()
-            return value
-        end
-        readNative = function()
-            value = getValue()
-        end
-    end
-    control = assert(lvgl[kind](row, options), "cannot create native " .. kind)
-    local errorLabel = lvgl.label(state.nativeDrawer, {
-        x = 12,
-        y = y + rowHeight,
-        w = width - 8,
-        h = state.drawerErrorHeight,
-        text = "",
-        font = SMLSIZE,
-        color = context.theme.color.critical,
-    })
-    lvgl.hide(errorLabel)
-    state.drawerControls[index] = {
-        object = control,
-        row = row,
-        height = rowHeight,
-        errorLabel = errorLabel,
-        field = field,
-        kind = kind,
-        readNative = readNative,
-    }
-    field.control = state.drawerControls[index]
-    relayout(state)
-end
-
 local function fieldError(state, control, message)
-    control.errorLabel:set({ text = message or "" })
-    if message then
-        lvgl.show(control.errorLabel)
-    else
-        lvgl.hide(control.errorLabel)
-    end
-    local shown = message ~= nil
-    if (control.errorShown == true) == shown then
-        relayout(state)
-        return
-    end
-    control.errorShown = shown
-    relayout(state)
+    state.settingsUi.fieldError(state.drawerView, control, message)
 end
 
 function drawer.advance(context, state)
     if state.drawerBuild ~= nil then
-        if state.drawerBuild <= #state.drawerFields then
-            addControl(context, state, state.drawerFields[state.drawerBuild], state.drawerBuild)
-        else
-            state.drawerBuild = nil
-            return true
-        end
-        state.drawerBuild = state.drawerBuild + 1
+        state.settingsUi.advance(state.drawerView)
+        state.drawerBuild = state.drawerView.build
+        state.drawerNextY = state.drawerView.nextY
         return true
     end
     local command = state.drawerPending
@@ -930,6 +536,9 @@ function drawer.advance(context, state)
             refreshVisibility(state)
         end
         if command.control and state.nativeDrawer then
+            if not ok and command.control.readNative then
+                command.control.readNative()
+            end
             if command.control.kind == "textEdit" then
                 command.control.object:set({ value = tostring(current(state, command.field) or "") })
             end
