@@ -378,6 +378,16 @@ function uiModule.advance(context)
             MIDSIZE
         )
     else
+        -- EdgeTX reports FIRST/SLIDE relative to the deepest clickable Window,
+        -- but TAP is dashboard-local. Keep the gesture in one coordinate space.
+        state.input = lvgl.box(state.screen, {
+            x = 0,
+            y = 0,
+            w = context.zone.w,
+            h = context.zone.h,
+            opacity = 0,
+            scrollDir = 0,
+        })
         render(context, state)
         state.buildStage = nil
         lvgl.show(state.screen)

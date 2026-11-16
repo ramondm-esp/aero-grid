@@ -362,6 +362,17 @@ load("edit-sparse")
 open()
 local entry, instance = context.panels[1], context.panels[1].instance
 local state = context.editorUi
+local input = assert(state.input, "editor needs an input plane above nested graphics")
+equal(input.kind, "box", "input plane is a native touch Window")
+equal(input.parent, state.screen, "input uses dashboard-local coordinates")
+equal(state.screen.children[#state.screen.children], input, "input plane covers gear and add-tile graphics")
+equal(#input.children, 0, "nested graphics cannot change the input coordinate origin")
+equal(input.properties.x, 0, "input starts at dashboard left")
+equal(input.properties.y, 0, "input starts at dashboard top")
+equal(input.properties.w, context.zone.w, "input covers dashboard width")
+equal(input.properties.h, context.zone.h, "input covers dashboard height")
+equal(input.properties.opacity, 0, "input does not obscure the dashboard")
+equal(input.properties.scrollDir, 0, "input cannot scroll away from its hit targets")
 equal(state.controls[1].left, nil, "no corner remove control")
 equal(state.controls[1].gearBackground.kind, "rectangle", "settings control has a theme-colored backing")
 equal(
