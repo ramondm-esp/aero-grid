@@ -140,71 +140,84 @@ def parse_callbacks(text):
     return samples
 
 
+def measure_native(companion, output, instrument):
+    """Run isolated SD instrumentation shared by the two drawer profilers."""
+    library = companion / "Contents/Resources/libedgetx-tx16s-simulator.dylib"
+    if not library.is_file():
+        raise RuntimeError(f"Simulator library not found: {library}")
+    architectures = subprocess.check_output(["lipo", "-archs", str(library)], text=True).split()
+    if len(architectures) != 1:
+        raise RuntimeError("A single-architecture simulator library is required.")
+    spec = importlib.util.spec_from_file_location("capture_editor", ROOT / "tools/capture-editor.py")
+    capture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(capture)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="settings-measurement-", dir=output.parent) as temporary:
+        directory = Path(temporary)
+        sd = directory / "sd"
+        capture.prepare(sd, "model-settings-motor")
+        instrument(sd)
+        executable = directory / "capture-native"
+        subprocess.run(["clang++", "-std=c++11", "-arch", architectures[0],
+                        str(ROOT / "tools/capture-native.cpp"),
+                        f"-Wl,-rpath,{companion / 'Contents/Frameworks'}",
+                        "-o", str(executable)], check=True)
+        regions = directory / "regions.txt"
+        regions.write_text("0 0 480 272\n")
+        log_path = output.with_suffix(".log")
+        with log_path.open("w") as log:
+            subprocess.run([str(executable), str(library), str(sd),
+                            str(directory / "frame.rgb565"), str(regions), "fullscreen"],
+                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=45)
+        text = (sd / "rows.txt").read_text()
+        output.with_suffix(".txt").write_text(text)
+        return text, hashlib.sha256(library.read_bytes()).hexdigest()
+
+
+def instrument_model(sd, mode):
+    main_path = sd / "WIDGETS/AeroGrid/main.lua"
+    source = (ROOT / "src/WIDGETS/AeroGrid/main.lua").read_text()
+    needle = "    refresh = refresh,"
+    if source.count(needle) != 1:
+        raise RuntimeError("Widget entry changed; update row measurement instrumentation")
+    main_path.write_text(source.replace(needle, REFRESH if mode == "rows" else REFRESH_CALLBACKS))
+    ui_path = sd / "WIDGETS/AeroGrid/lib/model_settings_ui.lua"
+    source = ui_path.read_text()
+    if mode == "rows":
+        needle = "function ui.advance(context)"
+        if source.count(needle) != 1:
+            raise RuntimeError("Model UI entry changed; update row measurement instrumentation")
+        source = source.replace(needle, needle + """
+    if not context.measureRows then return false end
+""")
+    needle = "        local shared = context.settingsUiModule"
+    if source.count(needle) != 1:
+        raise RuntimeError("Model row lookup changed; update row measurement instrumentation")
+    instrumentation = '\n        context.measureField = fields[state.build] and fields[state.build].key or "finish"'
+    if mode == "callbacks":
+        instrumentation = """
+        context.measureFields[#context.measureFields + 1] = fields[state.build] and fields[state.build].key or "finish"
+        context.measureSlots = context.measureSlots + ui.cost(context)"""
+    ui_path.write_text(source.replace(needle, needle + instrumentation))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--companion", type=Path, default=Path("/Applications/EdgeTX Companion 2.12.app"))
     parser.add_argument("--output", type=Path, default=ROOT / "build/model-settings-measurement.json")
     parser.add_argument("--mode", choices=("rows", "callbacks"), default="rows")
     args = parser.parse_args()
-    library = args.companion / "Contents/Resources/libedgetx-tx16s-simulator.dylib"
-    if not library.is_file():
-        parser.error(f"Simulator library not found: {library}")
-    architectures = subprocess.check_output(["lipo", "-archs", str(library)], text=True).split()
-    if len(architectures) != 1:
-        parser.error("A single-architecture simulator library is required.")
-    spec = importlib.util.spec_from_file_location("capture_editor", ROOT / "tools/capture-editor.py")
-    capture = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(capture)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="model-settings-", dir=args.output.parent) as temporary:
-        directory = Path(temporary)
-        sd = directory / "sd"
-        capture.prepare(sd, "model-settings-motor")
-        main_path = sd / "WIDGETS/AeroGrid/main.lua"
-        source = (ROOT / "src/WIDGETS/AeroGrid/main.lua").read_text()
-        needle = "    refresh = refresh,"
-        if source.count(needle) != 1:
-            raise RuntimeError("Widget entry changed; update row measurement instrumentation")
-        main_path.write_text(source.replace(needle, REFRESH if args.mode == "rows" else REFRESH_CALLBACKS))
-        ui_path = sd / "WIDGETS/AeroGrid/lib/model_settings_ui.lua"
-        source = ui_path.read_text()
-        if args.mode == "rows":
-            needle = "function ui.advance(context)"
-            if source.count(needle) != 1:
-                raise RuntimeError("Model UI entry changed; update row measurement instrumentation")
-            source = source.replace(needle, needle + """
-    if not context.measureRows then return false end
-""")
-        needle = "        local field = fields[state.build]"
-        if source.count(needle) != 1:
-            raise RuntimeError("Model row lookup changed; update row measurement instrumentation")
-        instrumentation = '\n        context.measureField = field and field.key or "finish"'
-        if args.mode == "callbacks":
-            instrumentation = """
-        context.measureFields[#context.measureFields + 1] = field and field.key or "finish"
-        context.measureSlots = context.measureSlots + ui.cost(context)"""
-        ui_path.write_text(source.replace(needle, needle + instrumentation))
-        executable = directory / "capture-native"
-        subprocess.run(["clang++", "-std=c++11", "-arch", architectures[0],
-                        str(ROOT / "tools/capture-native.cpp"),
-                        f"-Wl,-rpath,{args.companion / 'Contents/Frameworks'}",
-                        "-o", str(executable)], check=True)
-        regions = directory / "regions.txt"
-        regions.write_text("0 0 480 272\n")
-        log_path = args.output.with_suffix(".log")
-        with log_path.open("w") as log:
-            subprocess.run([str(executable), str(library), str(sd),
-                            str(directory / "frame.rgb565"), str(regions), "fullscreen"],
-                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=45)
-        parse = parse_samples if args.mode == "rows" else parse_callbacks
-        samples = parse((sd / "rows.txt").read_text())
+    text, simulator_hash = measure_native(args.companion, args.output, lambda sd: instrument_model(sd, args.mode))
+    parse = parse_samples if args.mode == "rows" else parse_callbacks
+    samples = parse(text)
     report = {
         "evidence": "Native Companion simulator, NOT physical-radio timing or safety evidence",
         "method": ("Previous-refresh getUsage; one row plus firmware property polling and wrapper overhead"
                    if args.mode == "rows" else
                    "Previous-refresh getUsage; complete production refresh plus firmware property polling and wrapper overhead"),
-        "simulator_sha256": hashlib.sha256(library.read_bytes()).hexdigest(),
+        "simulator_sha256": simulator_hash,
         "source_sha256": hashlib.sha256((ROOT / "src/WIDGETS/AeroGrid/lib/model_settings_ui.lua").read_bytes()).hexdigest(),
+        "shared_ui_sha256": hashlib.sha256((ROOT / "src/WIDGETS/AeroGrid/lib/settings_ui.lua").read_bytes()).hexdigest(),
         args.mode: samples,
     }
     args.output.write_text(json.dumps(report, indent=2) + "\n")

@@ -289,6 +289,15 @@ function module.new(dependencies)
             return false
         end
         local runtimeApi = context.packageInfo and context.packageInfo.runtimeApi or 1
+        if not context.settingsUiModule then
+            local module, moduleError = loadModule(context.path, "lib/settings_ui.lua", runtimeApi)
+            if not module then
+                addError(context, "settings UI: " .. tostring(moduleError))
+                showErrors(context)
+                return false
+            end
+            context.settingsUiModule = module
+        end
         if not context.editorModule then
             local module, moduleError = loadModule(context.path, "lib/editor.lua", runtimeApi)
             if not module then

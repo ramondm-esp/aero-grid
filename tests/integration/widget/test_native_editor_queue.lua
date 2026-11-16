@@ -77,6 +77,39 @@ untilState(function()
 end)
 assert(lookups > before, "source resolution must run in a granted editor task")
 getFieldInfo = originalFieldInfo
+local toggle
+for _, row in ipairs(state.drawerControls) do
+    if row.field.key == "showTape" then
+        toggle = row
+    end
+end
+assert(toggle)
+local properties = toggle.object.properties
+assert(properties.get() == 0)
+properties.set(1)
+assert(state.nativeInput and properties.get() == 1, "panel toggles must acknowledge accepted input immediately")
+properties.set(0)
+assert(properties.get() == 1, "blocked repeated input must not bounce the native toggle")
+untilState(function()
+    return not state.nativeInput and not state.drawerPending
+end)
+assert(state.session.draft.panels[1].config.showTape and properties.get() == 1)
+local write, log = state.handlers.editor.setValue, state.handlers.logError
+local failure
+state.handlers.editor.setValue = function()
+    return false, "rejected toggle"
+end
+state.handlers.logError = function(_, message)
+    failure = message
+end
+properties.set(0)
+assert(properties.get() == 0 and state.nativeInput)
+untilState(function()
+    return not state.nativeInput and not state.drawerPending
+end)
+assert(failure == "rejected toggle" and toggle.errorLabel.properties.text == failure)
+assert(properties.get() == 1, "a rejected panel edit must restore the committed toggle value")
+state.handlers.editor.setValue, state.handlers.logError = write, log
 local setter = source.properties.set
 context.editorUiModule.close(context, true)
 setter(value)

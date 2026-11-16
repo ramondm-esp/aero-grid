@@ -1585,6 +1585,15 @@ local function openModelSettings(context)
         showErrors(context)
         return
     end
+    if not context.settingsUiModule then
+        local module, message = loadModule(context.path, "lib/settings_ui.lua", 1)
+        if not module then
+            addError(context, "Settings UI: " .. tostring(message))
+            showErrors(context)
+            return
+        end
+        context.settingsUiModule = module
+    end
     if not context.modelSettingsUiModule then
         local module, message = loadModule(context.path, "lib/model_settings_ui.lua", 1)
         if not module then
@@ -2113,17 +2122,20 @@ local function editorCost(context)
     local state = context.editorUi
     if
         state
-        and state.buildStage
-        and state.buildStage <= 9
         and not state.nativeInput
         and not state.previewPending
         and not state.previewRefresh
         and not state.exitCommand
         and not state.drawerPending
-        and state.drawerBuild == nil
         and not state.saving
     then
-        return math.min(3, context.scheduler.budget.slots)
+        local capacity = context.scheduler.budget.slots
+        if state.drawerBuild then
+            -- Finalization also renders the editor; only individual rows are cheap.
+            return context.settingsUiModule.cost(state.drawerView, capacity, capacity)
+        elseif state.buildStage and state.buildStage <= 9 then
+            return math.min(3, capacity)
+        end
     end
     return context.scheduler.budget.slots
 end

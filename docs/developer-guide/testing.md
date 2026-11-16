@@ -76,6 +76,8 @@ On macOS with Companion 2.12, measure Model drawer row creation with:
 ```sh
 python3 tools/measure-model-settings.py
 python3 tools/measure-model-settings.py --mode callbacks --output build/model-settings-callbacks.json
+python3 tools/measure-panel-settings.py
+python3 tools/measure-panel-settings.py --mode callbacks --output build/panel-settings-callbacks.json
 ```
 
 The report at `build/model-settings-measurement.json` includes each row's
@@ -88,6 +90,12 @@ slot per step except the logical-switch list, which reserves two: 13 slots total
 Save and close operations retain full grants. The Model UI unit suite checks
 separate mock regression envelopes; the stage-reservation suite checks exact
 grants and bounded construction under normal scheduler contention.
+
+Model and panel drawers share `lib/settings_ui.lua` for construction, layout,
+cached getters and deferred controls; validation and saving remain separate.
+The panel profiler covers every catalog panel, maximum-size entry lists, nested
+editors and conditional rows. Panel rows reserve one slot; opening, final editor
+rendering, edits and closing retain full grants and existing callback boundaries.
 
 The resource suites check reload collectibility, object counts, sustained
 updates, and font callback retention. They cannot measure native LVGL/bitmap

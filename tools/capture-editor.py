@@ -379,46 +379,49 @@ panels:
         return
     if scene in FLIGHT_SETTINGS_SCENES:
         if scene == "model-settings":
-            settings_ui = sd / "WIDGETS/AeroGrid/lib/model_settings_ui.lua"
-            settings_source = settings_ui.read_text()
-            settings_source = settings_source.replace(
-                "function ui.open(context, document, handlers)",
-                """local function captureNode(state, kind, properties)
-    local node = lvgl[kind](state.dialog, properties)
-    state.captureNodes[#state.captureNodes + 1] = { node = node, y = properties.y }
+            shared_ui = sd / "WIDGETS/AeroGrid/lib/settings_ui.lua"
+            shared_source = shared_ui.read_text()
+            shared_source = shared_source.replace(
+                "function ui.description(view, text)",
+                """local function captureNode(view, kind, properties)
+    local node = lvgl[kind](view.dialog, properties)
+    view.captureNodes[#view.captureNodes + 1] = { node = node, y = properties.y }
     return node
 end
 
-function ui.open(context, document, handlers)""")
-            settings_source = settings_source.replace(
-                "lvgl.label(state.dialog, {", 'captureNode(state, "label", {')
-            settings_source = settings_source.replace(
-                "lvgl.setting(state.dialog, {", 'captureNode(state, "setting", {')
-            settings_source = settings_source.replace(
-                "state.dialog = dialog(context, state)",
-                "state.dialog = dialog(context, state)\n    state.captureNodes = {}")
-            settings_source = settings_source.replace(
-                "local function buildField(context, state, field)",
-                """local function buildField(context, state, field)
-    state.captureNodes = {}""")
-            settings_source = settings_source.replace(
-                "state.nextY = state.nextY + state.height + 6\nend",
-                """state.nextY = state.nextY + state.height + 6
-    if state.nextY <= CAPTURE_SHIFT then
-        state.captureShift = state.nextY - 4
-        for _, item in ipairs(state.captureNodes) do lvgl.hide(item.node) end
+function ui.description(view, text)""")
+            shared_source = shared_source.replace(
+                "lvgl.label(view.dialog, {", 'captureNode(view, "label", {')
+            shared_source = shared_source.replace(
+                "lvgl.setting(view.dialog, {", 'captureNode(view, "setting", {')
+            shared_source = shared_source.replace(
+                "function ui.row(view, field)",
+                "function ui.row(view, field)\n    view.captureNodes = {}")
+            row_needle = "    return entry\nend\n\nfunction ui.advance(view)"
+            if shared_source.count(row_needle) != 1:
+                raise RuntimeError("Shared settings row changed; update stitched capture instrumentation.")
+            shared_source = shared_source.replace(row_needle, """
+    if view.nextY <= CAPTURE_SHIFT then
+        view.captureShift = view.nextY - 4
+        for _, item in ipairs(view.captureNodes) do lvgl.hide(item.node) end
     else
-        for _, item in ipairs(state.captureNodes) do
-            item.node:set({ y = item.y - (state.captureShift or 0) })
+        for _, item in ipairs(view.captureNodes) do
+            item.node:set({ y = item.y - (view.captureShift or 0) })
         end
     end
-end""".replace("CAPTURE_SHIFT", str(shift)))
+    return entry
+end
+
+function ui.advance(view)""".replace("CAPTURE_SHIFT", str(shift)))
+            shared_ui.write_text(shared_source)
+            settings_ui = sd / "WIDGETS/AeroGrid/lib/model_settings_ui.lua"
+            settings_source = settings_ui.read_text()
             settings_source = settings_source.replace(
                 "state.smartStatus:set({ y = state.nextY })",
-                "state.smartStatus:set({ y = state.nextY - (state.captureShift or 0) })")
+                "state.smartStatus:set({ y = state.nextY - (state.view.captureShift or 0) })")
             settings_source = settings_source.replace(
                 "state.status:set({ y = state.nextY })",
-                "state.status:set({ y = state.nextY - (state.captureShift or 0) })")
+                "state.status:set({ y = state.nextY - (state.view.captureShift or 0) })")
             settings_ui.write_text(settings_source)
         source = source.replace(needle, """
     refresh = function(context, widgetEvent, touchState)
@@ -460,7 +463,7 @@ end""".replace("CAPTURE_SHIFT", str(shift)))
         if scene == "model-settings" then
             local state = context.modelSettingsUi
             io.write(file, string.format("\\ndrawer shift %d total %d row 0\\n",
-                state.captureShift or 0, state.nextY + state.height * 2))
+                state.view.captureShift or 0, state.nextY + state.height * 2))
         end
         io.close(file)
         context.captureReady = true

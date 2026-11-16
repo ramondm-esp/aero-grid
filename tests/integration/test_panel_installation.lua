@@ -214,6 +214,39 @@ for catalogIndex, item in ipairs(editor.CATALOG) do
     file:write("version: 3\ngrid:\n  columns: 4\n  rows: 4\npanels: []\n")
     file:close()
     context = fixture.createLoaded(nil, { Layout = name, Theme = "modern-dark" }, path)
+    local add, wrapped = context.scheduler.add, {}
+    context.scheduler.add = function(task)
+        if task.kind == "editor" and not wrapped[task] then
+            wrapped[task] = true
+            local step = task.step
+            task.step = function(work, now, slots, hidden)
+                local state = work.ui
+                local building = state.drawerBuild
+                    and not state.nativeInput
+                    and not state.drawerPending
+                    and not state.previewPending
+                    and not state.previewRefresh
+                    and not state.exitCommand
+                    and not state.saving
+                local row = building and state.drawerBuild
+                local field = row and state.drawerFields[row]
+                if building then
+                    assert(slots == (field and 1 or 8), panelType .. ": incorrect drawer reservation")
+                elseif state.nativeInput or state.drawerPending then
+                    assert(slots == 8, panelType .. ": drawer commands must retain full grants")
+                end
+                local used, again = step(work, now, slots, hidden)
+                if row then
+                    assert(
+                        field and state.drawerBuild == row + 1 or not field and not state.drawerBuild,
+                        panelType .. ": drawer advancement must build at most one row"
+                    )
+                end
+                return used, again
+            end
+        end
+        return add(task)
+    end
     healthy()
     assert(#context.document.panels == 0 and #context.panels == 0, "installation must start empty")
 

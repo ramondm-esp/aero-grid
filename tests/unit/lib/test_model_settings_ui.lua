@@ -33,6 +33,7 @@ local function fixture(width)
         root = lvgl.box({ x = 0, y = 0, w = 480, h = 272 }),
         zone = { w = width or 480, h = 272 },
         scheduler = { budget = { slots = 8 } },
+        settingsUiModule = assert(loadfile(base .. "/lib/settings_ui.lua"))(),
         flightConfig = config,
         armedConfig = armedConfig,
         armControl = {

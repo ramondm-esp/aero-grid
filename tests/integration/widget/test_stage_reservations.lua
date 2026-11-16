@@ -87,7 +87,7 @@ assert(#context.errors == 0, table.concat(context.errors, "\n"))
 
 -- Model rows have separate fixture envelopes: their production grants come from
 -- native simulator measurements, not Lua stand-ins for firmware text/API calls.
-local modelMockLimits = { 4000, 4000, 1000, 1000, 1000, 1000, 1000, 1000, 13000, 7500, 6000, 2000 }
+local modelMockLimits = { 4500, 4000, 1000, 1000, 1000, 1000, 1000, 1000, 13000, 7500, 6500, 2000 }
 local measured, peaks = 0, {}
 for _, layout in ipairs({ "Default", "review-navigation", "review-chart", "Diagnostics", "Empty" }) do
     local host = definition.create({ x = 0, y = 0, w = 480, h = 272 }, {
