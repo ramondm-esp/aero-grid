@@ -44,7 +44,6 @@ local NULL_EPSILON = 0.0000005
 
 local TICKS_PER_SECOND = 100
 local GPS_DELAY_TICKS = 16
-local MAX_ARM_AGE = TICKS_PER_SECOND
 local MAX_CAPTURE_AGE = 10 * TICKS_PER_SECOND
 
 local function gpsAgeTicks(position, updatedAt, now)
@@ -145,7 +144,7 @@ function navigationService:captureHome(entry, now)
         and arm.fresh
         and type(arm.updatedAt) == "number"
         and now >= arm.updatedAt
-        and now - arm.updatedAt <= MAX_ARM_AGE
+        and now - arm.updatedAt <= self.support.MAX_SAMPLE_AGE
     if not live then
         if not entry.switchUnavailable then
             self:logCapture(entry, "switch unavailable", now)

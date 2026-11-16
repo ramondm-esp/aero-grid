@@ -4,6 +4,7 @@ local root = assert(..., "repository root argument is required")
 local equal = assert(loadfile(root .. "/tests/support/assertions.lua"))().assertEqual
 local panel = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/panels/flight-counter.lua"))()
 local detector = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/flight_service.lua"))()
+local support = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/services.lua"))()
 local host = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/panel_host.lua"))()
 
 local function new()
@@ -37,12 +38,30 @@ local function new()
     }
     local function step(now)
         context.arm.updatedAt, context.motor.updatedAt, context.link.updatedAt = now, now, now
-        detector.advance(context, now)
+        detector.advance(context, now, support.MAX_SAMPLE_AGE)
     end
     return context, step
 end
 
 local context, step = new()
+equal(support.MAX_SAMPLE_AGE, 500, "cached sample limit is five seconds in 10 ms ticks")
+for _, source in ipairs({ "arm", "motor", "link" }) do
+    for _, age in ipairs({ -1, 100, 101, 499, 500, 501 }) do
+        local candidate, start = new()
+        candidate.settings.minFlightDuration = 1
+        candidate.arm.value, candidate.motor.value = true, 0
+        start(0)
+        local now = 1000
+        candidate.arm.updatedAt, candidate.motor.updatedAt, candidate.link.updatedAt = now, now, now
+        candidate[source].updatedAt = now - age
+        detector.advance(candidate, now, support.MAX_SAMPLE_AGE)
+        equal(
+            candidate.phase,
+            age >= 0 and age <= 500 and "active" or "ground",
+            source .. " must honor the inclusive five-second sample limit and reject future samples"
+        )
+    end
+end
 equal(#panel.validateSettings(context.settings), 0)
 step(0)
 equal(context.phase, "ground")
@@ -129,7 +148,7 @@ equal(#context.sounds, 0, "legacy announcement settings must not play audio at c
 context, step = new()
 context.arm.value, context.motor.value = true, 0
 step(0)
-detector.advance(context, 3000)
+detector.advance(context, 3000, support.MAX_SAMPLE_AGE)
 equal(context.phase, "ground", "old samples must not qualify a flight")
 context.feed.raw = -1
 local ok, err = pcall(step, 4000)
