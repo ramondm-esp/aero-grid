@@ -270,17 +270,39 @@ function module.new(dependencies)
     --- Lines tokenized per widget callback.
     local TOKENIZE_LINES = 24
 
+    local function completeLoad(context, failed)
+        context.pending, context.pendingIndex = nil, nil
+        context.stage = nil
+        if context.flightFactory then
+            context.flightFactory.startupThemes = nil
+        end
+        for _, entry in ipairs(context.panels) do
+            if not failed and not entry.failed and type(rawget(entry.module, "refresh")) == "function" then
+                -- A modal or a panel that cannot refresh must not stall hidden UI indefinitely.
+                context.firstRefreshUntil = getTime() + 100
+                break
+            end
+        end
+        if not failed and context.recoveryReason then
+            addNotice(context, "warning", "layout recovered after: " .. context.recoveryReason)
+            context.recoveryReason = nil
+        end
+        showErrors(context)
+        return false
+    end
+
     --- Advance the staged loader by exactly one step.
     --- EdgeTX allows roughly 20000 VM instructions per widget callback, and a
     --- whole dashboard costs far more than that, so loading is spread over
     --- consecutive calls. Every stage is bounded by a fixed amount of work rather
     --- than by the size of the layout: the file is tokenized a fixed number of
     --- lines at a time, and each panel is parsed, validated, and built in its
-    --- own callback. A layout that fills the grid therefore costs more callbacks,
-    --- never a larger callback.
+    --- own step. Hidden layouts register flight declarations before construction,
+    --- so their UI can yield without holding up flight initialization.
     ---@param context AeroGridContext
+    ---@param hidden? boolean
     ---@return boolean busy True while more work remains.
-    local function advanceLoad(context)
+    local function advanceLoad(context, hidden)
         local stage = context.stage
 
         --- Abandon the load, reporting why.
@@ -301,20 +323,29 @@ function module.new(dependencies)
                 context.flightFactory.revision = (context.flightFactory.revision or 0) + 1
             end
             context.stage = nil
+            context.pending, context.pendingIndex, context.pendingPlacement = nil, nil, nil
             context.tokens = nil
             context.source = nil
             context.loadCandidates = nil
             context.loadCandidateIndex = nil
             context.themeNames, context.themeDefinitions = nil, nil
-            showErrors(context)
-            return false
+            context.themeCache = nil
+            return completeLoad(context, true)
         end
 
         if stage == "theme-read" then
             local names = context.themeNames
             local index = context.themeReadIndex
             local name = names[index]
-            local definition, readError = readThemeDefinition(context.path, name, context.yaml)
+            local cache = context.themeCache
+            local definition = cache and cache[name]
+            local readError
+            if not definition then
+                definition, readError = readThemeDefinition(context.path, name, context.yaml)
+                if definition and cache then
+                    cache[name] = definition
+                end
+            end
             if not definition and readError ~= "theme file is missing: " .. name .. ".yml" then
                 return fail("themes: " .. tostring(readError))
             end
@@ -323,6 +354,7 @@ function module.new(dependencies)
             end
             context.themeReadIndex = index + 1
             if index == #names then
+                context.themeCache = nil
                 context.stage = "theme-validate"
             end
             return true
@@ -475,8 +507,7 @@ function module.new(dependencies)
                 context.tokens = nil
                 context.loadCandidates = nil
                 context.loadCandidateIndex = nil
-                showErrors(context)
-                return false
+                return completeLoad(context, true)
             end
 
             context.document = validated
@@ -521,8 +552,7 @@ function module.new(dependencies)
                 context.tokens = nil
                 context.loadCandidates = nil
                 context.loadCandidateIndex = nil
-                showErrors(context)
-                return false
+                return completeLoad(context, true)
             end
 
             context.themeSource = "option"
@@ -635,18 +665,19 @@ function module.new(dependencies)
             local token = index and tokens[index] or nil
             if not index or not token or token.indent < context.itemIndent then
                 context.tokens = nil
-                context.stage = nil
                 context.loadCandidates = nil
                 context.loadCandidateIndex = nil
                 if context.configureFlight then
                     context.configureFlight(context)
                 end
-                if context.recoveryReason then
-                    addNotice(context, "warning", "layout recovered after: " .. context.recoveryReason)
-                    context.recoveryReason = nil
+                context.loadConfigured = true
+                if context.pending then
+                    context.pendingIndex = 1
+                    context.pendingPlacement = context.pending[1]
+                    context.stage = "panel-build"
+                    return true
                 end
-                showErrors(context)
-                return false
+                return completeLoad(context)
             end
 
             local placement, nextIndex, itemError = context.yaml.itemAt(tokens, index, context.itemIndent)
@@ -694,8 +725,12 @@ function module.new(dependencies)
             if valid then
                 context.identifiers[placement.id] = true
                 context.document.panels[#context.document.panels + 1] = placement
-                context.stage = "panel-build"
-                return true
+                if not hidden and not context.pending then
+                    context.stage = "panel-build"
+                    return true
+                end
+                context.pending = context.pending or {}
+                context.pending[#context.pending + 1] = placement
             else
                 addError(context, panelError)
             end
@@ -706,11 +741,26 @@ function module.new(dependencies)
         end
 
         if stage == "panel-build" then
-            buildPanel(context, context.pendingPlacement)
-            context.pendingPlacement = nil
-            context.panelMigrationVersion = nil
-            context.stage = "panels"
+            if hidden and not context.pendingIndex then
+                context.pending = context.pending or {}
+                context.pending[#context.pending + 1] = context.pendingPlacement
+            else
+                buildPanel(context, context.pendingPlacement)
+            end
+            if context.pendingIndex then
+                context.pendingIndex = context.pendingIndex + 1
+                context.pendingPlacement = context.pending[context.pendingIndex]
+                context.stage = context.pendingPlacement and "panel-build" or "load-complete"
+            else
+                context.pendingPlacement = nil
+                context.panelMigrationVersion = nil
+                context.stage = "panels"
+            end
             return true
+        end
+
+        if stage == "load-complete" then
+            return completeLoad(context)
         end
 
         return false
@@ -719,6 +769,8 @@ function module.new(dependencies)
     --- Begin a staged load, discarding anything already on screen.
     ---@param context AeroGridContext
     local function beginLoad(context)
+        context.themeCache, context.startupThemes = context.startupThemes, nil
+        context.firstRefreshUntil = nil
         if context.flightFactory then
             local member = context.flightFactory.members[context]
             if member then
@@ -736,6 +788,9 @@ function module.new(dependencies)
         context.document = nil
         context.layoutSourceVersion = nil
         context.layoutMigrationVersion = nil
+        context.pending = nil
+        context.pendingIndex = nil
+        context.loadConfigured = nil
         context.pendingPlacement = nil
         context.panelMigrationVersion = nil
         context.identifiers = nil
