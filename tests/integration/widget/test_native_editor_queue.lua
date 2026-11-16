@@ -16,12 +16,23 @@ EVT_VIRTUAL_ENTER = 9601
 local definition = fixture.module("main.lua")
 local context = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 fixture.pump(context, 30)
+local maxRowsPerCallback = 0
 local function untilState(predicate)
-    for _ = 1, 200 do
+    for callback = 1, 200 do
         if predicate() then
-            return
+            return callback - 1
         end
+        local state = context.editorUi
+        local view = state and state.drawerView
+        local rows = view and #view.controls or 0
         definition.refresh(context)
+        state = context.editorUi
+        local nextView = state and state.drawerView
+        if nextView and nextView == view then
+            maxRowsPerCallback = math.max(maxRowsPerCallback, #view.controls - rows)
+        elseif nextView and nextView.build then
+            assert(#nextView.controls == 0, "opening or replacing a native dialog must retain its callback boundary")
+        end
     end
     error("native editor work did not complete")
 end
@@ -44,10 +55,15 @@ menu.set(assert(index))
 assert(state.nativeInput and not state.drawerPending and #state.session.draft.panels == 0)
 definition.background(context)
 assert(state.nativeInput and #state.session.draft.panels == 0, "hidden callbacks cannot apply native editor commands")
-untilState(function()
+local openingCallbacks = untilState(function()
     return #state.session.draft.panels == 1 and not state.drawerBuild
 end)
 assert(not state.nativeInput and state.mode == "configure")
+assert(openingCallbacks <= 5, "Navigation opening must not regress to one callback per row")
+assert(
+    maxRowsPerCallback > 1,
+    "panel construction must batch rows like Model settings instead of yielding after each row"
+)
 local source
 for _, row in ipairs(state.drawerControls) do
     if row.kind == "source" then

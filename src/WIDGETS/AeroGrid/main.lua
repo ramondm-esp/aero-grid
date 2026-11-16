@@ -2140,17 +2140,16 @@ local function editorCost(context)
     return context.scheduler.budget.slots
 end
 
--- Building controls and writing the layout create or compute only; previews,
--- drawers and exits retire LVGL objects and keep their callback boundary.
+-- Pure construction can continue; operations that retire native objects keep
+-- their callback boundary.
 local function editorContinues(state)
     return state
-        and (state.buildStage or state.saving)
+        and (state.buildStage or state.saving or state.drawerBuild)
         and not state.nativeInput
         and not state.previewPending
         and not state.previewRefresh
         and not state.exitCommand
         and not state.drawerPending
-        and state.drawerBuild == nil
 end
 
 --- Queued input, or a held long press, that the input task has yet to handle.
@@ -2411,10 +2410,11 @@ local function uiStep(task, _, _, hidden)
     local context = task.host
     context.uiRequest = nil
     if task.kind == "editor" then
+        local continues = editorContinues(context.editorUi)
         context.editorController.advanceEditor(context)
         if editorWorkNeeded(context.editorUi) then
             context.uiRequest = task.kind
-            if editorContinues(context.editorUi) then
+            if continues and editorContinues(context.editorUi) then
                 return nil, true
             end
         end

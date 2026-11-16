@@ -95,7 +95,8 @@ Model and panel drawers share `lib/settings_ui.lua` for construction, layout,
 cached getters and deferred controls; validation and saving remain separate.
 The panel profiler covers every catalog panel, maximum-size entry lists, nested
 editors and conditional rows. Panel rows reserve one slot; opening, final editor
-rendering, edits and closing retain full grants and existing callback boundaries.
+rendering, edits and closing retain full grants. Pure row construction can share
+a callback; opening, replacing and closing dialogs retain their callback boundaries.
 
 The resource suites check reload collectibility, object counts, sustained
 updates, and font callback retention. They cannot measure native LVGL/bitmap
