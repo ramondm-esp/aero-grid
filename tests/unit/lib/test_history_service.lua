@@ -69,6 +69,26 @@ local function recorder(options)
     return history, feed, sample, reading, session
 end
 
+for _, sampleFirst in ipairs({ false, true }) do
+    for _, age in ipairs({ -1, 100, 101, 499, 500, 501 }) do
+        local history, session, _, _, _, control = harness()
+        local arm = control.entries[1].state
+        arm.available, arm.fresh, arm.value, arm.updatedAt = true, true, true, 1000 - age
+        if sampleFirst then
+            history:sample({
+                name = "V",
+                fresh = true,
+                kind = "number",
+                precision = 1,
+                value = 12,
+                updatedAt = 1000,
+            }, 1000)
+        end
+        history:update(1000)
+        equal(session.recording, age >= 0 and age <= 500, "recording honors the five-second arm age limit")
+    end
+end
+
 local function knots(history, feed)
     local result = {}
     for index = feed.first, feed.last do

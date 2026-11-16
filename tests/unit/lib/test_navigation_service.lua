@@ -230,6 +230,17 @@ local function testInvalidFirstArmRetriesOnNextTransition()
 end
 
 local function testArmObservationAndFreshness()
+    for _, age in ipairs({ -1, 100, 101, 499, 500, 501 }) do
+        local service, view, _, arm, update = captureFixture()
+        update(0, false)
+        arm.value, arm.updatedAt = true, 500 - age
+        service:update(500)
+        assertions.assertEqual(
+            view.homeStatus,
+            age >= 0 and age <= 500 and "captured" or "switch-unavailable",
+            "first-arm capture uses the shared inclusive five-second observation limit"
+        )
+    end
     local service, view, reading, arm, update = captureFixture()
     update(0, true)
     assertions.assertEqual(view.home, false, "starting armed is not an arm transition")

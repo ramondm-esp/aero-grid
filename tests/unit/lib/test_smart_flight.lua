@@ -252,7 +252,7 @@ local function detectorFixture(options, engine)
                 confirmedAt = at,
             }
         end
-        (engine or detector).advance(context, at)
+        (engine or detector).advance(context, at, support.MAX_SAMPLE_AGE)
     end
     return context, step, function()
         return writes

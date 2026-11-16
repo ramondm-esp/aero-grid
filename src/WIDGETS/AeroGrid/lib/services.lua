@@ -29,6 +29,9 @@
 ---@field resetSession? fun(self: AeroGridServiceInstance, now: integer, index: integer): integer? Next reset item, or nil when finished.
 
 local services = { RUNTIME_API = 1 }
+--- Maximum cached sample age in 10 ms ticks when a poller stops updating.
+services.MAX_SAMPLE_AGE = 500
+
 --- Service modules loaded by the host, in the order they are staged.
 --- Each entry's `id` becomes the key in the services table handed to a
 --- panel, so a panel reads `services.telemetry`, `services.model`,

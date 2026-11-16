@@ -97,7 +97,7 @@ function armed:state(legacy)
                 and type(reading.updatedAt) == "number"
                 and type(now) == "number"
                 and now >= reading.updatedAt
-                and now - reading.updatedAt <= 100
+                and now - reading.updatedAt <= self.support.MAX_SAMPLE_AGE
             if key == "fresh" then
                 return fresh == true
             elseif key == "revision" then
