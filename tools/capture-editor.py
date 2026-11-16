@@ -422,9 +422,18 @@ end""".replace("CAPTURE_SHIFT", str(shift)))
             settings_ui.write_text(settings_source)
         source = source.replace(needle, """
     refresh = function(context, widgetEvent, touchState)
+        local scene = "SCENE"
+        if scene == "aero-fullscreen-icon" and isFullScreen() and not context.captureEnteredFullscreen then
+            assert(context.capturePreloadedMenu and context.capturePreloadedMenu == context.aerogridMenu,
+                "first fullscreen entry must reuse the icon preloaded in App mode")
+            assert(context.menuVisibleFullscreen == true, "update must show the icon before the first fullscreen refresh")
+            context.captureEnteredFullscreen = true
+        end
         refresh(context, widgetEvent, touchState)
         if #context.errors > 0 then error(table.concat(context.errors, "\\n")) end
-        local scene = "SCENE"
+        if scene == "aero-fullscreen-icon" and not isFullScreen() then
+            context.capturePreloadedMenu = context.aerogridMenu
+        end
         if string.sub(scene, 1, 21) == "model-settings-switch" and not context.captureSwitchConfigured then
             model.setLogicalSwitch(19, { func = 17, v1 = 0, v2 = 0, andSwitch = 0, delay = 0, duration = 0 })
             context.captureSwitchConfigured = true
@@ -590,21 +599,36 @@ def write_png(path, rows):
 
 
 def verify_menu_icon_pair(native, fullscreen):
-    """Compare visible silhouette pixels, not merely the reserved hitboxes."""
+    """Compare silhouettes, allowing one edge pixel for triangle rasterization."""
     masks = []
     for rows in (native, fullscreen):
         background = rows[50][150:153]
         masks.append([[rows[y][x * 3:x * 3 + 3] != background for x in range(64)]
                       for y in range(64)])
-    if masks[0] != masks[1]:
-        raise RuntimeError("Native App and fullscreen AeroGrid icon silhouettes differ")
+    max_edge_difference = 0
+    for expected, actual in zip(*masks):
+        if expected == actual:
+            continue
+        spans = [[x for x, visible in enumerate(row) if visible] for row in (expected, actual)]
+        if any(not span or span != list(range(span[0], span[-1] + 1)) for span in spans):
+            raise RuntimeError("Native App and fullscreen AeroGrid icon silhouettes differ")
+        difference = abs(spans[0][-1] - spans[1][-1])
+        if spans[0][0] != spans[1][0] or difference > 1:
+            raise RuntimeError("Native App and fullscreen AeroGrid icon silhouettes differ")
+        max_edge_difference = max(max_edge_difference, difference)
     points = [(x, y) for y, row in enumerate(masks[0]) for x, visible in enumerate(row) if visible]
     bounds = (min(x for x, _ in points), min(y for _, y in points),
               max(x for x, _ in points) + 1, max(y for _, y in points) + 1)
     if bounds != (0, 0, 45, 45):
         raise RuntimeError(f"Unexpected native TX16S icon bounds: {bounds}")
+    actual_points = [(x, y) for y, row in enumerate(masks[1]) for x, visible in enumerate(row) if visible]
+    actual_bounds = (min(x for x, _ in actual_points), min(y for _, y in actual_points),
+                     max(x for x, _ in actual_points) + 1, max(y for _, y in actual_points) + 1)
+    if actual_bounds != bounds:
+        raise RuntimeError(f"Native App and fullscreen AeroGrid icon silhouettes differ: bounds {actual_bounds}")
     return {"display": [480, 272], "bounds": list(bounds), "visible_pixels": len(points),
-            "matching_rows": 45, "reserved_footprint": [47, 45]}
+            "matching_rows": sum(masks[0][y] == masks[1][y] for y in range(45)),
+            "max_edge_difference": max_edge_difference, "reserved_footprint": [47, 45]}
 
 
 def verify_menu_grid(rows, selected):

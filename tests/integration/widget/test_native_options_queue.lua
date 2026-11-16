@@ -68,3 +68,16 @@ context.flightTask = nil
 fixture.pump(context, 150)
 assert(not context.stage and not context.reloadState and #context.errors == 0, table.concat(context.errors, "\n"))
 assert(context.document and #context.document.panels > 0, "the deferred option change must finish loading")
+
+fixture.lvglMock.setFullScreen(false)
+local startup = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
+assert(not startup.aerogridMenu, "the dashboard finishes loading before hidden icon preparation")
+definition.update(startup, { Layout = "Default", Theme = "modern-light" })
+assert(
+    fixture.pumpUntil(startup, function(host)
+        return not host.optionsRequest and not host.stage and not host.reloadState
+    end, 150),
+    "native options must not deadlock against pending hidden icon preparation"
+)
+assert(startup.layoutName == "Default" and startup.themeMode == "modern-light")
+assert(#startup.errors == 0, table.concat(startup.errors, "\n"))

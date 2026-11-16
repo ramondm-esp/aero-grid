@@ -1721,9 +1721,6 @@ local function prepareAeroMenu(context)
         context.aeroMenuModule = module
         return true
     end
-    if not isFullScreen() and not context.chromeRoot then
-        return false
-    end
     local height = buttonHeight()
     if not context.aeroMenuHandlers then
         context.aeroMenuHandlers = {
@@ -1748,6 +1745,9 @@ local function prepareAeroMenu(context)
     end
     if not context.chromeRoot then
         context.chromeRoot = lvgl.box({ x = 0, y = 0, w = context.zone.w, h = context.zone.h })
+        if not isFullScreen() then
+            lvgl.hide(context.chromeRoot)
+        end
         context.aeroMenuParent = nil
     end
     context.aeroMenuHandlers.parent = context.chromeRoot
@@ -1770,7 +1770,7 @@ local function prepareAeroMenu(context)
         context.aeroMenuWidth, context.aeroMenuZoneHeight = context.zone.w, context.zone.h
         context.aeroMenuFullscreen, context.aeroMenuModal = fullscreen, modal
         context.chromeRoot:set({ w = context.zone.w, h = context.zone.h })
-        -- Keep mask construction separate from idle reload work without dropping input.
+        -- Keep icon construction separate from idle reload work without dropping input.
         if created then
             return true
         end
@@ -2084,7 +2084,12 @@ local function menuWorkNeeded(context, fullscreen)
     if context.chromeRoot and context.menuVisibleFullscreen ~= fullscreen then
         return true
     end
-    if context.runtimeFailed or context.stage or context.reloadState then
+    if
+        context.runtimeFailed
+        or context.stage
+        or context.reloadState
+        or not fullscreen and (context.lifecycleRequest or emptyHintStale(context))
+    then
         return false
     end
     if editor and context.aeroMenuModal == true and fullscreen then
@@ -2097,7 +2102,7 @@ local function menuWorkNeeded(context, fullscreen)
     return context.theme
         and (
             not context.aeroMenuModule
-            or fullscreen and not context.chromeRoot
+            or not context.chromeRoot
             or context.chromeRoot and (context.aeroMenuParent ~= context.root or context.aeroMenuHeight ~= buttonHeight() or context.aeroMenuWidth ~= context.zone.w or context.aeroMenuZoneHeight ~= context.zone.h or context.aeroMenuFullscreen ~= fullscreen or context.aeroMenuModal ~= modal)
             or menu
                 and (menu.pending or menu.action or menu.dismiss or menu.selectionDirty or context.flightFactory and context.flightFactory.broker and menu.modelFilename ~= context.flightFactory.broker.filename)
@@ -2857,6 +2862,7 @@ local function runCallback(context, hidden, widgetEvent, touchState)
     end
     pruneRequests(context, hidden, fullscreen)
     context.menuDue = not hidden
+        and not context.optionsRequest
         and not context.modelArmingReload
         and not context.sessionResetPending
         and menuWorkNeeded(context, fullscreen)

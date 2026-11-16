@@ -94,11 +94,30 @@ do
         local c, state, control, handlers, dimensions = fixture(table.unpack(display))
         local image = state.image.properties
         assert(image.x == 0 and image.y == 0 and image.w == display[3] and image.h == display[3])
-        assert(string.find(image.file(), "aerogrid-mark-" .. display[3] .. ".png", 1, true))
-        for _, rectangle in ipairs(state.background) do
-            assert(rectangle.properties.filled and rectangle.properties.color == state.backgroundColor)
-            assert(rectangle.properties.x + rectangle.properties.w <= display[3])
-            assert(rectangle.properties.y + rectangle.properties.h <= display[3])
+        assert(
+            type(image.file) == "string" and string.find(image.file, "aerogrid-mark-" .. display[3] .. ".png", 1, true),
+            "a static filename loads the PNG during construction, even while hidden"
+        )
+        assert(#state.background == 3 and #state.root.children == 4, "only three shapes and the PNG are needed")
+        local size = display[3]
+        local shoulder, middle, edge = math.floor(size * 0.8), math.floor(size / 2), size - 1
+        local rectangle = state.background[1]
+        assert(rectangle.kind == "rectangle" and rectangle.properties.filled)
+        assert(rectangle.properties.x == 0 and rectangle.properties.y == 0)
+        assert(rectangle.properties.w == shoulder and rectangle.properties.h == size)
+        local expected = {
+            { { shoulder, 0 }, { edge, middle }, { shoulder, middle } },
+            { { shoulder, middle }, { edge, middle }, { shoulder, edge } },
+        }
+        for index, shape in ipairs(state.background) do
+            assert(shape.properties.color == state.backgroundColor)
+            if index > 1 then
+                assert(shape.kind == "triangle")
+                for vertex, point in ipairs(shape.properties.pts) do
+                    assert(point[1] == expected[index - 1][vertex][1])
+                    assert(point[2] == expected[index - 1][vertex][2])
+                end
+            end
         end
         assert(state.button == nil, "no rectangular button may cover the pilot-wings silhouette")
         open(c)
@@ -262,6 +281,7 @@ do
         "parent",
         "dashboardRoot",
         "resize",
+        "iconPath",
     }) do
         local c, state, control, handlers, dimensions = fixture()
         open(c)
@@ -288,6 +308,10 @@ do
         elseif change == "resize" then
             c.zone.w = 800
             menu.ensure(c, { w = 62, h = 62 }, handlers)
+        elseif change == "iconPath" then
+            handlers.iconPath = "replacement.png"
+            menu.ensure(c, dimensions, handlers)
+            assert(c.aerogridMenu.image.properties.file == handlers.iconPath)
         end
         menu.advance(c)
         assert(control.model == 0, change .. " must invalidate deferred actions")
