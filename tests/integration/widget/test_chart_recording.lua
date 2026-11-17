@@ -63,7 +63,7 @@ if withFlights or smartEnabled then
     local path = root .. "/build/test-widget-fixture/"
     os.execute("mkdir -p '" .. path .. "AEROGRID/models'")
     local filename = model.getInfo().filename
-    local modelPath = assert(fixture.module("lib/model_settings_store.lua").path(path, filename))
+    local modelPath = assert(fixture.module("lib/model_settings_store.lua").path(path, "AGTEST"))
     local modelFile = assert(hostIo.open(modelPath, "w"))
     modelFile:write(assert(fixture.module("lib/yaml.lua").serialize({
         version = 1,

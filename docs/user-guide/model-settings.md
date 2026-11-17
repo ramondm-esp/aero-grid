@@ -12,6 +12,19 @@ Settings apply to every AeroGrid dashboard for the selected model, not to an ind
 or layout. Each confirmed change saves automatically; Back closes the page.
 Chart recording time stops while this page is open and resumes with a pause gap.
 
+On EdgeTX 2.x, AeroGrid uses the **CH32 name** for its settings ID (for example,
+`AGK7Q2`). Leave that name unchanged; CH32's output limits are preserved.
+If CH32 already has another name, clear it before saving Model settings.
+New links and copied models are linked only while disarmed.
+
+Display-name changes keep the same settings. A copied model inherits settings
+when AeroGrid first loads it, then gets its own independent record. Model
+filename changes also create a new record; old records are left on the SD card.
+Changing or clearing the CH32 name unlinks settings; restoring the ID relinks
+them. The ID can appear in channel source lists and Output panels.
+To transfer settings to another radio, also copy
+`/AEROGRID/models/<ID>.yaml` from the SD card.
+
 ![AeroGrid menu with Model settings and UI setup](../assets/editor/aero-menu.png)
 
 ## Arming

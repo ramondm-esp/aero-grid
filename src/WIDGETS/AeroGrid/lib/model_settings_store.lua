@@ -17,31 +17,43 @@ local function validIdentity(filename)
     return type(filename) == "string" and string.find(filename, "%S") ~= nil and not string.find(filename, "%z")
 end
 
-function storeModule.path(widgetPath, modelFilename)
-    if not validIdentity(modelFilename) then
-        return nil, "Model filename unavailable; reload the model before saving settings"
-    end
-    local base = string.sub(widgetPath, -1) == "/" and widgetPath or widgetPath .. "/"
-    local root = string.match(base, "^(.*/)WIDGETS/[^/]+/$") or base
-    local encoded = string.gsub(modelFilename, ".", function(character)
-        return string.format("%02x", string.byte(character))
-    end)
-    return root .. "AEROGRID/models/" .. encoded .. ".yaml"
-end
-
 local function dependency(path, name)
     local filename = path .. (string.sub(path, -1) == "/" and "" or "/") .. "lib/" .. name .. ".lua"
     return assert((loadScript or loadfile)(filename))()
 end
 
+local sidecarModule
+local function sidecar(path)
+    if not sidecarModule then
+        sidecarModule = dependency(path, "model_settings_sidecar")
+    end
+    return sidecarModule
+end
+
+function storeModule.path(widgetPath, id)
+    return sidecar(widgetPath).path(widgetPath, id)
+end
+
 function storeModule.new(widgetPath, yaml, env, fileOps)
     env = env or {}
-    local writer = env.verifiedFile or dependency(widgetPath, "verified_file")
     local config = env.flightConfig or dependency(widgetPath, "flight_config")
     local counter = env.flightCount or dependency(widgetPath, "flight_count")
     local flightDefaults = config.defaults()
     local armed = env.armedConfig or dependency(widgetPath, "armed_service")
+    local writer = env.verifiedFile or dependency(widgetPath, "verified_file")
     local operations = writer.operations(fileOps)
+    local backend = env.backend
+    if not backend then
+        local api = model or {}
+        backend = sidecar(widgetPath).new(widgetPath, {
+            getOutput = env.getOutput or api.getOutput,
+            setOutput = env.setOutput or api.setOutput,
+            getTime = env.getTime or getTime,
+            getDateTime = env.getDateTime or getDateTime,
+            generateId = env.generateId,
+            isDisarmed = env.isDisarmed,
+        }, writer, operations)
+    end
     local instance = { counter = counter, operations = operations }
     local function identity(filename)
         local current
@@ -121,32 +133,43 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
         return copy(document)
     end
     local function loadDocument(filename)
-        local path, pathError = storeModule.path(widgetPath, filename)
-        if not path then
-            return nil, pathError
+        if not validIdentity(filename) then
+            return nil, "Model filename unavailable; reload the model before saving settings"
         end
-        local errors, found = {}, false
-        for _, suffix in ipairs({ "", ".bak" }) do
-            if operations.stat(path .. suffix) then
+        local errors, found, firstInfo, firstContent = {}, false
+        for _, backup in ipairs({ false, true }) do
+            local content, info, readError = backend:read(filename, backup)
+            if type(info) ~= "table" then
+                return nil, info
+            end
+            if not firstInfo then
+                firstInfo, firstContent = info, content
+            end
+            if info.token ~= firstInfo.token then
+                return nil, "Model settings identity changed during load; reload Model settings"
+            end
+            if not info.missing then
                 found = true
-                local content, readError = writer.read(path .. suffix, operations)
                 local document, parseError
                 if content then
                     document, parseError = yaml.parse(content)
                 end
                 local normalized, validationError
                 if document then
-                    normalized, validationError = validate(document, filename)
+                    if validIdentity(document.modelFilename) then
+                        normalized, validationError = validate(document, document.modelFilename)
+                    else
+                        validationError = "Model settings filename unavailable"
+                    end
                 end
                 if normalized then
-                    local recovered = suffix ~= ""
-                    return normalized,
-                        {
-                            filename = path .. suffix,
-                            recovered = recovered,
-                            notice = recovered and "Recovered previous model settings from backup; review and Save"
-                                or nil,
-                        }
+                    info.content = content
+                    info.primaryContent, info.primaryMissing = firstContent, firstInfo.missing == true
+                    info.foreign = info.forkOnRename == true and normalized.modelFilename ~= filename
+                    normalized.modelFilename = filename
+                    info.notice = info.recovered and "Recovered previous model settings from backup; review and Save"
+                        or info.notice
+                    return normalized, info
                 end
                 errors[#errors + 1] = tostring(validationError or parseError or readError)
             end
@@ -154,7 +177,8 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
         if found then
             return nil, "Cannot load model settings: " .. table.concat(errors, "; ")
         end
-        return { version = 1, modelFilename = filename, revision = 0 }, { filename = path, missing = true }
+        firstInfo.primaryContent, firstInfo.primaryMissing = firstContent, true
+        return { version = 1, modelFilename = filename, revision = 0 }, firstInfo
     end
     function instance:load(filename)
         local ok, document, info = pcall(loadDocument, filename)
@@ -174,6 +198,10 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
         local previous, info = self:load(filename)
         if not previous then
             return false, info
+        end
+        local writable, backendError = backend:check(info)
+        if not writable then
+            return false, backendError
         end
         if previous.revision ~= baseRevision then
             return false, "Model settings changed in another dashboard; close and reopen Model settings"
@@ -208,44 +236,59 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
                 baseRevision = baseRevision,
                 serialized = serialized,
                 document = checked,
-                recovered = info and info.recovered,
+                info = info,
             }
     end
     -- The write guard rechecks identity and the live revision, so a commit may follow its prepare in a later callback.
     local function commit(self, prepared)
-        local filename, baseRevision = prepared.filename, prepared.baseRevision
+        local filename = prepared.filename
         local function guard(afterRotation)
             local current, currentError = identity(filename)
             if not current then
                 return false, currentError
             end
+            local matches, backendError = backend:check(prepared.info)
+            if not matches then
+                return false, backendError
+            end
             if afterRotation then
-                if operations.stat(assert(storeModule.path(widgetPath, filename))) then
-                    return false, "Model settings changed during save; cancel and reload"
-                end
                 return true
             end
-            local live, loadError = self:load(filename)
-            if not live then
-                return false, loadError
+            -- Comparing the original bytes also guards revisions, without
+            -- reparsing/validating the document at every filesystem boundary.
+            local content, info, readError = backend:read(filename)
+            if type(info) ~= "table" then
+                return false, info
             end
-            if live.revision ~= baseRevision then
+            local expected = prepared.info
+            if readError then
+                return false, readError
+            end
+            if
+                content ~= expected.primaryContent
+                or (info.missing == true) ~= expected.primaryMissing
+                or info.token ~= expected.token
+            then
                 return false, "Model settings changed during save; cancel and reload"
             end
-            if live.flightCount ~= prepared.baseCount then
-                return false, "Flight count changed during save; retry the setting"
+            if expected.recovered then
+                content, info, readError = backend:read(filename, true)
+                if type(info) ~= "table" then
+                    return false, info
+                end
+                if readError then
+                    return false, readError
+                end
+                if content ~= expected.content or info.token ~= expected.token then
+                    return false, "Model settings changed during save; cancel and reload"
+                end
             end
             return true
         end
-        local saved, saveError = writer.write(
-            assert(storeModule.path(widgetPath, filename)),
-            prepared.serialized,
-            operations,
-            guard,
-            prepared.recovered
-        )
+        local saved, saveError, deferred =
+            backend:write(filename, prepared.serialized, prepared.info, guard, prepared.document.armed)
         if not saved then
-            return false, saveError
+            return false, saveError, deferred
         end
         local matches, identityError = identity(filename)
         if not matches then
@@ -254,11 +297,11 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
         return true, copy(prepared.document)
     end
     local function protected(step, ...)
-        local ok, saved, result = pcall(step, ...)
+        local ok, saved, result, deferred = pcall(step, ...)
         if not ok then
             return false, "Cannot save model settings: " .. tostring(saved)
         end
-        return saved, result
+        return saved, result, deferred
     end
     --- Validates and serializes a save; returns `true, prepared` or `false, message`.
     function instance:prepare(filename, baseRevision, flight, armedCondition, sessionReset)
@@ -289,6 +332,10 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
             if not previous then
                 return false, info
             end
+            local writable, backendError = backend:check(info)
+            if not writable then
+                return false, backendError
+            end
             if previous.flightCount ~= expected then
                 return false, "Flight count changed before save; reload the model"
             end
@@ -314,9 +361,45 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
                     baseCount = expected,
                     document = document,
                     serialized = serialized,
-                    recovered = info and info.recovered,
+                    info = info,
                 }
         end)
+    end
+    local function adopt(self, filename, accepted, expectedInfo)
+        local matches, identityError = identity(filename)
+        if not matches then
+            return false, identityError
+        end
+        local document, info = self:load(filename)
+        if not document then
+            return false, info
+        end
+        if not info.foreign then
+            return true, document
+        end
+        if expectedInfo then
+            local valid, message = backend:check(expectedInfo)
+            if not valid then
+                return false, message
+            end
+        end
+        if not accepted or document.revision ~= accepted.revision then
+            return false, "Model settings changed before linking; reload Model settings"
+        end
+        local serialized, message = yaml.serialize(document)
+        if not serialized then
+            return false, message
+        end
+        return commit(self, {
+            filename = filename,
+            baseRevision = document.revision,
+            serialized = serialized,
+            document = document,
+            info = info,
+        })
+    end
+    function instance:adopt(filename, document, info)
+        return protected(adopt, self, filename, document, info)
     end
     return instance
 end

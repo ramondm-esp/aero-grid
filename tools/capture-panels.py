@@ -78,6 +78,7 @@ def prepare(sd, recipe, recipe_path=None):
     prefix, rest = text.split("screenData:", 1)
     _, suffix = rest.split("view:", 1)
     prefix = configure_model(prefix, recipe)
+    prefix += 'limitData:\n   31:\n      name: "AGCAP1"\n'
     if panel == "model-identity":
         if "bitmap" in recipe["sample"]:
             path = recipe_path or RECIPE_DIR / f"{panel}.yaml"
@@ -111,13 +112,13 @@ view: 0
         layout += "legacyFlightArms:\n  capture: SFv\n"
         settings = sd / "AEROGRID/models"
         settings.mkdir(parents=True, exist_ok=True)
-        (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
+        (settings / "AGCAP1.yaml").write_text(
             "version: 1\nmodelFilename: model1.yml\nrevision: 1\nflightCount: 0\nflight:\n"
             "  minFlightDuration: 1\n  disarmDuration: 3\n")
     elif panel == "flight-counter":
         settings = sd / "AEROGRID/models"
         settings.mkdir(parents=True, exist_ok=True)
-        (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
+        (settings / "AGCAP1.yaml").write_text(
             "version: 1\nmodelFilename: model1.yml\nrevision: 0\n"
             f"flightCount: {recipe['sample']['count'] - 1}\n")
     layout += "grid:\n  columns: 4\n  rows: 4\npanels:\n"

@@ -31,7 +31,7 @@ end
 
 os.execute("mkdir -p '" .. path .. "AEROGRID/models'")
 local filename = model.getInfo().filename
-local modelPath = assert(fixture.module("lib/model_settings_store.lua").path(path, filename))
+local modelPath = assert(fixture.module("lib/model_settings_store.lua").path(path, "AGTEST"))
 local file = assert(hostIo.open(modelPath, "w"))
 file:write(assert(yaml.serialize({
     version = 1,

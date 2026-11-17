@@ -6,7 +6,7 @@ local fixture = assert(loadfile(root .. "/tests/support/widget_fixture.lua"))(ro
 local path = root .. "/build/test-widget-fixture/"
 local filename = model.getInfo().filename
 local yaml = fixture.module("lib/yaml.lua")
-local modelPath = assert(fixture.module("lib/model_settings_store.lua").path(path, filename))
+local modelPath = assert(fixture.module("lib/model_settings_store.lua").path(path, "AGTEST"))
 local themePath = path .. "themes/modern-dark.yml"
 local originalIo = io
 local reads = {}
@@ -27,8 +27,8 @@ local function write(name, content)
     file:write(content)
     file:close()
 end
-local function settings(name, revision)
-    local location = assert(fixture.module("lib/model_settings_store.lua").path(path, name))
+local function settings(name, revision, id)
+    local location = assert(fixture.module("lib/model_settings_store.lua").path(path, id or "AGTEST"))
     write(
         location,
         assert(yaml.serialize({
@@ -109,7 +109,8 @@ assert(reads[themePath] == 3 and later.theme.label == "Changed Dark", "later wid
 -- The broker's loaded document must not suppress a different model's preload.
 local originalFilename = fixture.radio.modelFilename
 fixture.radio.modelFilename = "other-startup-model.yml"
-local otherPath = settings("other-startup-model.yml", 7)
+fixture.radio.outputs[31].name = "AGOTHR"
+local otherPath = settings("other-startup-model.yml", 7, "AGOTHR")
 local other = create()
 definition.refresh(other)
 assert(other.stage == "model-settings", "shared settings must match the new model identity")
@@ -118,6 +119,7 @@ assert(reads[otherPath] == 1)
 assert(other.flightFactory.broker.document.revision == 7)
 assert(other.flightFactory.broker.document.modelFilename == "other-startup-model.yml")
 fixture.radio.modelFilename = originalFilename
+fixture.radio.outputs[31].name = "AGTEST"
 
 -- Failed palette validation must not leave a startup cache for widgets created after repair.
 fixture.reset()

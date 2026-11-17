@@ -191,11 +191,24 @@ Add a [panel reference page](../reference-guide/index.md) and, when needed, a
 `/AEROGRID/layouts/`, never over bundled layouts. New **Save as...** names need a
 script restart to enter the native Layout picker. Failed saves preserve drafts.
 
-`model_settings_store.lua` separately stores revisioned documents under
-`/AEROGRID/models/`, keyed by encoded model filename. Saves verify model
-identity and revision. Layout saves and previews do not write model settings.
+`model_settings_store.lua` validates and serializes revisioned documents through
+a replaceable persistence backend. On EdgeTX 2.x, `model_settings_sidecar.lua`
+stores `/AEROGRID/models/<ID>.yaml`, linked by the CH32 name. Reads never write;
+after the broker accepts settings, filename changes fork the record while
+disarmed. Verified records are installed before claiming CH32, preserving all
+channel fields. Saves guard model identity, CH32 name, and revision.
+Layout saves and previews do not write model settings.
 Changing the arm condition rebuilds registered dashboards and clears captured
 homes, while preserving layouts and active-flight completion/cleanup.
+
+An eventual EdgeTX 3.0 backend can store the same document in model userData
+without changing callers; it is not selected or implemented yet. Legacy
+filename-encoded development records are not imported.
+`env.backend` supplies `read(filename, backup)`, `check(info)`, and
+`write(filename, text, info, guard, armedCondition)`. Reads return text and
+metadata (`missing`, identity `token`, optional `recovered`/`blocked`);
+`forkOnRename` opts into sidecar-style adoption. The store guards the original
+bytes and filename; the backend guards its identity and installation boundary.
 
 A model change or session reset advances the flight epoch. Session reset
 cancels detection, releases its owned output, and clears dashboard session

@@ -201,6 +201,27 @@ local function fixture(cadence)
 end
 
 do
+    local owner, radio, _, first = fixture()
+    radio.arms[1] = false
+    assert(owner:settingsDisarmed())
+    radio.arms[1] = true
+    assert(not owner:settingsDisarmed())
+    owner:setDocument({ revision = 2, armed = "" })
+    assert(owner:settingsDisarmed(), "saved None disables legacy arming")
+    assert(not owner:settingsDisarmed("L01"), "a proposed arm condition must also be disarmed")
+    radio.arms[1] = nil
+    assert(not owner:settingsDisarmed("L01"), "unavailable never counts as disarmed")
+    owner:setDocument({ revision = 3 })
+    owner.members[first].pending = true
+    assert(not owner:settingsDisarmed(), "legacy switches must be known before linking")
+    owner.settingsError = "record failed"
+    owner:prepare(100)
+    equal(owner.view.persistenceError, "record failed", "ordinary detection must not hide adoption failures")
+    owner:setDocument({ revision = 3 })
+    assert(not owner.view.persistenceError and not owner.settingsError)
+end
+
+do
     local owner, radio, step = fixture()
     radio.external = { [7] = 2, [8] = 501 }
     local values = config.resolve(owner.document.flight)

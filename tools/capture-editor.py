@@ -171,6 +171,9 @@ header:
    bitmap: ""
    labels: ""
 disableThrottleWarning: 1
+limitData:
+   31:
+      name: "AGCAP1"
 screenData:
    0:
       LayoutId: Layout1x1AM
@@ -248,7 +251,7 @@ screenData:
         config = PANEL_DRAWER_CONFIG.get(kind) or load_recipe(recipe)["config"]
         settings = sd / "AEROGRID/models"
         settings.mkdir(parents=True, exist_ok=True)
-        (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
+        (settings / "AGCAP1.yaml").write_text(
             'version: 1\nmodelFilename: "model1.yml"\nrevision: 1\nflightCount: 42\narmed: "SFv"\n')
         layout = f"""version: 3
 grid:
@@ -300,7 +303,7 @@ panels:
     if scene in DASHBOARD_SCENES:
         settings = sd / "AEROGRID/models"
         settings.mkdir(parents=True, exist_ok=True)
-        (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
+        (settings / "AGCAP1.yaml").write_text(
             'version: 1\nmodelFilename: "model1.yml"\nrevision: 0\nflightCount: 42\n')
     main = sd / "WIDGETS/AeroGrid/main.lua"
     source = main.read_text()
@@ -784,11 +787,11 @@ def capture(executable, library, directory, scene, shift=0):
             raise RuntimeError(f"Capture failed; inspect {directory / 'simulator.log'}") from error
     pixels = frame.read_bytes()
     if scene == "model-settings-switch-select":
-        settings = sd / "AEROGRID/models" / ("model1.yml".encode().hex() + ".yaml")
+        settings = sd / "AEROGRID/models/AGCAP1.yaml"
         if not settings.is_file() or 'flightSwitch: "L20"' not in settings.read_text():
             raise RuntimeError("Native logical switch selection was not persisted")
     if scene in ("model-settings-autosave", "model-settings-exit"):
-        settings = sd / "AEROGRID/models" / ("model1.yml".encode().hex() + ".yaml")
+        settings = sd / "AEROGRID/models/AGCAP1.yaml"
         if not settings.is_file() or "motorReversed: true" not in settings.read_text():
             raise RuntimeError("Model field change was not persisted automatically")
     if len(pixels) != 480 * 272 * 2:

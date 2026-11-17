@@ -1542,6 +1542,7 @@ function support.radio(hostIo)
         -- because the radio returns them, not because a test needs them.
         rfAlarms = { warning = 45, critical = 42 },
         modelFilename = scaffold.MODEL_FILENAME,
+        outputs = { [31] = { name = "AGTEST" } },
         fields = {
             RxBt = { id = 100, name = "RxBt", desc = "Rx battery", unit = UNIT.VOLTS },
             Curr = { id = 103, name = "Curr", desc = "Current", unit = UNIT.AMPS },
@@ -1957,6 +1958,25 @@ function support.radio(hostIo)
         end,
         getTimer = function(index)
             return radio.timers[index]
+        end,
+        -- radio/src/lua/api_model.cpp luaModelGetOutput/luaModelSetOutput:
+        -- get returns a copy; set clears the entire channel before applying keys.
+        getOutput = function(index)
+            if index < 0 or index >= 32 then
+                return nil
+            end
+            local output = { name = "", min = -1000, max = 1000, offset = 0, ppmCenter = 0, symetrical = 0, revert = 0 }
+            for key, value in pairs(radio.outputs[index] or {}) do
+                output[key] = value
+            end
+            return output
+        end,
+        setOutput = function(index, values)
+            assert(index >= 0 and index < 32)
+            radio.outputs[index] = {}
+            for key, value in pairs(values) do
+                radio.outputs[index][key] = value
+            end
         end,
         getSensor = function(index)
             return radio.sensors[index]

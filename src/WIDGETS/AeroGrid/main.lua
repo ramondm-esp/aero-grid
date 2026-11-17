@@ -753,6 +753,7 @@ local function advanceModelSettings(context)
                     return filename
                 end,
                 flightConfig = context.flightConfig,
+                getOutput = context.serviceRuntime.env.getOutput,
             })
         end)
         if ok and created then
@@ -1474,7 +1475,9 @@ local function runTasks(context, hidden)
 end
 
 local function flightReady(task)
-    task.cost = task.broker.documentLoaded and 1 or task.host.scheduler.budget.slots
+    local owner = task.broker
+    local linking = owner.settingsAdoption and owner:settingsDisarmed()
+    task.cost = (not owner.documentLoaded or linking) and task.host.scheduler.budget.slots or 1
     return true
 end
 
@@ -1516,6 +1519,12 @@ local function pumpFlight(task, now, granted)
                 end,
                 flightConfig = context.flightConfig,
                 armedConfig = owner.modules.armed,
+                getOutput = owner.env.getOutput,
+                setOutput = owner.env.setOutput,
+                getTime = owner.env.getTime,
+                isDisarmed = function(proposed)
+                    return owner:settingsDisarmed(proposed)
+                end,
             })
             if not created then
                 owner.loadError, owner.documentLoaded = tostring(store), true
@@ -1535,6 +1544,11 @@ local function pumpFlight(task, now, granted)
         end
         if document then
             owner:setDocument(document)
+            owner.settingsAdoption = type(info) == "table" and info.foreign and { document = document, info = info }
+                or nil
+            if type(info) == "table" and info.blocked then
+                addNotice(context, "warning", info.notice)
+            end
             if type(info) == "table" and info.recovered then
                 addNotice(context, "warning", "Recovered previous model settings; review and save Model settings.")
             end
@@ -1543,6 +1557,21 @@ local function pumpFlight(task, now, granted)
         end
         closeDashboard(context)
         return nil, true
+    end
+    if owner.settingsAdoption and owner:settingsDisarmed() then
+        if granted < context.scheduler.budget.slots then
+            return nil, true
+        end
+        local adoption = owner.settingsAdoption
+        local saved, result, deferred = owner.store:adopt(filename, adoption.document, adoption.info)
+        if saved then
+            owner.settingsAdoption = nil
+            owner:setDocument(result)
+        elseif not deferred then
+            owner.settingsAdoption = nil
+            owner.settingsError = "Cannot link model settings: " .. tostring(result)
+            owner:error("persistence", owner.settingsError)
+        end
     end
     local resetConfigured = owner.document and owner.document.sessionReset and owner.document.sessionReset ~= ""
     if
@@ -1706,6 +1735,7 @@ local function openModelSettings(context)
             return owner.store:commit(prepared)
         end,
         saved = function(saved)
+            owner.settingsAdoption = nil
             owner:setDocument(saved)
         end,
         error = function(message)

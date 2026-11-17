@@ -117,6 +117,7 @@ function services.environment(overrides)
         getSensor = callable(modelApi.getSensor),
         getModule = callable(modelApi.getModule),
         getOutput = callable(modelApi.getOutput),
+        setOutput = callable(modelApi.setOutput),
         getMix = callable(modelApi.getMix),
         getInput = callable(modelApi.getInput),
         getGlobalVariable = callable(modelApi.getGlobalVariable),

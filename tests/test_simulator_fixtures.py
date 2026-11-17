@@ -107,7 +107,7 @@ class SimulatorFixtureTests(unittest.TestCase):
             model = (FIXTURE / f"MODELS/model{number}.yml").read_text()
             prefix, rest = model.split("screenData:\n", 1)
             if number == 2:
-                prefix = prefix.split("logicalSw:\n", 1)[0]
+                prefix = prefix.split("limitData:\n", 1)[0]
             suffix = rest.split("topbarData:", 1)[1]
             setup = re.sub(r'(?m)^   name: "[^"]*"$', '   name: "shared"',
                            prefix, count=1) + "topbarData:" + suffix
@@ -134,8 +134,10 @@ class SimulatorFixtureTests(unittest.TestCase):
     def test_flight_model_preserves_requested_settings(self):
         settings = FIXTURE / "AEROGRID/models"
         self.assertEqual({path.name for path in settings.glob("*.yaml")},
-                         {"model2.yml".encode().hex() + ".yaml"})
-        document = (settings / ("model2.yml".encode().hex() + ".yaml")).read_text()
+                         {"AGTST2.yaml"})
+        document = (settings / "AGTST2.yaml").read_text()
+        model = (FIXTURE / "MODELS/model2.yml").read_text()
+        self.assertIn('limitData:\n   31:\n      name: "AGTST2"\n', model)
         self.assertIn('modelFilename: "model2.yml"\n', document)
         self.assertIn('armed: "SFv"\n', document)
         self.assertIn("  minFlightDuration: 10\n", document)

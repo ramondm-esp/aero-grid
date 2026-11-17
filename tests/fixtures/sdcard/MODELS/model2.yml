@@ -655,6 +655,9 @@ timers:
       showElapsed: 0
       extraHaptic: 0
       name: "Up"
+limitData:
+   31:
+      name: "AGTST2"
 logicalSw:
    0:
       func: FUNC_STICKY

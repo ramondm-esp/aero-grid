@@ -32,7 +32,7 @@ local function create(span)
     local filename = model.getInfo().filename
     os.execute("mkdir -p '" .. fixture.path .. "AEROGRID/models'")
     fixture.writeFile(
-        assert(store.path(fixture.path, filename)),
+        assert(store.path(fixture.path, "AGTEST")),
         assert(yaml.serialize({
             version = 1,
             modelFilename = filename,
