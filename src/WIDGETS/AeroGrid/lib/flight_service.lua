@@ -130,18 +130,11 @@ function flight.advance(context, now, maxAge)
         return
     end
     smartReference(context, now, armLive, armed, maxAge)
-    if context.detectionAvailable == false or not context.feed.available then
+    if context.detectionAvailable == false then
         context.phase, context.startedAt = "ground", nil
         context.altitudeSince, context.speedSince = nil, nil
         return
     end
-    assert(
-        context.feed.precision == 0
-            and context.feed.raw >= 0
-            and context.feed.raw <= 999
-            and context.feed.raw == math.floor(context.feed.raw),
-        "flight counter requires integer GV9 FM0 in the range 0..999, with precision 0"
-    )
     assert(not context.motor.telemetry, "flight counter motorSource must be a radio-local motor channel")
     local motorLive = reliable(context.motor, now, maxAge)
         and type(context.motor.value) == "number"
@@ -219,6 +212,12 @@ function broker:identity()
 end
 
 function broker:reset(filename)
+    if self.countImport and self.countImport.handle then
+        self.store.operations.close(self.countImport.handle)
+    end
+    self.countImport, self.pendingCount, self.countTask = nil, nil, nil
+    self.countDue, self.countImportFailed = nil, nil
+    self.countStarted = nil
     self.filename, self.epoch = filename, self.epoch + 1
     self.session, self.runtime, self.smartRuntime, self.signature, self.output = nil, nil, nil, nil, nil
     self.document, self.loadError = nil, nil
@@ -254,19 +253,119 @@ function broker:setDocument(document)
             end
         end
     end
-    if self.document and (self.document.revision or 0) ~= (document.revision or 0) then
+    local changed = self.document and (self.document.revision or 0) ~= (document.revision or 0)
+    local detectionChanged = changed
+        and (
+            self.document.armed ~= document.armed
+            or self.document.sessionReset ~= document.sessionReset
+            or self.config.key(self.config.resolve(self.document.flight))
+                ~= self.config.key(self.config.resolve(document.flight))
+        )
+    if changed and (detectionChanged or self.errors.count or self.errors.detection) then
         self.readyAfterDisarm = true
         self.errors.count, self.errors.detection = nil, nil
         self.state.countError, self.state.detectionError = nil, nil
         self.state.diagnosticRevision = (self.state.diagnosticRevision or 0) + 1
+        self.countImportFailed = nil
+        if self.pendingCount then
+            if document.flightCount == self.pendingCount.value then
+                self.pendingCount = nil
+            else
+                self.pendingCount.failed, self.pendingCount.prepared = nil, nil
+            end
+        end
     end
     self.document = document
+    self.countDirty = true
+    self.taskList = nil
+    if self.countTask then
+        self.countTask.due = 0
+    end
     self.loadError, self.state.persistenceError = nil, nil
     self.state.configurationRevision = document.revision or 0
     self.documentLoaded = true
+    self.state.count = document.flightCount
     if self.factory then
         self.factory.revision = (self.factory.revision or 0) + 1
     end
+end
+function broker:incrementCount()
+    local current = self.document and self.document.flightCount
+    local counter = assert(self.store and self.store.counter, "Flight count store unavailable")
+    assert(counter.valid(current) and current < counter.MAX, "Internal flight count is unavailable or full")
+    assert(not self.pendingCount, "Previous flight count is not saved; resolve the persistence error")
+    local value = current + 1
+    self.pendingCount = { previous = current, value = value }
+    self.taskList = nil
+    if self.countTask then
+        self.countTask.due = 0
+    end
+    self:publishCount()
+    return value
+end
+
+function broker:publishCount()
+    local source = self.document.flight and self.document.flight.countSource or "internal"
+    self.state.countSource = source
+    self.state.count = self.pendingCount and self.pendingCount.value or self.document.flightCount
+    local ok, value = true, self.state.count
+    if source ~= "internal" then
+        ok, value = pcall(self.store.counter.external, self.env, source == "gv8gv9")
+    end
+    self.state.countAvailable = ok and value ~= nil
+    self.state.displayCount = ok and value or nil
+    self.countDirty = nil
+    if not ok then
+        self:error("source", value)
+    elseif self.errors.source then
+        self.errors.source, self.state.sourceError = nil, nil
+        self.state.diagnosticRevision = (self.state.diagnosticRevision or 0) + 1
+    end
+end
+
+function broker:saveCount()
+    local pending = self.pendingCount
+    if not pending then
+        if self.document.flightCount ~= nil then
+            return
+        end
+        if not self.countImport then
+            local legacy = self.document.flight ~= nil or self.document.armed ~= nil
+            for _, member in pairs(self.members) do
+                if member.modelFilename == self.filename then
+                    for _, declaration in ipairs(member.declarations or {}) do
+                        legacy = legacy or declaration.settings ~= nil
+                    end
+                end
+            end
+            self.countImport = self.store.counter.begin(self.store.operations, self.filename, legacy, self.env)
+            return
+        end
+        local done, imported = self.store.counter.step(self.countImport)
+        if not done then
+            return
+        end
+        self.countImport = nil
+        pending = { value = imported.count, imported = imported }
+        self.pendingCount = pending
+        return
+    end
+    if not pending.prepared then
+        local ok, prepared = self.store:prepareCount(self.filename, pending.previous, pending.value, pending.imported)
+        assert(ok, prepared)
+        pending.prepared = prepared
+        return
+    end
+    if pending.prepared.baseRevision ~= self.document.revision then
+        pending.prepared = nil
+        return
+    end
+    local ok, document = self.store:commit(pending.prepared)
+    assert(ok, document)
+    self.pendingCount = nil
+    self:setDocument(document)
+    self.state.importNotice = pending.imported and pending.imported.notice or self.state.importNotice
+    self.state.diagnosticRevision = (self.state.diagnosticRevision or 0) + 1
 end
 
 function broker:boundary(kind, at, observedAt)
@@ -520,7 +619,6 @@ function broker:attach(proposal, signature, now)
     local session = {
         settings = settings,
         phase = "ground",
-        feed = control:globalVariable(8, 0),
         arm = control:switch(proposal.armKey, proposal.armIndex),
         motor = telemetry:subscribe(settings.motorSource, false),
         link = telemetry:link(),
@@ -530,7 +628,7 @@ function broker:attach(proposal, signature, now)
     local owner = self
     session.control = {
         incrementFlightCount = function()
-            local ok, count = owner:effect("count", control.incrementFlightCount, control)
+            local ok, count = owner:effect("count", owner.incrementCount, owner)
             assert(ok, count)
             return count
         end,
@@ -676,6 +774,8 @@ function broker:decide(now)
             and signature == self.signature
             and not self.loadError
             and not self.errors.count
+            and self.document.flightCount ~= nil
+            and not self.pendingCount
             and not self.readyAfterDisarm
             and (not self.output or self.output.desired)
         )
@@ -720,7 +820,7 @@ function broker:decide(now)
             self.state.smartStatus = self.state.smartStatus .. " Baro needs a live arming reference."
         end
     end
-    self.state.flightId, self.state.count = session.flightId, session.feed.raw
+    self.state.flightId = session.flightId
     self.state.revision = self.state.revision + 1
 end
 
@@ -731,6 +831,7 @@ function broker:setup(now, detect)
         return
     end
     self.setupAt, self.detecting = now, detect
+    self.countStarted = true
     local ok, message = pcall(self.syncReset, self, now)
     if not ok then
         self:error("reset", message)
@@ -794,13 +895,16 @@ local function decideReady(task, now)
     if not owner.detecting or not owner.session or owner.decidedAt == owner.setupAt then
         return false
     end
+    task.waiting = false
     for field = 2, #RUNTIMES do
         local runtime = owner[RUNTIMES[field]]
         local order = runtime and runtime.order or NONE
         for index = 1, #order do
             local instance = order[index]
             if not instance.failed and instance.count ~= 0 and now >= instance.due then
-                return false
+                -- Revisit after polling even when this decision starts the ring.
+                task.cost, task.waiting = 1, true
+                return true
             end
         end
     end
@@ -811,11 +915,61 @@ local function decideReady(task, now)
 end
 
 local function decideStep(task, now)
+    if task.waiting then
+        return nil, true
+    end
     local owner = task.broker
     task.due, owner.decidedAt = now + 1, owner.setupAt
     local ok, message = pcall(owner.decide, owner, now)
     if not ok then
         owner:error("detection", message)
+    end
+end
+local function countReady(task, now)
+    local owner = task.broker
+    local pending = owner.pendingCount
+    task.cost = pending and not pending.failed and 8 or owner.countImport and 4 or 1
+    return owner.countStarted
+        and owner.documentLoaded
+        and owner.document ~= nil
+        and owner.store ~= nil
+        and (
+            pending and not pending.failed
+            or not owner.countImportFailed and owner.document.flightCount == nil
+            or owner.countDirty
+            or owner.document.flight
+                and owner.document.flight.countSource ~= "internal"
+                and now >= (owner.countDue or 0)
+        )
+end
+
+local function countStep(task, now)
+    local owner = task.broker
+    owner.countDue, task.due = now + 20, now
+    local ok, message = pcall(function()
+        assert(owner:identity() == owner.filename, "Model changed during flight count save")
+        if not owner.countImportFailed and not (owner.pendingCount and owner.pendingCount.failed) then
+            owner:saveCount()
+        end
+    end)
+    if not ok then
+        if owner.pendingCount then
+            owner.pendingCount.failed = true
+        else
+            owner.countImportFailed = true
+            if owner.countImport and owner.countImport.handle then
+                owner.store.operations.close(owner.countImport.handle)
+            end
+            owner.countImport = nil
+        end
+        owner:error("count", message)
+    end
+    owner:publishCount()
+    if owner.document.flightCount ~= nil and not owner.pendingCount then
+        task.due = now + 20
+        if owner.state.countSource == "internal" then
+            owner.taskList = nil
+        end
     end
 end
 
@@ -828,6 +982,26 @@ function broker:tasks()
         return list
     end
     list = {}
+    if not self.countTask then
+        self.countTask = {
+            name = "flight.count",
+            broker = self,
+            ready = countReady,
+            step = countStep,
+            onError = function(task, message)
+                task.broker:error("count", message)
+            end,
+        }
+    end
+    if
+        not self.document
+        or self.document.flightCount == nil
+        or self.pendingCount
+        or self.countDirty
+        or self.document.flight and self.document.flight.countSource ~= "internal"
+    then
+        list[#list + 1] = self.countTask
+    end
     for _, field in ipairs(RUNTIMES) do
         local runtime = self[field]
         if runtime then

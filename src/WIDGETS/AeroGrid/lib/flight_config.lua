@@ -11,6 +11,7 @@ local defaults = {
     disarmDuration = 10,
     flightSwitch = "",
     liveDangerously = false,
+    countSource = "internal",
 }
 local booleanKeys = { "motorReversed", "requireReceiver", "smartDetection", "liveDangerously" }
 local durationKeys = { "minFlightDuration", "disarmDuration" }
@@ -51,6 +52,9 @@ function config.validate(values)
     local errors = {}
     if type(values) ~= "table" then
         return { "Flight settings must be a mapping" }
+    end
+    if values.countSource ~= "internal" and values.countSource ~= "gv9" and values.countSource ~= "gv8gv9" then
+        errors[#errors + 1] = "Flight count source must be AeroGrid, GV9 or GV8:GV9"
     end
     local channel = type(values.motorSource) == "string" and string.match(values.motorSource, "^[cC][hH](%d+)$")
     if not channel or tonumber(channel) < 1 or tonumber(channel) > 32 then

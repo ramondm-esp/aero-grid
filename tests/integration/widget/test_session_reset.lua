@@ -141,8 +141,8 @@ untilState(function()
     return owner.view.active
 end)
 secondVisible = false
-equal(writes, 1)
-equal(model.getGlobalVariable(8, 0), 18)
+equal(owner.view.count, 1)
+equal(model.getGlobalVariable(8, 0), 17)
 assert(owner.view.active and sticky)
 for _, context in ipairs({ first, second }) do
     assert(context.serviceRuntime.byId.history:session().elapsed > 0)
@@ -183,8 +183,8 @@ assert(first.editorStash == draft or first.editorSession == draft, "session rese
 equal(first.editorUi, editorUi, "session reset must not dismiss or rebuild the editor")
 equal(draft.draft.panels[1].config.label, "Retained draft")
 equal(owner.document.revision, revision, "switch activation must not save model settings")
-equal(writes, 1)
-equal(model.getGlobalVariable(8, 0), 18)
+equal(owner.view.count, 1)
+equal(model.getGlobalVariable(8, 0), 17)
 assert(not owner.view.active)
 pump(60)
 equal(sticky, false)
@@ -235,7 +235,7 @@ for _, context in ipairs({ first, second }) do
 end
 equal(model.getTimer(0).value, timer, "radio-owned timers are untouched")
 equal(owner.epoch, epoch + 1, "holding the input resets once")
-equal(writes, 1, "a reset while armed cannot count the same flight again")
+equal(owner.view.count, 1, "a reset while armed cannot count the same flight again")
 local persisted = assert(owner.store:load(owner.filename))
 equal(persisted.revision, revision)
 equal(persisted.sessionReset, "L03")
@@ -247,8 +247,8 @@ fixture.radio.logicalSwitches[64] = false
 pump(20)
 fixture.radio.logicalSwitches[64] = true
 pump(100)
-equal(writes, 2, "a new flight can qualify after disarming")
-equal(model.getGlobalVariable(8, 0), 19)
+equal(owner.view.count, 2, "a new flight can qualify after disarming")
+equal(model.getGlobalVariable(8, 0), 17)
 assert(panel(first, "home").feed.home and panel(second, "home").feed.home)
 
 first.aeroMenuHandlers.modelSettings()
@@ -296,7 +296,7 @@ for _, context in ipairs({ first, second }) do
     equal(history:session().elapsed, 0)
     equal(history:subscribe("Alt").count, 0, "paused recordings are cleared without restarting")
 end
-equal(writes, 2)
+equal(owner.view.count, 2)
 equal(#first.errors, 0, table.concat(first.errors, "; "))
 equal(#second.errors, 0, table.concat(second.errors, "; "))
 print("model session reset: foreground and hidden consumers, worst " .. worst .. " instructions")

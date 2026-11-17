@@ -16,6 +16,7 @@ local function fixture()
             return current
         end,
         flightConfig = config,
+        flightCount = assert(loadfile(base .. "/lib/flight_count.lua"))(),
         verifiedFile = writer,
         armedConfig = assert(loadfile(base .. "/lib/armed_service.lua"))(),
     }, operations)
@@ -65,6 +66,56 @@ do
     saved, result = store:commit(staged)
     assert(not saved and string.find(result, "changed during save", 1, true), result)
     assert(yaml.parse(files[path()]).revision == 3, "a stale prepared save cannot overwrite a newer one")
+end
+
+do
+    local store = fixture()
+    local function count(expected, value, imported)
+        local ok, prepared = store:prepareCount("plane.yml", expected, value, imported)
+        assert(ok, prepared)
+        local saved, document = store:commit(prepared)
+        assert(saved, document)
+        return document
+    end
+    local document = count(nil, 0)
+    assert(document.flightCount == 0 and document.flight == nil and document.armed == nil)
+    assert(not store:prepareCount("plane.yml", nil, 123), "zero must never be treated as uninitialized")
+    assert(store:save("plane.yml", 0, config.resolve({ countSource = "gv8gv9" }), "", "L02"))
+    document = count(0, 1000, { flight = { motorSource = "ch1" }, armed = "SFv" })
+    assert(document.flight.countSource == "gv8gv9" and document.flight.motorSource == "ch3")
+    assert(document.armed == "" and document.sessionReset == "L02")
+    assert(document.revision == 1, "counts do not change the drawer's settings revision")
+    local ok, prepared = store:prepare("plane.yml", 1, config.defaults())
+    assert(ok)
+    count(1000, 1001)
+    local saved, message = store:commit(prepared)
+    assert(not saved and string.find(message, "count changed", 1, true))
+    assert(store:load("plane.yml").flightCount == 1001, "a stale drawer cannot overwrite a newer count")
+    ok, prepared = store:prepareCount("plane.yml", 1001, 1002)
+    assert(ok)
+    assert(store:save("plane.yml", 1, config.resolve({ motorSource = "ch5" })))
+    assert(not store:commit(prepared), "a count cannot overwrite newer configuration")
+    document = count(1001, 1002)
+    assert(document.flight.motorSource == "ch5")
+    assert(not store:prepareCount("plane.yml", 1002, 16777216), "radio-safe numeric bound is enforced")
+end
+
+do
+    local store = fixture()
+    local ok, prepared = store:prepareCount("plane.yml", nil, 4123, {
+        flight = { motorSource = "ch5", minFlightDuration = 12 },
+        armed = "SFv",
+    })
+    assert(ok, prepared)
+    local saved, document = store:commit(prepared)
+    assert(saved, document)
+    assert(document.flightCount == 4123 and document.armed == "SFv" and document.flight.motorSource == "ch5")
+    assert(store:load("plane.yml").flightCount == 4123, "restart reloads the committed total")
+    local preparedCount, large = store:prepareCount("plane.yml", 4123, 16777215.0)
+    assert(preparedCount, large)
+    assert(string.find(large.serialized, "flightCount: 16777215\n", 1, true))
+    assert(store:commit(large))
+    assert(store:load("plane.yml").flightCount == 16777215, "large totals round-trip without float formatting loss")
 end
 
 do

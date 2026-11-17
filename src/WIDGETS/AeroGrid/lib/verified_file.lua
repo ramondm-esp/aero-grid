@@ -57,9 +57,9 @@ function verifiedFile.write(filename, serialized, fileOps, guard, preserveBackup
         end
     end
     if type(operations.mkdir) == "function" then
-        local parent = ""
+        local parent = string.sub(filename, 1, 1) == "/" and "/" or ""
         for segment in string.gmatch(string.match(filename, "^(.*)/[^/]*$") or "", "[^/]+") do
-            parent = parent .. "/" .. segment
+            parent = parent .. ((parent == "" or parent == "/") and "" or "/") .. segment
             if not operations.stat(parent) then
                 operations.mkdir(parent)
             end

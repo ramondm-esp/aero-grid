@@ -13,7 +13,7 @@
 - Status last updated: 2026-10-04
 - EdgeTX source: `../edgetx`
 - Project root: `aero-grid/`
-- Implementation: Phase 1 runtime complete; Phase 2 has a schema-driven on-radio editor, strict whole-layout validation, and recoverable YAML persistence. Thirteen shipped panels, seven using the shared standard panel. The original nine display panels are reviewed and documented; the State and flight-counter panels are documented with simulator captures. Global-variable display uses ordinary metric sources; the flight counter reserves GV9 FM0 for its persistent total.
+- Implementation: Phase 1 runtime complete; Phase 2 has a schema-driven on-radio editor, strict whole-layout validation, and recoverable YAML persistence. Thirteen shipped panels, seven using the shared standard panel. The original nine display panels are reviewed and documented; the State and flight-counter panels are documented with simulator captures. Global-variable display uses ordinary metric sources; the flight counter maintains an independent per-model total and optionally displays read-only GV9 or GV8:GV9 in FM0.
 - Next work: Verify the editor controls and file operations on the target-radio/EdgeTX matrix, then complete milestone 9 resource baselining. Initial dashboard validation passed on TX16S v2 with EdgeTX 2.12.4, as reported by the user on 2026-10-04.
 - The retirement and software-hardening work is merged into `main`. The aircraft dashboard, compact-layout refinements, and initial hardware records are the current follow-up change set. See [Resuming work](#resuming-work) for the state and the exact next steps.
 
@@ -159,7 +159,7 @@ The initial release should provide these panels:
 | `metric` | Up to three independently configured numeric readings | Generic |
 | `state` | Up to three readings with ordered physical/logical conditions and optional semantic backgrounds | Generic |
 | `flight-timer` | EdgeTX model timer with count-up or count-down presentation | Specialized |
-| `flight-counter` | Qualified-flight GV9 FM0 total, disarm-timeout completion, blue active state, announcements, and CSV history | Specialized |
+| `flight-counter` | Persistent per-model or read-only external total, disarm-timeout completion, and blue active state | Specialized |
 | `link-status` | RSSI, link quality, optional minimum quality, and link freshness | Specialized |
 | `navigation` | GPS position, bearing from home to model, distance to home, and GPS state | Specialized and responsive |
 | `flight-mode` | Current EdgeTX flight-mode name | Simple |
@@ -2058,7 +2058,7 @@ Every visible surface must be a **filled `lvgl.rectangle`**. Boxes are used only
 | `state(name, accent)` | Resolves a state name into concrete colors, border weight, and badge text. |
 | `telemetry` | Cached source readings with units, precision, and freshness. |
 | `model` | Model identity, bitmap path, timers, flight mode, and transmitter voltage. |
-| `control` | Effective trims and global-variable snapshots; verified GV9 FM0 increments for the flight counter. |
+| `control` | Effective trims and read-only global-variable snapshots. |
 | `extrema` | EdgeTX sensor extrema and dashboard flight sessions. |
 | `navigation` | GPS fix, pilot position, distance, and north-up home-to-model bearing. |
 

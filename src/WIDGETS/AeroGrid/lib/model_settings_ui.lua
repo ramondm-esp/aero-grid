@@ -29,6 +29,7 @@ local fields = {
         max = 3600,
     },
     { key = "smartDetection", label = "Smart detection", kind = "toggle" },
+    { key = "countSource", label = "Flight count source", kind = "choice" },
     {
         key = "flightSwitch",
         label = "Flight status switch",
@@ -184,6 +185,9 @@ nativeProperties = function(state, field, properties)
         if field.key == "flightSwitch" then
             return value ~= "" and tonumber(string.sub(value, 2)) + 1 or 1
         end
+        if field.key == "countSource" then
+            return value == "gv9" and 2 or value == "gv8gv9" and 3 or 1
+        end
         if field.kind == "source" then
             if type(value) == "number" then
                 return value
@@ -211,6 +215,13 @@ nativeProperties = function(state, field, properties)
         end
         if field.kind == "toggle" then
             value = value ~= 0 and value ~= false
+        elseif field.key == "countSource" then
+            local sources = { "internal", "gv9", "gv8gv9" }
+            if not sources[value] then
+                state.status:set({ text = "Choose AeroGrid, GV9 or GV8:GV9" })
+                return
+            end
+            value = sources[value]
         elseif field.key == "flightSwitch" then
             if type(value) ~= "number" or value % 1 ~= 0 or value < 1 or value > 65 or not outputAvailable(value) then
                 if state.dialog then
@@ -243,6 +254,9 @@ nativeProperties = function(state, field, properties)
     end
     if field.kind == "source" then
         properties.filter = lvgl.SRC_CHANNEL
+    elseif field.key == "countSource" then
+        properties.title = field.label
+        properties.values = { "AeroGrid", "GV9", "GV8:GV9" }
     elseif field.key == "flightSwitch" then
         -- EdgeTX's switch toolbar overlaps on short lists; outputs need no inversion.
         properties.title = field.label
@@ -319,7 +333,7 @@ function ui.advance(context)
         return true
     end
     -- Preparing and writing a save each take a callback; pending blocks input between them.
-    local ok, saved, result
+    local ok, saved, result, retry
     if not command.prepared then
         local values, armed, sessionReset = state.config.resolve(state.values), state.armed, state.sessionReset
         if command.key == "sessionReset" then
@@ -342,7 +356,11 @@ function ui.advance(context)
             end
         end
     else
-        ok, saved, result = pcall(state.handlers.commit, command.prepared)
+        ok, saved, result, retry = pcall(state.handlers.commit, command.prepared)
+        if ok and retry then
+            command.prepared = result
+            return true
+        end
     end
     state.pending = nil
     if not ok then

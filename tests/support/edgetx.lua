@@ -1590,7 +1590,7 @@ function support.radio(hostIo)
             [2] = { name = "Alt", prec = 0 },
         },
         timers = { [0] = timer("Flight", 300, 90, 1) },
-        globals = { [0] = 45 },
+        globals = { [0] = 45, [7] = 0, [8] = 0 },
         -- A global variable holds a value per flight mode, and
         -- luaModelGetGlobalVariable(index, flight_mode) reads the one stored for
         -- the mode it is given. A mock that ignores its second argument answers
@@ -1600,6 +1600,8 @@ function support.radio(hostIo)
         globalsByMode = { [1] = { [2] = 60 } },
         globalDetails = {
             [0] = { name = "Rates", min = -100, max = 100, prec = 1, unit = UNIT.RAW },
+            [7] = { name = "", min = -1024, max = 1024, prec = 0, unit = UNIT.RAW },
+            [8] = { name = "", min = -1024, max = 1024, prec = 0, unit = UNIT.RAW },
         },
         --- The radio's battery meter range, as a 2S LiPo, which is what the
         --- fixture transmitter has. Every radio carries one of these.

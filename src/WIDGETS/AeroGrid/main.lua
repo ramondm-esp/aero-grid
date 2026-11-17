@@ -1567,6 +1567,7 @@ local function pumpFlight(task, now, granted)
         "configurationError",
         "detectionError",
         "countError",
+        "sourceError",
         "outputError",
         "persistenceError",
         "resetError",
@@ -1574,6 +1575,10 @@ local function pumpFlight(task, now, granted)
         if state[key] then
             messages[#messages + 1] = "flight: " .. state[key]
         end
+    end
+    if state.importNotice and context.flightImportNotice ~= state.importNotice then
+        context.flightImportNotice = state.importNotice
+        addNotice(context, "warning", state.importNotice)
     end
     local text = #messages > 0 and table.concat(messages, "\n") or nil
     if text ~= context.flightErrorText then
@@ -1685,6 +1690,19 @@ local function openModelSettings(context)
             return owner.store:prepare(modelFilename, revision, values, armedCondition, sessionReset)
         end,
         commit = function(prepared)
+            if owner.document.flightCount ~= prepared.baseCount then
+                local ok, latest = owner.store:prepare(
+                    prepared.filename,
+                    prepared.baseRevision,
+                    prepared.document.flight,
+                    prepared.document.armed,
+                    prepared.document.sessionReset
+                )
+                if not ok then
+                    return false, latest
+                end
+                return false, latest, true
+            end
             return owner.store:commit(prepared)
         end,
         saved = function(saved)

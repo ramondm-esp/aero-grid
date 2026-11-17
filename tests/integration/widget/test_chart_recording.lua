@@ -182,6 +182,7 @@ pump(200)
 if withFlights then
     context.flightBroker:setDocument({
         modelFilename = context.flightBroker.filename,
+        flightCount = context.flightBroker.document.flightCount,
         revision = 1,
         armed = "SAv",
         flight = context.flightConfig.resolve({ minFlightDuration = 1, disarmDuration = 1 }),
@@ -198,6 +199,7 @@ if smartEnabled then
     local owner = assert(context.flightBroker)
     owner:setDocument({
         revision = 1,
+        flightCount = owner.document.flightCount,
         armed = "SAv",
         sessionReset = "L64",
         flight = context.flightConfig.resolve({ smartDetection = true }),

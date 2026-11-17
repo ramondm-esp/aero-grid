@@ -10,6 +10,11 @@ radio.fields["VSpd+"] = { id = 151, name = "VSpd+", unit = fixture.firmware.UNIT
 fixture.radioMock.indexFields()
 radio.globalDetails[0].prec = 0
 local context = fixture.createLoaded(nil, { Layout = "Default", Theme = "modern-dark" })
+local owner = context.flightBroker
+local selected = context.flightConfig.resolve({ countSource = "gv9" })
+local ok, document = owner.store:save(owner.filename, owner.document.revision, selected)
+assert(ok, document)
+owner:setDocument(document)
 
 local callbacks = 0
 local function pump(count)

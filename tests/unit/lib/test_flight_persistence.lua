@@ -6,36 +6,25 @@ local support = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/services.lua"
 local control = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/control_service.lua"))()
 local modelService = assert(loadfile(root .. "/src/WIDGETS/AeroGrid/lib/model_service.lua"))()
 local equal = assertions.assertEqual
-local stored, mode = 39, nil
+local stored = 39
 local env = {
     getGlobalVariable = function(index, flightMode)
         equal(index, 8)
         equal(flightMode, 0)
         return stored
     end,
-    setGlobalVariable = function(index, flightMode, value)
-        equal(index, 8)
-        mode, stored = flightMode, value
+    setGlobalVariable = function()
+        error("control subscriptions must remain read-only")
     end,
 }
 local service = control.new(env, support)
 local feed = service:globalVariable(8, 0)
 service:update(0)
 equal(feed.raw, 39)
-equal(service:incrementFlightCount(), 40)
-equal(mode, 0)
-equal(feed.raw, 40, "the published counter must update immediately")
+assert(service.incrementFlightCount == nil, "the control service must not write flight counts")
 stored = 50
-equal(service:incrementFlightCount(), 51, "external count edits must not be overwritten with a stale count")
-stored = 999
-local ok, err = pcall(service.incrementFlightCount, service)
-assert(not ok and string.find(err, "full", 1, true))
-stored = 39
-env.setGlobalVariable = function() end
-ok, err = pcall(service.incrementFlightCount, service)
-assert(not ok and string.find(err, "could not save", 1, true))
-env.setGlobalVariable = nil
-assert(not pcall(service.incrementFlightCount, service))
+service:update(20)
+equal(feed.raw, 50, "external count edits remain readable")
 
 local selected, enabled = nil, false
 local switches = control.new({

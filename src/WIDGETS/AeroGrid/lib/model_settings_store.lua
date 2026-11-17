@@ -38,10 +38,11 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
     env = env or {}
     local writer = env.verifiedFile or dependency(widgetPath, "verified_file")
     local config = env.flightConfig or dependency(widgetPath, "flight_config")
+    local counter = env.flightCount or dependency(widgetPath, "flight_count")
     local flightDefaults = config.defaults()
     local armed = env.armedConfig or dependency(widgetPath, "armed_service")
     local operations = writer.operations(fileOps)
-    local instance = {}
+    local instance = { counter = counter, operations = operations }
     local function identity(filename)
         local current
         if env.modelFilename then
@@ -74,9 +75,16 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
                 and key ~= "flight"
                 and key ~= "armed"
                 and key ~= "sessionReset"
+                and key ~= "flightCount"
             then
                 return nil, "Unknown model settings field: " .. tostring(key)
             end
+        end
+        if document.flightCount ~= nil and not counter.valid(document.flightCount) then
+            return nil, "Flight count must be an integer in 0.." .. counter.MAX
+        end
+        if document.flightCount ~= nil then
+            document.flightCount = math.floor(document.flightCount)
         end
         if document.armed ~= nil and not armed.valid(document.armed) then
             return nil, "Armed must be blank, a physical switch position, or a logical switch (L01-L64)"
@@ -177,6 +185,7 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
             flight = copy(flight),
             armed = armedCondition == nil and previous.armed or armedCondition,
             sessionReset = sessionReset == nil and previous.sessionReset or sessionReset,
+            flightCount = previous.flightCount,
         }, filename)
         if not document then
             return false, validationError
@@ -199,7 +208,7 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
                 baseRevision = baseRevision,
                 serialized = serialized,
                 document = checked,
-                recovered = info.recovered,
+                recovered = info and info.recovered,
             }
     end
     -- The write guard rechecks identity and the live revision, so a commit may follow its prepare in a later callback.
@@ -222,6 +231,9 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
             end
             if live.revision ~= baseRevision then
                 return false, "Model settings changed during save; cancel and reload"
+            end
+            if live.flightCount ~= prepared.baseCount then
+                return false, "Flight count changed during save; retry the setting"
             end
             return true
         end
@@ -250,7 +262,11 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
     end
     --- Validates and serializes a save; returns `true, prepared` or `false, message`.
     function instance:prepare(filename, baseRevision, flight, armedCondition, sessionReset)
-        return protected(prepare, self, filename, baseRevision, flight, armedCondition, sessionReset)
+        local ok, prepared = protected(prepare, self, filename, baseRevision, flight, armedCondition, sessionReset)
+        if ok then
+            prepared.baseCount = prepared.document.flightCount
+        end
+        return ok, prepared
     end
     --- Writes a prepared save; returns `true, document` or `false, message`.
     function instance:commit(prepared)
@@ -262,6 +278,45 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
             return false, result
         end
         return self:commit(result)
+    end
+    function instance:prepareCount(filename, expected, value, imported)
+        return protected(function()
+            local matches, message = identity(filename)
+            if not matches then
+                return false, message
+            end
+            local previous, info = self:load(filename)
+            if not previous then
+                return false, info
+            end
+            if previous.flightCount ~= expected then
+                return false, "Flight count changed before save; reload the model"
+            end
+            previous.flightCount = value
+            if imported and previous.flight == nil and imported.flight then
+                previous.flight = imported.flight
+            end
+            if imported and previous.armed == nil then
+                previous.armed = imported.armed
+            end
+            local document, validationError = validate(previous, filename)
+            if not document then
+                return false, validationError
+            end
+            local serialized, serializeError = yaml.serialize(document)
+            if not serialized then
+                return false, serializeError
+            end
+            return true,
+                {
+                    filename = filename,
+                    baseRevision = document.revision,
+                    baseCount = expected,
+                    document = document,
+                    serialized = serialized,
+                    recovered = info and info.recovered,
+                }
+        end)
     end
     return instance
 end

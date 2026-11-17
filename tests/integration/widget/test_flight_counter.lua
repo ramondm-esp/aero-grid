@@ -27,10 +27,23 @@ local function create(span)
     radio.globals[8] = 39
     radio.globalsByMode[8] = nil
     radio.globalDetails[8] = { name = "Flights", min = 0, max = 999, prec = 0, unit = 0 }
+    local store = fixture.module("lib/model_settings_store.lua")
+    local yaml = fixture.module("lib/yaml.lua")
+    local filename = model.getInfo().filename
+    os.execute("mkdir -p '" .. fixture.path .. "AEROGRID/models'")
+    fixture.writeFile(
+        assert(store.path(fixture.path, filename)),
+        assert(yaml.serialize({
+            version = 1,
+            modelFilename = filename,
+            revision = 0,
+            flightCount = 39,
+        }))
+    )
     local context = definition.create(
         { x = 0, y = 0, w = 480, h = 272 },
         { Layout = "Empty", Theme = "modern-dark" },
-        root .. "/src/WIDGETS/AeroGrid/"
+        fixture.path
     )
     -- Stages share callbacks, so finish loading the empty layout before replacing its source.
     while context.initializing or context.stage do
@@ -81,6 +94,10 @@ local function backgroundUntil(context, predicate, limit)
             .. tostring(context.flightErrorText)
             .. " phase="
             .. tostring(owner and owner.session and owner.session.phase)
+            .. " lastTick="
+            .. tostring(owner.lastTick)
+            .. " disarmedAt="
+            .. tostring(owner.session.disarmedAt)
     )
 end
 
@@ -92,7 +109,7 @@ for _, span in ipairs({ { 1, 1 }, { 2, 1 }, { 2, 2 }, { 4, 2 } }) do
     backgroundUntil(context, function()
         return panel.flight.phase == "active" and panel.value.properties.text == "40" and panel.stateName == "active"
     end)
-    equal(model.getGlobalVariable(8, 0), 40)
+    equal(context.flightBroker.view.count, 40)
     equal(panel.value.properties.text, "40")
     equal(panel.stateName, "active")
     equal(panel.panel.background.properties.color, context.theme.alertColor.active)
@@ -118,7 +135,7 @@ for _, span in ipairs({ { 1, 1 }, { 2, 1 }, { 2, 2 }, { 4, 2 } }) do
     end)
     equal(panel.stateName, "normal")
     equal(panel.panel.background.properties.color, context.theme.color.surface)
-    equal(model.getGlobalVariable(8, 0), 40)
+    equal(context.flightBroker.view.count, 40)
     equal(#context.errors, 0)
 end
 
@@ -152,7 +169,7 @@ for _ = 1, 100 do
     fixture.tick(20)
     measured(definition.background, context)
 end
-equal(model.getGlobalVariable(8, 0), 40, "a presentation preview cannot stop the committed flight tracker")
+equal(context.flightBroker.view.count, 40, "a presentation preview cannot stop the committed flight tracker")
 equal(panel.flight.phase, "active", "the shared tracker is independent of presentation flags")
 fixture.radio.values[305] = -1024
 fixture.pump(context, 30)
@@ -189,6 +206,7 @@ env.getSourceValue = function(id)
 end
 owner:setDocument({
     revision = 1,
+    flightCount = owner.document.flightCount,
     flight = context.flightConfig.resolve({
         smartDetection = true,
         minFlightDuration = 30,
@@ -213,5 +231,21 @@ fixture.radio.values[305] = -1024
 backgroundUntil(context, function()
     return panel.flight.phase == "ground"
 end)
-equal(model.getGlobalVariable(8, 0), 40)
+equal(context.flightBroker.view.count, 40)
+for _, span in ipairs({ { 1, 1 }, { 1, 2 }, { 2, 1 }, { 2, 2 }, { 4, 2 } }) do
+    context, panel = create(span)
+    fixture.pump(context, 10)
+    local callback, normalFont = panel.value.properties.font, panel.value.properties.font()
+    context.flightBroker:setDocument({ revision = 0, flightCount = 16777215 })
+    backgroundUntil(context, function()
+        return panel.value.properties.text == "16777215"
+    end)
+    assert(panel.themeBuilder.measureText(panel.value.properties.font(), panel.text) <= panel.area.content)
+    equal(panel.value.properties.font, callback, "large totals must retain the font callback")
+    context.flightBroker:setDocument({ revision = 0, flightCount = 42 })
+    backgroundUntil(context, function()
+        return panel.value.properties.text == "42"
+    end)
+    equal(panel.value.properties.font(), normalFont, "ordinary totals keep their existing typography")
+end
 print(string.format("Flight counter standard/Smart integration passed; worst callback: %d instructions", worstCallback))

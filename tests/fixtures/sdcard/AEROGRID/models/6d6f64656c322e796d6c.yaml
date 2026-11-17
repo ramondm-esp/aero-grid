@@ -1,6 +1,7 @@
 version: 1
 modelFilename: "model2.yml"
 revision: 1
+flightCount: 42
 armed: "SFv"
 flight:
   motorSource: "ch3"

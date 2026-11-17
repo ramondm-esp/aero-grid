@@ -126,7 +126,7 @@ untilDone(function()
 end, function()
     return owner.state.active
 end)
-assert(model.getGlobalVariable(8, 0) == 1, "flight detection must not depend on hidden UI construction")
+assert(owner.view.count == 1, "flight detection must not depend on hidden UI construction")
 task.gate = gate
 untilDone(function()
     local loading = visible.stage ~= nil
@@ -140,7 +140,7 @@ end, function()
 end)
 assert(#visible.panels == 9 and #hidden.panels == 2)
 assert(#visible.errors == 0 and #hidden.errors == 0)
-assert(model.getGlobalVariable(8, 0) == 1, "constructing the counter must not duplicate a flight")
+assert(owner.view.count == 1, "constructing the counter must not duplicate a flight")
 
 -- Hidden construction also waits for the first successful normal visible refresh.
 setup()

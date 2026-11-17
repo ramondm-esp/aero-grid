@@ -16,7 +16,7 @@ class ModelMeasurementTests(unittest.TestCase):
 
     def test_instruction_bucket_and_row_names(self):
         samples = measure.parse_samples(self.samples())
-        self.assertEqual(len(samples), 12)
+        self.assertEqual(len(samples), 13)
         self.assertEqual(samples[0], {
             "row": "armed", "slots": 1, "callback_percent": 9,
             "callback_instructions_below": 2000,
@@ -41,11 +41,11 @@ class ModelMeasurementTests(unittest.TestCase):
 
     def callbacks(self, percent=40):
         return (f"{percent} 8 " + ",".join(measure.ROWS[:8]) + "\n"
-                "20 5 " + ",".join(measure.ROWS[8:]))
+                "20 6 " + ",".join(measure.ROWS[8:]))
 
     def test_complete_callback_threshold_and_total_slots(self):
         samples = measure.parse_callbacks(self.callbacks(74))
-        self.assertEqual(sum(sample["model_slots"] for sample in samples), 13)
+        self.assertEqual(sum(sample["model_slots"] for sample in samples), 14)
         self.assertEqual(samples[0]["callback_instructions_below"], 15000)
         with self.assertRaisesRegex(RuntimeError, "15,000"):
             measure.parse_callbacks(self.callbacks(75))

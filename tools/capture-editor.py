@@ -31,9 +31,7 @@ DASHBOARD_SCENES = ("dashboard",)
 FLIGHT_SETTINGS_SCENES = ("aero-menu", "aero-menu-selected", "aero-ui-setup", "model-settings", "model-settings-motor", "model-settings-reset", "model-settings-bottom", "model-settings-switch", "model-settings-switch-select",
                          "model-settings-autosave", "model-settings-exit",
                          "native-app-icon", "aero-fullscreen-icon")
-DASHBOARD_INPUTS = """model.setGlobalVariable(8, 0, 42)
-model.setGlobalVariable(0, 0, 30)
-assert(model.getGlobalVariable(8, 0) == 42, "capture could not initialize GV9")
+DASHBOARD_INPUTS = """model.setGlobalVariable(0, 0, 30)
 assert(model.getGlobalVariable(0, 0) == 30, "capture could not initialize GV1")
 local sources = {
     { name = "RxBt", id = 30000, unit = 1, prec = 2, value = 8.12 },
@@ -251,7 +249,7 @@ screenData:
         settings = sd / "AEROGRID/models"
         settings.mkdir(parents=True, exist_ok=True)
         (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
-            'version: 1\nmodelFilename: "model1.yml"\nrevision: 1\narmed: "SFv"\n')
+            'version: 1\nmodelFilename: "model1.yml"\nrevision: 1\nflightCount: 42\narmed: "SFv"\n')
         layout = f"""version: 3
 grid:
   columns: 4
@@ -299,6 +297,11 @@ panels:
           label: Speed
           unit: km/h""")
     (sd / "WIDGETS/AeroGrid/layouts/Default.yaml").write_text(layout)
+    if scene in DASHBOARD_SCENES:
+        settings = sd / "AEROGRID/models"
+        settings.mkdir(parents=True, exist_ok=True)
+        (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
+            'version: 1\nmodelFilename: "model1.yml"\nrevision: 0\nflightCount: 42\n')
     main = sd / "WIDGETS/AeroGrid/main.lua"
     source = main.read_text()
     needle = "    refresh = refresh,"
@@ -743,11 +746,11 @@ def capture(executable, library, directory, scene, shift=0):
                            f"{tick + 40} 390 110 1\n{tick + 60} 390 65 1\n"
                            f"{tick + 80} 390 65 0\n")
             if scene != "model-settings-reset":
-                # Keeps Smart detection and the whole Flight status switch row in view.
-                script += "1750 390 220 1\n1770 390 190 1\n1790 390 160 1\n1810 390 130 1\n1830 390 130 0\n"
+                # Keep the count source and whole Flight status switch row in view.
+                script += "1750 390 220 1\n1770 390 177 1\n1790 390 134 1\n1810 390 90 1\n1830 390 90 0\n"
             if scene == "model-settings-reset":
                 # A short drag past the Flight status switch keeps the Session reset section in view.
-                script += "1950 390 220 1\n1970 390 200 1\n1990 390 180 1\n2010 390 160 1\n2030 390 160 0\n"
+                script += "1950 390 220 1\n1970 390 187 1\n1990 390 154 1\n2010 390 120 1\n2030 390 120 0\n"
             if scene.startswith("model-settings-switch"):
                 script += "2600 330 206 1\n2620 330 206 0\n"
             if scene == "model-settings-switch-select":

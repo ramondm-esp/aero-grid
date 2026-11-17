@@ -231,7 +231,7 @@ untilState(first, function()
     return owner.state.active
 end, second)
 pump(first, 10, second)
-assert(model.getGlobalVariable(8, 0) == 1 and #tones == 0, "two widgets must count once without built-in audio")
+assert(owner.view.count == 1 and #tones == 0, "two widgets must count once without built-in audio")
 assert(#writes == 1 and writes[1] == true, "two widgets must publish one Sticky start")
 local journal = owner:boundaries(0, owner.epoch)
 assert(#journal == 1 and journal[1].kind == "start" and journal[1].reason == "standard")
@@ -260,7 +260,7 @@ untilState(second, function()
     return owner.output == nil
 end, conflict)
 assert(#writes == 2 and writes[2] == false, "the output must clear with multiple widgets")
-assert(#tones == 0 and model.getGlobalVariable(8, 0) == 1)
+assert(#tones == 0 and owner.view.count == 1)
 journal = owner:boundaries(0, owner.epoch)
 assert(#journal == 2 and journal[2].kind == "end" and journal[2].at < journal[2].observedAt)
 factory.members[conflict] = nil
@@ -278,7 +278,7 @@ fixture.radio.values[305] = 1024
 untilState(second, function()
     return owner.state.active
 end)
-assert(model.getGlobalVariable(8, 0) == 2, "tracking must work without any Flight counter")
+assert(owner.view.count == 2, "tracking must work without any Flight counter")
 fixture.radio.values[305] = -1024
 untilState(second, function()
     return not owner.state.active and not owner.output
@@ -381,7 +381,7 @@ untilState(second, function()
     return owner.view.active
 end, third)
 assert(owner.view.reason == "smart-altitude" and owner.view.qualifiedAt - startedAt < 3000)
-assert(model.getGlobalVariable(8, 0) == 3 and #tones == 0)
+assert(owner.view.count == 3 and #tones == 0)
 journal = owner:boundaries(0, owner.epoch)
 assert(#journal == 5 and journal[5].reason == "smart-altitude" and journal[5].at == startedAt)
 second.aeroMenuHandlers.modelSettings()
@@ -395,14 +395,14 @@ untilState(second, function()
     return not second.modelSettingsUi
 end, third)
 assert(not owner.document.flight.smartDetection and owner.session.settings.smartDetection and owner.view.active)
-assert(owner.view.reason == "smart-altitude" and model.getGlobalVariable(8, 0) == 3)
+assert(owner.view.reason == "smart-altitude" and owner.view.count == 3)
 pump(second, 350, third)
-assert(model.getGlobalVariable(8, 0) == 3 and #tones == 0, "standard timeout must not requalify Smart flight")
+assert(owner.view.count == 3 and #tones == 0, "standard timeout must not requalify Smart flight")
 fixture.radio.values[305] = -1024
 untilState(second, function()
     return not owner.view.active and not owner.output
 end, third)
-assert(model.getGlobalVariable(8, 0) == 3 and #tones == 0 and writes[#writes] == false)
+assert(owner.view.count == 3 and #tones == 0 and writes[#writes] == false)
 
 local cachedRevision = owner.document.revision
 local external = second.flightConfig.resolve(owner.document.flight)
@@ -437,7 +437,7 @@ fixture.radio.values[305] = 1024
 untilState(second, function()
     return owner.view.active
 end, third)
-assert(model.getGlobalVariable(8, 0) == 4, "offline flight must count once across both dashboards")
+assert(owner.view.count == 4, "offline flight must count once across both dashboards")
 assert(owner.view.reason == "standard" and writes[#writes] == true)
 second.aeroMenuHandlers.modelSettings()
 untilState(second, function()
@@ -457,7 +457,27 @@ end, third)
 assert(writes[#writes] == false, "offline flight completion releases the output")
 fixture.radio.values[305] = 1024
 pump(second, 60, third)
-assert(
-    not owner.view.active and model.getGlobalVariable(8, 0) == 4,
-    "re-enabled receiver requirement blocks offline starts"
-)
+assert(not owner.view.active and owner.view.count == 4, "re-enabled receiver requirement blocks offline starts")
+
+second.aeroMenuHandlers.modelSettings()
+untilState(second, function()
+    return second.modelSettingsUi and not second.modelSettingsUi.build
+end, third)
+local drawer = second.modelSettingsUi
+local revision = owner.document.revision
+drawer.controls.countSource.properties.set(2)
+untilState(second, function()
+    return drawer.pending and drawer.pending.prepared
+end, third)
+assert(owner:incrementCount() == 5)
+owner:saveCount()
+owner:saveCount()
+assert(owner.store:load(owner.filename).flightCount == 5)
+measured(second.modelSettingsUiModule.advance, second)
+assert(drawer.pending and drawer.pending.prepared.baseCount == 5, "a stale drawer must reprepare without writing")
+assert(owner.store:load(owner.filename).flight.countSource == "internal")
+untilState(second, function()
+    return not drawer.pending and owner.document.revision == revision + 1
+end, third)
+local latest = assert(owner.store:load(owner.filename))
+assert(latest.flightCount == 5 and latest.flight.countSource == "gv9", "drawer saves preserve intervening counts")

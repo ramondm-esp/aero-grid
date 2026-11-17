@@ -85,10 +85,10 @@ local function fixture(width)
         end,
     })
     assert(state.nextY == 4 and state.smartStatus.hidden)
-    local grants = { 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1 }
+    local grants = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1 }
     -- Fixture text measurement and firmware API stand-ins execute extra Lua.
     -- These regression envelopes are independent of production reservations.
-    local mockLimits = { 4000, 4000, 1000, 1000, 1000, 1000, 1000, 1000, 13000, 7500, 6000, 1000 }
+    local mockLimits = { 4000, 4000, 1000, 1000, 1000, 1000, 1000, 1000, 3000, 13000, 7500, 6000, 1000 }
     for row, grant in ipairs(grants) do
         assert(ui.cost(c) == grant, "each row must reserve its own bounded grant")
         local instructions = 0
@@ -172,6 +172,50 @@ end
 
 do
     local c = fixture(320)
+    ui.close(c)
+end
+
+do
+    local c, state, control, document = fixture()
+    local properties = state.controls.countSource.properties
+    assert(properties.get() == 1)
+    for index, value in ipairs({ "internal", "gv9", "gv8gv9" }) do
+        properties.set(index)
+        for _ = 1, 3 do
+            ui.advance(c)
+        end
+        assert(properties.get() == index and document().flight.countSource == value)
+    end
+    local attempts = control.attempts
+    for _, invalid in ipairs({ 0, 4, 1.5, "gv9" }) do
+        properties.set(invalid)
+        ui.advance(c)
+        assert(not state.pending and control.attempts == attempts)
+        assert(properties.get() == 3 and state.status.properties.text ~= "")
+    end
+    ui.close(c)
+end
+
+do
+    local c, state, control, document = fixture()
+    local commit, retried = state.handlers.commit, false
+    state.handlers.commit = function(prepared)
+        if not retried then
+            retried = true
+            return false, prepared, true
+        end
+        return commit(prepared)
+    end
+    state.controls.countSource.properties.set(2)
+    for _ = 1, 3 do
+        ui.advance(c)
+    end
+    assert(
+        state.pending and control.attempts == 0,
+        "repreparing a stale count must defer the write to another callback"
+    )
+    ui.advance(c)
+    assert(not state.pending and document().flight.countSource == "gv9" and control.attempts == 1)
     ui.close(c)
 end
 

@@ -100,7 +100,7 @@ end
 
 fixture.radio.values[305] = 1024
 pump(30)
-equal(model.getGlobalVariable(8, 0), 1, "hidden and visible layouts must qualify only one flight")
+equal(owner.view.count, 1, "hidden and visible layouts must qualify only one flight")
 assert(owner.state.active)
 for _, context in ipairs(widgets) do
     equal(context.serviceRuntime.byId.history:session().flightLast, 1, "hidden charts must receive the flight")
@@ -110,4 +110,4 @@ definition.update(widgets[3], { Layout = "background-2", Theme = "modern-dark" }
 pump(300)
 assert(not widgets[3].stage and not widgets[3].reloadState, "a hidden layout must finish reloading")
 equal(widgets[3].flightBroker, owner)
-equal(model.getGlobalVariable(8, 0), 1, "reloading a hidden layout must not duplicate the flight")
+equal(owner.view.count, 1, "reloading a hidden layout must not duplicate the flight")

@@ -326,6 +326,12 @@ local function testReflowAndLifecycle()
     assertEqual(panelOf(entryById(appContext, "pack")).w, 158)
 
     local pulse = entryById(appContext, "pulse")
+    assert(
+        fixture.pumpUntil(appContext, function()
+            return appContext.flightBroker.document.flightCount ~= nil and not appContext.flightBroker.pendingCount
+        end),
+        "initial count persistence must settle before steady-state lifecycle assertions"
+    )
     local ticksBefore = pulse.instance.ticks
     pump(appContext, 2)
     assertEqual(pulse.instance.ticks, ticksBefore + 2, "refresh was not dispatched")

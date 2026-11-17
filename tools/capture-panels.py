@@ -112,8 +112,14 @@ view: 0
         settings = sd / "AEROGRID/models"
         settings.mkdir(parents=True, exist_ok=True)
         (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
-            "version: 1\nmodelFilename: model1.yml\nrevision: 1\nflight:\n"
+            "version: 1\nmodelFilename: model1.yml\nrevision: 1\nflightCount: 0\nflight:\n"
             "  minFlightDuration: 1\n  disarmDuration: 3\n")
+    elif panel == "flight-counter":
+        settings = sd / "AEROGRID/models"
+        settings.mkdir(parents=True, exist_ok=True)
+        (settings / ("model1.yml".encode().hex() + ".yaml")).write_text(
+            "version: 1\nmodelFilename: model1.yml\nrevision: 0\n"
+            f"flightCount: {recipe['sample']['count'] - 1}\n")
     layout += "grid:\n  columns: 4\n  rows: 4\npanels:\n"
     for name, (col, row, cols, rows) in placements(recipe).items():
         layout += (f"  - id: subject-{name}\n    type: {panel}\n"
