@@ -220,7 +220,8 @@ function broker:reset(filename)
     self.countStarted = nil
     self.filename, self.epoch = filename, self.epoch + 1
     self.session, self.runtime, self.smartRuntime, self.signature, self.output = nil, nil, nil, nil, nil
-    self.document, self.loadError = nil, nil
+    self.document, self.loadError, self.settingsAdoption = nil, nil, nil
+    self.settingsError = nil
     self.events, self.errors = {}, {}
     self.lastTick, self.readyAfterDisarm = nil, nil
     self.readyAfterDisarmAt = nil
@@ -282,6 +283,7 @@ function broker:setDocument(document)
         self.countTask.due = 0
     end
     self.loadError, self.state.persistenceError = nil, nil
+    self.settingsError, self.errors.persistence = nil, nil
     self.state.configurationRevision = document.revision or 0
     self.documentLoaded = true
     self.state.count = document.flightCount
@@ -358,14 +360,54 @@ function broker:saveCount()
     end
     if pending.prepared.baseRevision ~= self.document.revision then
         pending.prepared = nil
+        pending.deferred = nil
         return
     end
-    local ok, document = self.store:commit(pending.prepared)
+    local ok, document, deferred = self.store:commit(pending.prepared)
+    if not ok and deferred then
+        pending.deferred = true
+        return
+    end
     assert(ok, document)
     self.pendingCount = nil
     self:setDocument(document)
     self.state.importNotice = pending.imported and pending.imported.notice or self.state.importNotice
     self.state.diagnosticRevision = (self.state.diagnosticRevision or 0) + 1
+end
+
+--- Read live arm conditions before the CH32 read-modify-write.
+function broker:settingsDisarmed(proposed)
+    local condition = self.document and self.document.armed
+    local control = self.modules.control.new(self.env, self.support)
+    local function disarmed(name, index)
+        if name == "" or index == 0 then
+            return true
+        end
+        if not self.env.getSwitchValue or (not index and not self.env.getSwitchIndex) then
+            return false
+        end
+        index = index or control:switchIndex(name)
+        return type(index) == "number" and index ~= 0 and self.env.getSwitchValue(index) == false
+    end
+    if proposed ~= nil and not disarmed(proposed) then
+        return false
+    end
+    if condition ~= nil then
+        return disarmed(condition)
+    end
+    for host, member in pairs(self.members) do
+        if member.modelFilename == self.filename then
+            if member.pending or not disarmed(nil, host.legacyWidgetArmed or 0) then
+                return false
+            end
+            for _, declaration in ipairs(member.declarations or {}) do
+                if not disarmed(declaration.armKey or "", declaration.armIndex) then
+                    return false
+                end
+            end
+        end
+    end
+    return true
 end
 
 function broker:boundary(kind, at, observedAt)
@@ -710,7 +752,7 @@ end
 function broker:prepare(now)
     local proposal, signature, status = self:proposals(now)
     self.state.status = self.loadError and "error" or status
-    self.state.persistenceError = self.loadError
+    self.state.persistenceError = self.loadError or self.settingsError
     local active = self.session and (self.session.phase == "active" or self.session.phase == "ending")
     if self.output and not self.output.flightId and (not proposal or signature ~= self.signature or self.loadError) then
         self.output = nil
@@ -933,9 +975,13 @@ local function countReady(task, now)
         and owner.documentLoaded
         and owner.document ~= nil
         and owner.store ~= nil
+        and not owner.settingsAdoption
+        and not owner.settingsError
         and (
-            pending and not pending.failed
-            or not owner.countImportFailed and owner.document.flightCount == nil
+            pending
+                and not pending.failed
+                and (not pending.deferred or owner:settingsDisarmed(pending.prepared.document.armed))
+            or not pending and not owner.countImportFailed and owner.document.flightCount == nil
             or owner.countDirty
             or owner.document.flight
                 and owner.document.flight.countSource ~= "internal"
@@ -948,7 +994,12 @@ local function countStep(task, now)
     owner.countDue, task.due = now + 20, now
     local ok, message = pcall(function()
         assert(owner:identity() == owner.filename, "Model changed during flight count save")
-        if not owner.countImportFailed and not (owner.pendingCount and owner.pendingCount.failed) then
+        local pending = owner.pendingCount
+        if
+            not owner.countImportFailed
+            and not (pending and pending.failed)
+            and not (pending and pending.deferred and not owner:settingsDisarmed(pending.prepared.document.armed))
+        then
             owner:saveCount()
         end
     end)

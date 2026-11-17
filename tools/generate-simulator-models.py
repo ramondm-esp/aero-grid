@@ -98,7 +98,7 @@ def generated_files(fixture=FIXTURE):
             raise ValueError("Expected a model name in the common fixture header")
         filename = f"model{number}.yml"
         files[fixture / "MODELS" / filename] = (
-            header + (FLIGHT_ANNOUNCEMENTS if name == "AG Flight" else "")
+            header + ('limitData:\n   31:\n      name: "AGTST2"\n' + FLIGHT_ANNOUNCEMENTS if name == "AG Flight" else "")
             + "screenData:\n"
             + "".join(screen(index, registry.index(layout) + 1)
                       for index, layout in enumerate(screens))

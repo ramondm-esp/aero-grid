@@ -7,6 +7,7 @@ local files, operations = memory()
 local config, support = load("lib/flight_config.lua"), load("lib/services.lua")
 local detector, storeModule = load("lib/flight_service.lua"), load("lib/model_settings_store.lua")
 local filename, external, now = "plane.yml", 123, 0
+local output, disarmed = { name = "AGTEST" }, true
 local env = {
     getInfo = function()
         return { filename = filename }
@@ -21,8 +22,14 @@ local env = {
     setGlobalVariable = function()
         error("counting must never write a GV")
     end,
+    getSwitchIndex = function()
+        return 1
+    end,
+    getSwitchValue = function()
+        return not disarmed
+    end,
 }
-local store = storeModule.new("/WIDGETS/AeroGrid/", load("lib/yaml.lua"), {
+local storeEnv = {
     modelFilename = function()
         return filename
     end,
@@ -30,10 +37,25 @@ local store = storeModule.new("/WIDGETS/AeroGrid/", load("lib/yaml.lua"), {
     flightCount = load("lib/flight_count.lua"),
     armedConfig = load("lib/armed_service.lua"),
     verifiedFile = load("lib/verified_file.lua"),
-}, operations)
+    getOutput = function()
+        return output
+    end,
+    setOutput = function(_, value)
+        output = value
+    end,
+    isDisarmed = function()
+        return disarmed
+    end,
+    generateId = function()
+        return "AGNEW1"
+    end,
+}
+local sidecar = load("lib/model_settings_sidecar.lua")
+storeEnv.backend = sidecar.new("/WIDGETS/AeroGrid/", storeEnv, storeEnv.verifiedFile, operations)
+local store = storeModule.new("/WIDGETS/AeroGrid/", load("lib/yaml.lua"), storeEnv, operations)
 
 local function restart()
-    local owner = detector.newBroker(env, support, {}, config)
+    local owner = detector.newBroker(env, support, { control = load("lib/control_service.lua") }, config)
     owner.store = store
     owner:reset(filename)
     owner:setDocument(assert(store:load(filename)))
@@ -102,11 +124,27 @@ external = nil
 step(owner)
 assert(owner.view.displayCount == 2 and store:load(filename).flightCount == 2)
 assert(owner:incrementCount() == 3)
-local originalPath = assert(storeModule.path("/WIDGETS/AeroGrid/", filename))
+local originalPath = assert(sidecar.path("/WIDGETS/AeroGrid/", "AGTEST"))
 local original = files[originalPath]
 filename = "other.yml"
 step(owner)
 assert(owner.view.countError and files[originalPath] == original, "model changes must prevent pending writes")
-assert(not files[assert(storeModule.path("/WIDGETS/AeroGrid/", filename))])
+assert(output.name == "AGTEST")
+
+filename, output, disarmed = "fresh.yml", { name = "" }, false
+owner = restart()
+local host = {}
+owner.members[host] = { modelFilename = filename, declarations = { { armKey = "L01", armIndex = 1 } } }
+step(owner)
+assert(owner.pendingCount and owner.pendingCount.deferred and not owner.view.countError)
+assert(output.name == "" and not files[sidecar.path("/WIDGETS/AeroGrid/", "AGNEW1")])
+assert(not owner.countTask.ready(owner.countTask, now), "deferred count must not continuously retry while armed")
+owner.countDirty = true
+step(owner)
+assert(owner.pendingCount.deferred and not owner.view.countError, "publishing must not retry a deferred claim")
+disarmed = true
+step(owner)
+assert(owner.pendingCount == nil and owner.view.count == 0 and output.name == "AGNEW1")
+assert(store:load(filename).flightCount == 0, "deferred initial count persists after disarming")
 
 print("Flight count initialization, restart, source switching and persistence recovery passed")

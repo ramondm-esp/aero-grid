@@ -7,11 +7,15 @@ local writer = assert(loadfile(base .. "/lib/verified_file.lua"))()
 local config = assert(loadfile(base .. "/lib/flight_config.lua"))()
 local yaml = assert(loadfile(base .. "/lib/yaml.lua"))()
 local memory = assert(loadfile(root .. "/tests/support/memory_files.lua"))()
+local sidecar = assert(loadfile(base .. "/lib/model_settings_sidecar.lua"))()
 
 local function fixture()
     local files, operations = memory()
     local current = "plane.yml"
-    local store = module.new("/WIDGETS/AeroGrid/", yaml, {
+    local channel =
+        { name = "AGTEST", min = -800, max = 900, offset = 25, ppmCenter = 10, symetrical = 1, revert = 1, curve = 2 }
+    local state = { channel = channel, disarmed = true, writes = 0, id = "AGNEW1" }
+    local env = {
         modelFilename = function()
             return current
         end,
@@ -19,14 +23,43 @@ local function fixture()
         flightCount = assert(loadfile(base .. "/lib/flight_count.lua"))(),
         verifiedFile = writer,
         armedConfig = assert(loadfile(base .. "/lib/armed_service.lua"))(),
-    }, operations)
+        getOutput = function(index)
+            assert(index == 31)
+            local result = {}
+            for key, value in pairs(state.channel) do
+                result[key] = value
+            end
+            return result
+        end,
+        setOutput = function(index, output)
+            assert(index == 31)
+            state.writes = state.writes + 1
+            -- luaModelSetOutput memclears the whole channel before applying keys.
+            -- EdgeTX 2.12 radio/src/lua/api_model.cpp: luaModelSetOutput.
+            state.channel =
+                { name = "", min = -1000, max = 1000, offset = 0, ppmCenter = 0, symetrical = 0, revert = 0 }
+            if not state.reject then
+                for key, value in pairs(output) do
+                    state.channel[key] = value
+                end
+            end
+        end,
+        isDisarmed = function()
+            return state.disarmed
+        end,
+        generateId = function()
+            return state.generate and state.generate() or state.id
+        end,
+    }
+    env.backend = sidecar.new("/WIDGETS/AeroGrid/", env, writer, operations)
+    local store = module.new("/WIDGETS/AeroGrid/", yaml, env, operations)
     return store, files, operations, function(value)
         current = value
-    end
+    end, state, env
 end
 
 local function path(filename)
-    return assert(module.path("/WIDGETS/AeroGrid/", filename or "plane.yml"))
+    return assert(sidecar.path("/WIDGETS/AeroGrid/", filename or "AGTEST"))
 end
 
 do
@@ -89,7 +122,7 @@ do
     assert(ok)
     count(1000, 1001)
     local saved, message = store:commit(prepared)
-    assert(not saved and string.find(message, "count changed", 1, true))
+    assert(not saved and string.find(message, "changed", 1, true))
     assert(store:load("plane.yml").flightCount == 1001, "a stale drawer cannot overwrite a newer count")
     ok, prepared = store:prepareCount("plane.yml", 1001, 1002)
     assert(ok)
@@ -144,15 +177,15 @@ do
 end
 
 do
-    assert(not module.path("/WIDGETS/AeroGrid/", nil))
-    assert(not module.path("/WIDGETS/AeroGrid/", ""))
-    assert(not module.path("/WIDGETS/AeroGrid/", " \n"))
-    assert(not module.path("/WIDGETS/AeroGrid/", "a\0b"))
-    local identities = { "plane.yml", "plane.yaml", "Plane.yml", "../plane.yml", "a/b", "a-b", "a.b", "a_b" }
+    for _, invalid in ipairs({ "", " \n", "a\0b", "agTEST", "AGABC", "AGABCDE", "../AGABCD", "AGab12", "AG12_3" }) do
+        assert(not sidecar.path("/WIDGETS/AeroGrid/", invalid))
+    end
+    assert(not sidecar.path("/WIDGETS/AeroGrid/", nil))
+    local identities = { "AGABCD", "AG1234", "AGZ0A9" }
     local seen = {}
     for _, filename in ipairs(identities) do
         local encoded = path(filename)
-        assert(not seen[encoded] and string.match(encoded, "/models/%x+%.yaml$"))
+        assert(not seen[encoded] and encoded == "/AEROGRID/models/" .. filename .. ".yaml")
         seen[encoded] = true
     end
 end
@@ -186,7 +219,8 @@ do
     files[path()] = assert(yaml.serialize({ version = 99, revision = 0, modelFilename = "plane.yml" }))
     assert(not store:load("plane.yml"))
     files[path()] = assert(yaml.serialize({ version = 1, revision = 0, modelFilename = "other.yml" }))
-    assert(not store:load("plane.yml"))
+    local loaded, info = store:load("plane.yml")
+    assert(loaded.modelFilename == "plane.yml" and info.foreign)
 end
 
 do
@@ -312,4 +346,276 @@ do
             "layout Save/Save As must not configure model flight settings"
         )
     end
+end
+
+do
+    local store, files, operations, _, state = fixture()
+    state.channel.name = ""
+    local original = {}
+    for key, value in pairs(state.channel) do
+        original[key] = value
+    end
+    local document, info = store:load("plane.yml")
+    assert(info.missing and document.revision == 0 and state.writes == 0 and next(files) == nil)
+    state.disarmed = false
+    local saved, message = store:save("plane.yml", 0, config.defaults())
+    assert(not saved and string.find(message, "Disarm", 1, true) and next(files) == nil and state.writes == 0)
+    state.disarmed = true
+    operations.inject("rename")
+    assert(not store:save("plane.yml", 0, config.defaults()))
+    assert(state.channel.name == "" and state.writes == 0)
+    operations.inject(nil)
+    local rename = operations.rename
+    operations.rename = function(from, to)
+        assert(state.channel.name == "", "record is installed before claiming CH32")
+        return rename(from, to)
+    end
+    assert(store:save("plane.yml", 0, config.defaults()))
+    assert(state.channel.name == "AGNEW1" and state.writes == 1 and files[path("AGNEW1")])
+    for key, value in pairs(original) do
+        assert(key == "name" or state.channel[key] == value, "CH32 field lost: " .. key)
+    end
+    assert(store:load("plane.yml").revision == 1)
+end
+
+do
+    local store, files, _, _, state = fixture()
+    state.channel.name = "MOTOR"
+    local document, info = store:load("plane.yml")
+    assert(document.revision == 0 and info.blocked and state.writes == 0 and next(files) == nil)
+    local saved, message = store:save("plane.yml", 0, config.defaults())
+    assert(not saved and string.find(message, "Clear the CH32 name", 1, true))
+    assert(state.channel.name == "MOTOR" and state.writes == 0)
+end
+
+do
+    local store, files, _, switch, state = fixture()
+    assert(store:save("plane.yml", 0, config.defaults(), "SFv"))
+    assert(state.writes == 0, "missing record with an existing AG ID needs no channel write")
+    local original = files[path()]
+    switch("copy.yml")
+    local document, info = store:load("copy.yml")
+    assert(info.foreign and document.modelFilename == "copy.yml" and document.revision == 1)
+    assert(files[path()] == original and state.writes == 0, "loading a copy must be read-only")
+    state.disarmed = false
+    local saved, message, deferred = store:adopt("copy.yml", document)
+    assert(not saved and deferred and string.find(message, "Disarm", 1, true))
+    assert(state.channel.name == "AGTEST" and files[path()] == original)
+    state.disarmed = true
+    assert(store:adopt("copy.yml", document))
+    assert(state.channel.name == "AGNEW1" and state.channel.min == -800 and state.channel.curve == 2)
+    assert(files[path()] == original and yaml.parse(files[path("AGNEW1")]).modelFilename == "copy.yml")
+    assert(store:adopt("copy.yml", document) and state.writes == 1, "adoption is idempotent")
+    assert(store:save("copy.yml", 1, config.defaults(), ""))
+    assert(yaml.parse(files[path()]).armed == "SFv" and yaml.parse(files[path("AGNEW1")]).armed == "")
+    switch("plane.yml")
+    state.channel.name = "AGTEST"
+    assert(store:load("plane.yml").armed == "SFv")
+end
+
+do
+    local store, files, operations, switch, state = fixture()
+    assert(store:save("plane.yml", 0, config.defaults()))
+    local original = files[path()]
+    switch("moved.yml")
+    local document = assert(store:load("moved.yml"))
+    operations.inject("write")
+    assert(not store:adopt("moved.yml", document))
+    assert(state.writes == 0 and files[path()] == original)
+    operations.inject(nil)
+    state.reject = true
+    local saved, message = store:adopt("moved.yml", document)
+    assert(not saved and string.find(message, "verify CH32", 1, true))
+    assert(files[path()] == original and files[path("AGNEW1")], "failed claim leaves only an orphan")
+    state.channel.name, state.reject, state.id = "AGTEST", false, "AGNEW2"
+    assert(store:adopt("moved.yml", document))
+    assert(state.channel.name == "AGNEW2" and files[path()] == original)
+end
+
+do
+    local store, files, _, _, state = fixture()
+    state.channel.name = ""
+    files[path("AGUSED")] = "occupied"
+    files[path("AGBAK1") .. ".bak"] = "occupied"
+    local candidates = { "AGUSED", "AGBAK1", "AGFREE" }
+    local index = 0
+    state.generate = function()
+        index = index + 1
+        return candidates[index]
+    end
+    assert(store:save("plane.yml", 0, config.defaults()))
+    assert(state.channel.name == "AGFREE" and index == 3)
+    state.channel.name = ""
+    state.generate = function()
+        return "../bad"
+    end
+    local saved, message = store:save("plane.yml", 0, config.defaults())
+    assert(not saved and string.find(message, "Invalid", 1, true) and state.writes == 1)
+    state.generate = function()
+        return "AGUSED"
+    end
+    saved, message = store:save("plane.yml", 0, config.defaults())
+    assert(not saved and string.find(message, "allocate", 1, true))
+end
+
+do
+    local store, files, operations, _, state, env = fixture()
+    local prepared, staged = store:prepare("plane.yml", 0, config.defaults())
+    assert(prepared)
+    state.channel.name = "AGELSE"
+    local saved, message = store:commit(staged)
+    assert(not saved and string.find(message, "CH32 name changed", 1, true) and next(files) == nil)
+    state.channel.name = "AGTEST"
+    local other = module.new("/WIDGETS/AeroGrid/", yaml, env, operations)
+    assert(other:save("plane.yml", 0, config.defaults()))
+    assert(not store:commit(staged), "separate instances share revision guards")
+    prepared, staged = store:prepare("plane.yml", 1, config.defaults())
+    assert(prepared)
+    operations.inject("read", function(filename)
+        if string.match(filename, "%.tmp$") then
+            state.channel.name = "OTHER"
+        end
+    end)
+    saved, message = store:commit(staged)
+    assert(not saved and string.find(message, "CH32 name changed", 1, true))
+    assert(yaml.parse(files[path()]).revision == 1 and state.writes == 0)
+end
+
+-- A model-local backend consumes the identical YAML document and needs no CH32,
+-- files, or adoption. Capability selection can change without changing callers.
+do
+    local _, _, operations, switch, _, env = fixture()
+    local text
+    env.backend = {
+        read = function(_, _, backup)
+            return not backup and text or nil, { missing = backup or text == nil, token = "local" }
+        end,
+        check = function()
+            return true
+        end,
+        write = function(_, _, serialized, _, guard)
+            local ok, message = guard()
+            if not ok then
+                return false, message
+            end
+            text = serialized
+            return true
+        end,
+    }
+    local store = module.new("/WIDGETS/AeroGrid/", yaml, env, operations)
+    assert(store:load("plane.yml").revision == 0)
+    assert(store:save("plane.yml", 0, config.defaults(), "!L01"))
+    assert(store:load("plane.yml").armed == "!L01" and yaml.parse(text).revision == 1)
+    assert(store:adopt("plane.yml", store:load("plane.yml")))
+    local ok, prepared = store:prepare("plane.yml", 1, config.defaults())
+    assert(ok and store:save("plane.yml", 1, config.defaults()))
+    assert(not store:commit(prepared))
+    switch("copy.yml")
+    local copied, info = store:load("copy.yml")
+    assert(copied.modelFilename == "copy.yml" and not info.foreign)
+    assert(store:adopt("copy.yml", copied), "model-local backends need no copy fork")
+    assert(store:save("copy.yml", 2, config.defaults()))
+    assert(yaml.parse(text).modelFilename == "copy.yml")
+end
+
+do
+    local _, files, operations, _, _, env = fixture()
+    local previousLoader, previousModel = loadScript, model
+    loadScript = function(filename)
+        return loadfile(base .. "/lib/" .. assert(string.match(filename, "/lib/([^/]+)$")))
+    end
+    model = {
+        getUserData = function()
+            error("unimplemented userData backend must not be selected")
+        end,
+        setUserData = function()
+            error("unimplemented userData backend must not be selected")
+        end,
+    }
+    env.backend = nil
+    local store = module.new("/WIDGETS/AeroGrid/", yaml, env, operations)
+    assert(store:save("plane.yml", 0, config.defaults()) and files[path()])
+    loadScript, model = previousLoader, previousModel
+end
+
+for _, failure in ipairs({ "armed", "channel", "model" }) do
+    local store, files, operations, switch, state = fixture()
+    state.channel.name = ""
+    operations.inject("read", function(filename)
+        if string.match(filename, "%.tmp$") then
+            if failure == "armed" then
+                state.disarmed = false
+            elseif failure == "channel" then
+                state.channel.name = "OTHER"
+            else
+                switch("other.yml")
+            end
+        end
+    end)
+    local saved, _, deferred = store:save("plane.yml", 0, config.defaults())
+    assert(not saved and state.writes == 0 and not files[path("AGNEW1")], failure)
+    assert(deferred == (failure == "armed"), failure)
+end
+
+do
+    local store, files, operations, switch, state = fixture()
+    assert(store:save("plane.yml", 0, config.defaults()))
+    switch("copy.yml")
+    local accepted, info = store:load("copy.yml")
+    state.channel.name = "AGELSE"
+    files[path("AGELSE")] = files[path()]
+    local saved, message = store:adopt("copy.yml", accepted, info)
+    assert(not saved and string.find(message, "CH32 name changed", 1, true) and state.writes == 0)
+    state.channel.name = "AGTEST"
+    assert(store:save("copy.yml", 1, config.defaults()), "saving a foreign draft also forks")
+    assert(state.channel.name == "AGNEW1" and yaml.parse(files[path()]).revision == 1)
+end
+
+for _, failure in ipairs({ "open", "write", "close", "read", "rename" }) do
+    local store, files, operations, _, state = fixture()
+    state.channel.name = ""
+    operations.inject(failure)
+    local saved, message = store:save("plane.yml", 0, config.defaults())
+    assert(not saved and type(message) == "string" and state.writes == 0, failure)
+    assert(state.channel.name == "" and state.channel.min == -800 and not files[path("AGNEW1")], failure)
+end
+
+do
+    local store, files = fixture()
+    assert(store:save("plane.yml", 0, config.defaults()))
+    local ok, prepared = store:prepare("plane.yml", 1, config.defaults())
+    assert(ok)
+    files[path()] = string.gsub(files[path()], "ch3", "ch4")
+    local saved, message = store:commit(prepared)
+    assert(not saved and string.find(message, "changed", 1, true), "guard even same-revision external edits")
+    assert(yaml.parse(files[path()]).flight.motorSource == "ch4")
+end
+
+do
+    local store, files, _, switch, state = fixture()
+    assert(store:save("plane.yml", 0, config.defaults()))
+    assert(store:save("plane.yml", 1, config.defaults()))
+    local backup = files[path() .. ".bak"]
+    files[path()] = "damaged"
+    switch("copy.yml")
+    local document, info = store:load("copy.yml")
+    assert(document.revision == 1 and info.recovered and info.foreign)
+    assert(store:adopt("copy.yml", document, info))
+    assert(state.channel.name == "AGNEW1" and files[path()] == "damaged" and files[path() .. ".bak"] == backup)
+end
+
+do
+    local store, files, _, _, state = fixture()
+    state.channel.name = ""
+    files["/AEROGRID/models/706c616e652e796d6c.yaml"] =
+        assert(yaml.serialize({ version = 1, modelFilename = "plane.yml", revision = 9 }))
+    local document, info = store:load("plane.yml")
+    assert(document.revision == 0 and info.missing and state.writes == 0, "legacy dev records are not imported")
+end
+
+do
+    local store, _, _, _, state = fixture()
+    state.channel.name, state.channel.curve = "", nil
+    assert(store:save("plane.yml", 0, config.defaults()))
+    assert(state.channel.curve == nil, "claiming an ID must not assign an unconfigured output curve")
 end

@@ -46,7 +46,7 @@ class CaptureRecipeTests(unittest.TestCase):
                     self.assertNotIn("session", layout)
                     self.assertTrue(all(entry["config"]["armSwitch"] == "SFv" for entry in layout["panels"]))
                     self.assertEqual(layout["legacyFlightArms"], {"capture": "SFv"})
-                    settings = sd / "AEROGRID/models" / ("model1.yml".encode().hex() + ".yaml")
+                    settings = sd / "AEROGRID/models/AGCAP1.yaml"
                     document = yaml.safe_load(settings.read_text())
                     self.assertEqual(document["modelFilename"], "model1.yml")
                     self.assertEqual(document["flight"]["disarmDuration"], 3)
@@ -60,6 +60,7 @@ class CaptureRecipeTests(unittest.TestCase):
                 radio = yaml.safe_load((sd / "RADIO/radio.yml").read_text())
                 self.assertEqual(radio["currModelFilename"], "model1.yml")
                 model = yaml.safe_load((sd / "MODELS/model1.yml").read_text())
+                self.assertEqual(model["limitData"][31]["name"], "AGCAP1")
                 self.assertEqual(len(model["screenData"]), 1)
                 names = (sd / "AEROGRID/layout-registry.txt").read_text().splitlines()
                 position = model["screenData"][0]["layoutData"]["zones"][0]["widgetData"]["options"][0]["value"]["unsignedValue"]
@@ -82,7 +83,7 @@ class CaptureRecipeTests(unittest.TestCase):
                 self.assertEqual(names[options[0]["value"]["unsignedValue"] - 1], "Default")
                 self.assertEqual(options[1]["value"]["unsignedValue"], 1)
                 if scene in capture.PANEL_SETTINGS_SCENES or scene == "chart-metric-entry":
-                    settings = sd / "AEROGRID/models" / ("model1.yml".encode().hex() + ".yaml")
+                    settings = sd / "AEROGRID/models/AGCAP1.yaml"
                     document = yaml.safe_load(settings.read_text())
                     self.assertEqual(document["armed"], "SFv", "drawer examples must use model-wide arming")
                 if scene == "model-settings":
