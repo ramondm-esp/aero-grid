@@ -35,6 +35,7 @@
 ---@field background? fun(instance: any, creating: boolean, slots: integer) While the dashboard is hidden. A fixed one-slot task unless `backgroundMinCost` is declared.
 ---@field backgroundMinCost? integer Makes background a variable-cost task with this minimum grant, 1 to 8; an instance may override it. It then reports consumed slots as a third result.
 ---@field resetSession? fun(instance: any, now: integer) Second result true requests another reset turn.
+---@field rebindArming? fun(instance: any, services: table) Reconnect arming-dependent subscriptions without replacing native objects.
 ---@field event? fun(instance: any, event: any): boolean
 ---@field destroy? fun(instance: any)
 
@@ -54,7 +55,7 @@ panelHost.API_VERSION = 1
 
 --- Optional lifecycle callbacks, in a fixed order so errors stay deterministic.
 local OPTIONAL_CALLBACKS =
-    { "update", "refresh", "finish", "finishPending", "background", "resetSession", "event", "destroy" }
+    { "update", "refresh", "finish", "finishPending", "background", "resetSession", "rebindArming", "event", "destroy" }
 
 --- Restrict module identifiers to the same path-safe characters as layout types.
 ---@param value any

@@ -188,27 +188,16 @@ function module.new(dependencies)
         return true
     end
 
-    --- Rebuild one fullscreen-built panel for App mode, over two callbacks.
+    --- Replace one fullscreen-built panel for App mode in bounded steps.
     --- EdgeTX 2.12 only makes Lua boxes touch-transparent when constructing them
     --- outside fullscreen, so such a panel would swallow the widget's long press.
-    --- The retire and build steps are split because a cleared container sweeps
-    --- objects created in it during the same callback.
+    --- Keep its native contents visible until a fresh container replaces it.
     ---@param context AeroGridContext
     local function advanceAppRebuild(context)
         local job = context.appRebuild
         local entry = job.entry
         if not job.retired then
             job.retired = true
-            local ok, destroyError = context.panelHost.dispatch(entry, "destroy")
-            if not ok and destroyError then
-                addError(context, entry.placement.id .. ": destroy: " .. destroyError)
-            end
-            entry.container:clear()
-            lvgl.hide(entry.container)
-            local fullscreenContainers = context.fullscreenContainers
-            if not (fullscreenContainers and fullscreenContainers[entry.container]) then
-                job.container = entry.container
-            end
             for index, current in ipairs(context.panels) do
                 if current == entry then
                     table.remove(context.panels, index)
@@ -218,21 +207,53 @@ function module.new(dependencies)
             end
             return
         end
-        context.appRebuild = nil
-        local rebuilt = buildPanel(context, entry.placement, job.container)
-        if rebuilt then
-            table.remove(context.panels)
-            table.insert(context.panels, math.min(job.index, #context.panels + 1), rebuilt)
+        if not job.built then
+            local rebuilt = buildPanel(context, entry.placement)
+            if rebuilt then
+                table.remove(context.panels)
+                table.insert(context.panels, math.min(job.index, #context.panels + 1), rebuilt)
+            end
+            job.built = true
+            return
         end
+        context.appRebuild = nil
+        local ok, destroyError = context.panelHost.dispatch(entry, "destroy")
+        if not ok and destroyError then
+            addError(context, entry.placement.id .. ": destroy: " .. destroyError)
+        end
+        entry.container:clear()
+        lvgl.hide(entry.container)
         showErrors(context)
     end
 
     local function retirePage(context)
+        context.editorRestore = nil
+        context.editorPreviewContainers = nil
+        context.editorPreviewChanged = nil
         context.locationDetails = nil
         context.locationOverlay = nil
         context.logViewer = nil
         context.logOverlay = nil
-        dispatchAll(context, "destroy")
+        local leavingFullscreen = not isFullScreen()
+        if
+            not context.retainedPage
+            and not (context.nativeDialogsCreated and leavingFullscreen)
+            and (
+                context.retainForReload
+                or leavingFullscreen and (context.rootBuiltFullscreen or context.pageBuiltFullscreen)
+            )
+        then
+            context.retainedPage = {
+                root = leavingFullscreen and context.rootBuiltFullscreen and context.root or nil,
+                page = context.page,
+                panels = context.panels,
+                index = 1,
+            }
+        end
+        local retained = context.retainedPage
+        if not retained or retained.panels ~= context.panels then
+            dispatchAll(context, "destroy")
+        end
 
         -- Discard the whole page. EdgeTX collects the clear whenever it next runs
         -- callRefs, which is not guaranteed to be this callback: it is skipped
@@ -253,15 +274,20 @@ function module.new(dependencies)
             context.root = nil
             context.nativeDialogsCreated = nil
         elseif context.rootBuiltFullscreen and not isFullScreen() then
-            context.root:clear()
-            lvgl.hide(context.root)
+            if not retained or retained.root ~= context.root then
+                context.root:clear()
+                lvgl.hide(context.root)
+            end
             context.root = nil
         elseif context.page then
-            context.page:clear()
-            lvgl.hide(context.page)
+            if not retained or retained.page ~= context.page then
+                context.page:clear()
+                lvgl.hide(context.page)
+            end
         end
         context.fullscreenContainers = nil
         context.appRebuild = nil
+        context.retainForReload = nil
 
         context.page = nil
         context.canvas = nil
@@ -286,6 +312,9 @@ function module.new(dependencies)
             h = context.zone.h,
         })
         context.pageBuiltFullscreen = isFullScreen()
+        if context.retainedPage then
+            lvgl.hide(context.page)
+        end
         context.canvas = lvgl.rectangle(context.page, {
             x = 0,
             y = 0,

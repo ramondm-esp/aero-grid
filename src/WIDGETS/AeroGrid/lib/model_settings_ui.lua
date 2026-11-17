@@ -66,7 +66,6 @@ end
 local function active(context, state)
     return context.modelSettingsUi == state
         and state.dialog ~= nil
-        and not state.pending
         and (not state.handlers.modelFilename or state.handlers.modelFilename() == state.modelFilename)
         and (not state.handlers.fullscreen or state.handlers.fullscreen())
 end
@@ -85,7 +84,7 @@ function ui.close(context)
 end
 
 local function queue(context, state, action)
-    if active(context, state) then
+    if not state.pending and active(context, state) then
         state.pending = action
         return true
     end

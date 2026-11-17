@@ -155,6 +155,11 @@ end
 flightCounter.refresh = tick
 flightCounter.background = tick
 
+function flightCounter.rebindArming(context, services)
+    context.arm = services.armed:state(context.settings.armSwitch)
+    context.lastTick = nil
+end
+
 function flightCounter.update(context, rect)
     local area = flightCounter.regionsFor(context.theme, context.themeBuilder, rect, context.fonts, context.digits)
     context.primitives.resizeHeader(context, rect, area.frame, context.settings.label)

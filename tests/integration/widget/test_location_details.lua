@@ -6,6 +6,11 @@ fixture.reset()
 local definition = fixture.module("main.lua")
 local context = fixture.createLoaded(nil, { Layout = "review-navigation", Theme = "modern-dark" })
 fixture.pump(context, 40)
+local originalPage, originalRuntime = context.page, context.serviceRuntime
+local originalPanels = {}
+for index, entry in ipairs(context.panels) do
+    originalPanels[index] = entry.instance
+end
 
 EVT_TOUCH_FIRST = 9101
 EVT_TOUCH_SLIDE = 9102
@@ -145,6 +150,20 @@ fixture.lvglMock.setFullScreen(false)
 input(nil)
 assert(not context.locationDetails, "leaving fullscreen must dismiss the overlay")
 fixture.pump(context, 50)
-assert(not context.locationOverlay, "page retirement must drop the overlay reference")
+assert(context.locationOverlay == overlay and overlay.hidden, "only the location overlay is retired")
+assert(overlay.properties.w == 0 and overlay.properties.h == 0, "a closed overlay cannot intercept App-mode touches")
+assert(context.page == originalPage and not originalPage.cleared, "location details must not force a dashboard reload")
+assert(context.serviceRuntime == originalRuntime, "location details preserve services and recordings")
+for index, instance in ipairs(originalPanels) do
+    assert(context.panels[index].instance == instance, "location details preserve native panel instances")
+end
+fixture.lvglMock.setFullScreen(true)
+fixture.pump(context, 20)
+tap()
+assert(context.locationDetails)
+input(EVT_VIRTUAL_EXIT)
+fixture.lvglMock.setFullScreen(false)
+fixture.pump(context, 50)
+assert(context.page == originalPage, "closing location details before App mode must not reload the dashboard")
 assert(#context.errors == 0, table.concat(context.errors, "\n"))
 print("Navigation location detail interaction tests passed")

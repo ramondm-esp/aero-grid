@@ -1015,8 +1015,18 @@ equal(context.page, appPage, "content save does not reload in fullscreen")
 equal(context.panels[1].instance.label.properties.text, "NEW", "content save keeps the edited preview")
 equal(context.panels[1].builtFullscreen, true, "edited preview is marked as built in fullscreen")
 local previewInstance = context.panels[1].instance
+local previewContainer = context.panels[1].container
 widget.lvglMock.setFullScreen(false)
-widget.pump(context, 40)
+for _ = 1, 40 do
+    widget.pump(context, 1)
+    local oldVisible = not previewContainer.hidden and not previewInstance.label.invalid
+    local replacement = context.panels[1]
+    local newVisible = replacement
+        and replacement.instance ~= previewInstance
+        and not replacement.container.hidden
+        and not replacement.instance.label.invalid
+    assert(oldVisible or newVisible, "a fullscreen-built panel stays visible until its App replacement is ready")
+end
 equal(context.reloadState, nil, "App exit does not reload the dashboard")
 equal(context.page, appPage, "App exit keeps the page")
 equal(context.root, appRoot, "App exit keeps the root")
@@ -1216,7 +1226,8 @@ equal(context.editorUi.previewError, nil, "corrected settings clear the preview 
 equal(context.editorUi.statusLabel.hidden, true, "corrected preview hides its old error")
 equal(context.panels[1].container, container, "corrected preview reuses the retired container")
 context.editorUi.handlers.close(false)
-equal(context.reloadState, "clear", "discarding content previews reloads original layout")
+equal(context.reloadState, nil, "discarding content previews does not reload the dashboard")
+assert(context.editorRestore, "discarding content previews queues selective restoration")
 for _ = 1, 70 do
     refresh()
 end
@@ -1541,6 +1552,9 @@ equal(context.document.panels[1].config.metrics[1].label, "ALT", "Discard keeps 
 os.remove(path .. "AEROGRID/layouts/" .. model.getInfo().name .. "1.yaml")
 open()
 changeFirstLabel("COPY")
+context.editorUi.previewPending = true
+settleDrawer()
+local saveAsPage, saveAsServices = context.page, context.serviceRuntime
 exitWith("Save as...")
 state = context.editorUi
 equal(state.mode, "name", "Save As asks for a name")
@@ -1599,6 +1613,8 @@ for _ = 1, 70 do
 end
 equal(context.document.panels[1].config.metrics[1].label, "ALT", "this dashboard keeps its committed layout")
 equal(context.layoutName, "edit-sparse", "this dashboard keeps its layout name")
+equal(context.page, saveAsPage, "Save As restores the committed content without reloading the dashboard")
+equal(context.serviceRuntime, saveAsServices, "Save As preserves live services")
 
 open()
 changeFirstLabel("AGAIN")

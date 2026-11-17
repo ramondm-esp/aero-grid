@@ -72,6 +72,7 @@ local function measured(callback, context, draining)
                 )
                 and not context.optionsRequest
                 and not context.editorTransitionRequest
+                and not context.modelArmingReload
                 and not (context.modelSettingsUi and (context.modelSettingsUi.pending or context.modelSettingsUi.closing))
                 and not (
                     context.uiRequest
@@ -86,7 +87,12 @@ local function measured(callback, context, draining)
 end
 local function finish(context)
     for _ = 1, 300 do
-        if not context.optionsRequest and not context.stage and not context.reloadState then
+        if
+            not context.optionsRequest
+            and not context.stage
+            and not context.reloadState
+            and not context.modelArmingReload
+        then
             equal(#context.errors, 0, table.concat(context.errors, "\n"))
             return context
         end
@@ -136,6 +142,16 @@ assert(first.serviceRuntime.byId.armed == armed, "closing unchanged settings doe
 
 local function save(context, index)
     local dialog = open(context)
+    local original = {}
+    for _, host in ipairs({ first, second }) do
+        local panels = {}
+        if not host.editorUi then
+            for position, panel in ipairs(host.panels) do
+                panels[position] = panel.instance
+            end
+        end
+        original[host] = { page = host.page, root = host.root, panels = panels }
+    end
     dialog.controls.armed.properties.set(index)
     measured(definition.refresh, context)
     if index ~= 0 then
@@ -147,6 +163,15 @@ local function save(context, index)
     finish(first)
     finish(second)
     pump(first, second)
+    for host, previous in pairs(original) do
+        equal(host.page, previous.page, "arming changes keep the dashboard page")
+        equal(host.root, previous.root, "arming changes keep the dashboard root")
+        assert(not previous.page.cleared and not previous.page.hidden, "arming changes never blank the dashboard")
+        for position, instance in ipairs(previous.panels) do
+            equal(host.panels[position].instance, instance, "arming changes keep native panel instances")
+        end
+        equal(#host.serviceRuntime.byId.telemetry.observers, 1, "old history services must stop observing telemetry")
+    end
 end
 save(first, getSwitchIndex("L64"))
 local owner = first.flightBroker

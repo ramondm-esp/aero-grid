@@ -155,6 +155,7 @@ Put a module at `panels/<type>.lua`, with an `id` matching that layout type.
 | `update(instance, rect, settings, detailsOnly, placement)` | Reflow/configuration update; host reflows and editor resizes pass placement as the fifth argument. |
 | `background(instance, creating, slots)` | Hidden-dashboard work; variable-cost when `backgroundMinCost` is declared, otherwise one slot. Returns an ignored first result, continuation, and consumed slots. |
 | `resetSession(instance, now)` | Reset session state; second result true requests another bounded reset turn. |
+| `rebindArming(instance, services)` | Reconnect arming-dependent subscriptions after a model arm-switch change, keeping existing native objects. Receives the service registry's `byId` table. |
 | `event(instance, event)` | Return true when consumed. |
 | `destroy(instance)` | Release panel-owned references. |
 | `validateSettings(settings, span, config, modelArmed)` | Cross-field or span-dependent validation, with the effective model arm condition. |

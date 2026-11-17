@@ -243,6 +243,16 @@ function telemetryService:observe(observer)
     self.observers[#self.observers + 1] = observer
 end
 
+function telemetryService:unobserve(observer)
+    for index, existing in ipairs(self.observers or {}) do
+        if existing == observer then
+            table.remove(self.observers, index)
+            return
+        end
+    end
+    error("telemetry observer is not registered")
+end
+
 --- Resolve a source name to its EdgeTX id, unit, and value shape.
 ---@param entry table
 ---@param now integer

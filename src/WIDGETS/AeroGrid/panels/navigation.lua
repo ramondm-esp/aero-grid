@@ -985,6 +985,14 @@ function navigation.refresh(context)
     end
 end
 
+function navigation.rebindArming(context, services)
+    if context.service then
+        context.service = services.navigation
+        context.feed =
+            context.service:subscribe(context.settings.source, context.settings.armSwitch, context.settings.homeMode)
+    end
+end
+
 --- Reposition after a zone change.
 ---@param context AeroGridNavigationContext
 ---@param rect AeroGridRect

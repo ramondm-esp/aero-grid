@@ -6,6 +6,7 @@ function details.close(context)
     if context.locationOverlay then
         context.locationOverlay:clear()
         lvgl.hide(context.locationOverlay)
+        context.locationOverlay:set({ w = 0, h = 0 })
     end
     context.locationDetails = nil
     context.touchTapHandled = true
@@ -33,7 +34,6 @@ function details.open(context, view, accent)
     if not overlay then
         overlay = lvgl.box(context.page, { x = 0, y = 0, w = width, h = height })
         context.locationOverlay = overlay
-        context.pageBuiltFullscreen = true
     end
     overlay:set({ w = width, h = height })
     lvgl.show(overlay)

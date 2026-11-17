@@ -64,12 +64,7 @@ function module.new(dependencies)
         return true
     end
 
-    local function restorePreview(context)
-        if context.editorPreviewChanged then
-            context.editorPreviewChanged = nil
-            context.reloadState = "clear"
-            return
-        end
+    local function finishRestoration(context)
         local restored, restoreError = previewLayout(context, context.document)
         if not restored then
             addError(context, restoreError)
@@ -197,7 +192,7 @@ function module.new(dependencies)
         return true
     end
 
-    local function startPanelPreview(context, document)
+    local function startPanelPreview(context, document, preview)
         local placements, existing, actions = {}, {}, {}
         for _, placement in ipairs(document.panels) do
             placements[placement.id] = placement
@@ -205,11 +200,25 @@ function module.new(dependencies)
         for _, entry in ipairs(context.panels) do
             local placement = placements[entry.placement.id]
             existing[entry.placement.id] = true
-            if
-                not placement
+            local changed = not placement
                 or placement.type ~= entry.placement.type
                 or not sameConfig(placement.config, entry.placement.config)
-            then
+            if not changed and preview == false then
+                changed = entry.failed or type(entry.instance) == "table" and entry.instance.preview == true
+                if
+                    not changed
+                    and (entry.placement.colSpan ~= placement.colSpan or entry.placement.rowSpan ~= placement.rowSpan)
+                then
+                    local resolved, warnings = context.panelHost.resolveSettings(
+                        entry.module,
+                        placement.config,
+                        { colSpan = placement.colSpan, rowSpan = placement.rowSpan },
+                        context.modelArmed
+                    )
+                    changed = #warnings > 0 or not sameConfig(resolved, entry.settings)
+                end
+            end
+            if changed then
                 actions[#actions + 1] = { entry = entry, placement = placement }
             end
         end
@@ -218,7 +227,7 @@ function module.new(dependencies)
                 actions[#actions + 1] = { placement = placement }
             end
         end
-        return { actions = actions, index = 1 }
+        return { actions = actions, index = 1, preview = preview ~= false }
     end
 
     local function advancePanelPreview(context, job)
@@ -237,7 +246,9 @@ function module.new(dependencies)
             return false
         end
         if not action.retired then
-            context.editorPreviewChanged = true
+            if job.preview then
+                context.editorPreviewChanged = true
+            end
             local entry = action.entry
             if entry then
                 -- Retire callbacks before rebuilding, in a separate foreground callback.
@@ -264,8 +275,8 @@ function module.new(dependencies)
         end
         local pool = context.editorPreviewContainers or {}
         local container = table.remove(pool)
-        local placement = context.editorModule.clone(action.placement)
-        local entry, buildError, failedContainer = buildPanel(context, placement, container, true)
+        local placement = job.preview and context.editorModule.clone(action.placement) or action.placement
+        local entry, buildError, failedContainer = buildPanel(context, placement, container, job.preview)
         if not entry then
             if failedContainer or container then
                 context.editorPreviewContainers = pool
@@ -281,11 +292,57 @@ function module.new(dependencies)
         return false
     end
 
+    local function restorePreview(context)
+        if context.editorRestore then
+            return
+        end
+        if context.editorPreviewChanged then
+            context.editorPreviewChanged = nil
+            context.editorRestore = startPanelPreview(context, context.document, false)
+        else
+            finishRestoration(context)
+        end
+    end
+
+    local function advanceRestore(context)
+        local job = context.editorRestore
+        local done, restoreError = advancePanelPreview(context, job)
+        if restoreError then
+            addError(context, "editor restore: " .. restoreError)
+            showErrors(context)
+            job.index = job.index + 1
+            return
+        end
+        if not done then
+            return
+        end
+        finishRestoration(context)
+        local entries, ordered = {}, {}
+        for _, entry in ipairs(context.panels) do
+            entries[entry.placement.id] = entry
+        end
+        for _, placement in ipairs(context.document.panels) do
+            local entry = entries[placement.id]
+            if entry then
+                ordered[#ordered + 1] = entry
+            end
+        end
+        context.panels = ordered
+        context.editorRestore = nil
+        updateEmptyHint(context)
+    end
+
     --- Enter the editor while preserving the current dashboard until saving succeeds.
     ---@param context AeroGridContext
     ---@return boolean opened
     local function openEditor(context)
-        if not isFullScreen() or context.stage or context.reloadState or not context.document then
+        if
+            not isFullScreen()
+            or context.stage
+            or context.reloadState
+            or context.editorRestore
+            or not context.document
+        then
             return false
         end
         local runtimeApi = context.packageInfo and context.packageInfo.runtimeApi or 1
@@ -456,7 +513,6 @@ function module.new(dependencies)
                     restorePreview(context)
                 end
                 context.editorSession = nil
-                context.editorPreviewContainers = nil
                 if saved then
                     context.editorPreviewChanged = nil
                     if not adoptSavedLayout(context, context.editorSavedDocument) then
@@ -493,7 +549,6 @@ function module.new(dependencies)
             else
                 context.editorUiModule.close(context, true)
                 restorePreview(context)
-                context.editorPreviewContainers = nil
                 context.editorSession = nil
                 addError(context, "editor UI: " .. tostring(advanceError))
                 showErrors(context)
@@ -511,6 +566,7 @@ function module.new(dependencies)
             not isFullScreen()
             or context.stage
             or context.reloadState
+            or context.editorRestore
             or context.editorUi
             or context.runtimeFailed
             or not context.document
@@ -546,6 +602,7 @@ function module.new(dependencies)
 
     return {
         restorePreview = restorePreview,
+        advanceRestore = advanceRestore,
         openEditor = openEditor,
         advanceEditor = advanceEditor,
         editorEntryHit = editorEntryHit,

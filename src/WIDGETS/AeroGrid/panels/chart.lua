@@ -2612,6 +2612,16 @@ local function notEditing()
     return false
 end
 
+local function subscribeHistory(context, entry)
+    return context.history:subscribe(entry.source, {
+        armSwitch = context.settings.armSwitch,
+        windowSeconds = timeWindow(context.settings) / 100,
+        timeRange = "growing",
+        smoothing = context.settings.smoothing or "off",
+        precision = entry.precision,
+    })
+end
+
 function chart.create(parent, rect, settings, services)
     local warnings = chart.validateSettings(settings, nil, nil, services.host and services.host.modelArmed)
     assert(#warnings == 0, table.concat(warnings, "; "))
@@ -2666,13 +2676,7 @@ function chart.create(parent, rect, settings, services)
             caption = string.upper(caption(entry)),
         }
         if context.history then
-            item.feed = context.history:subscribe(entry.source, {
-                armSwitch = settings.armSwitch,
-                windowSeconds = timeWindow(settings) / 100,
-                timeRange = "growing",
-                smoothing = settings.smoothing or "off",
-                precision = entry.precision,
-            })
+            item.feed = subscribeHistory(context, entry)
             if context.preview then
                 context.previewMissing = context.previewMissing or item.feed.previewMissing
             end
@@ -2801,6 +2805,31 @@ function chart.destroy(context)
         end
         context.columnConsumers = nil
     end
+end
+
+function chart.rebindArming(context, services)
+    if not context.history then
+        return
+    end
+    chart.destroy(context)
+    local hidden = context.auto and context.auto.hidden
+    if hidden then
+        if hidden.columnRenderer then
+            hidden.columnRenderer:destroy()
+        end
+        hidden.layerHost:clear()
+        lvgl.hide(hidden.layerHost)
+    end
+    context.auto, context.resetWork = nil, nil
+    resetPresentation(context, 0)
+    context.history = services.history
+    context.session = context.history:session(context.settings.armSwitch)
+    for _, item in ipairs(context.series) do
+        item.feed = subscribeHistory(context, item.settings)
+    end
+    context.columnSetup, context.columnSetupIndex = context.columnModule, nil
+    context.columnsReadonly, context.frameThrough = nil, nil
+    context.window, context.start, context.pixelStart = timeWindow(context.settings), 0, 0
 end
 
 return chart

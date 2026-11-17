@@ -87,8 +87,11 @@ context.modelArmingReload = true
 context.sessionResetPending = true
 definition.background(context)
 assert(closed == 2 and restored == 2 and context.editorStash == draft)
-assert(not context.modelArmingReload and context.sessionResetPending, "suspension precedes session reset")
-context.sessionResetPending, context.editorStash = nil, nil
+assert(
+    context.modelArmingReload and context.sessionResetPending,
+    "suspension precedes arming rebinding and session reset"
+)
+context.modelArmingReload, context.sessionResetPending, context.editorStash = nil, nil, nil
 
 context.editorTransitionRequest = "open"
 fixture.lvglMock.setFullScreen(false)
