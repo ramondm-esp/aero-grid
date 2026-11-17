@@ -1558,11 +1558,11 @@ local function pumpFlight(task, now, granted)
         closeDashboard(context)
         return nil, true
     end
-    if owner.settingsAdoption and owner:settingsDisarmed() then
+    local adoption = owner.settingsAdoption
+    if adoption and owner:settingsDisarmed() then
         if granted < context.scheduler.budget.slots then
             return nil, true
         end
-        local adoption = owner.settingsAdoption
         local saved, result, deferred = owner.store:adopt(filename, adoption.document, adoption.info)
         if saved then
             owner.settingsAdoption = nil

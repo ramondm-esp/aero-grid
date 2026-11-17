@@ -136,7 +136,7 @@ function storeModule.new(widgetPath, yaml, env, fileOps)
         if not validIdentity(filename) then
             return nil, "Model filename unavailable; reload the model before saving settings"
         end
-        local errors, found, firstInfo, firstContent = {}, false
+        local errors, found, firstInfo, firstContent = {}, false, nil, nil
         for _, backup in ipairs({ false, true }) do
             local content, info, readError = backend:read(filename, backup)
             if type(info) ~= "table" then

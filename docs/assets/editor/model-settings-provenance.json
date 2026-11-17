@@ -1,5 +1,5 @@
 {
-  "revision": "59012c033a3ca1beb314e78733c0e336cb2eb1b9",
+  "revision": "271e9afebd5201f7992d6893647fda7548638465",
   "simulator": "/Applications/EdgeTX Companion 2.12.app/Contents/Resources/libedgetx-tx16s-simulator.dylib",
   "simulator_sha256": "7ca1e6982909b2c22a6c8d306cb4ffd84929374251ec4ba8bb917bf4b7809acc",
   "source_sha256": {
@@ -63,7 +63,7 @@
     "src/WIDGETS/AeroGrid/lib/log_viewer.lua": "087b29df1ea8f6fdfe9a992c3b5c07bce4ed358cf132928dd40a4b748dc1573d",
     "src/WIDGETS/AeroGrid/lib/model_service.lua": "19178f324eabdcc27d1871f61d109c823835986ca34b0cfff2a0d6576288e6f1",
     "src/WIDGETS/AeroGrid/lib/model_settings_sidecar.lua": "be44888de1f347ba0fa030a21634e0b41a29fdab9430859d75caeea4472786d8",
-    "src/WIDGETS/AeroGrid/lib/model_settings_store.lua": "be29e628cfe780386507543cdd886661c57cfe26b2a83e8425b621c0a3ce6d95",
+    "src/WIDGETS/AeroGrid/lib/model_settings_store.lua": "0fc848dc0446e1f681bc58d61e323eea6154da6bb36a015dc486f982dd305110",
     "src/WIDGETS/AeroGrid/lib/model_settings_ui.lua": "ad54605b3385ac1f8b55a48586cc3c55fd991f41ce0f74138206d532d236f439",
     "src/WIDGETS/AeroGrid/lib/name_registry.lua": "0c9f070cdcb814d18b6f9969e2b781741667e648bdf2fb9b815e29a65fc2ce73",
     "src/WIDGETS/AeroGrid/lib/native_budget.lua": "55d1beacd7254c9675117e64b2b60898f47c1eec1333af29694682f1f91e961f",
@@ -83,7 +83,7 @@
     "src/WIDGETS/AeroGrid/lib/typography.lua": "e66c8d96f4f24d4af7059a102b34d782cebe4429281b4a7a2d7c2363d77f51ec",
     "src/WIDGETS/AeroGrid/lib/verified_file.lua": "1b1247f21536cb50921ee0bcaefb21350b4fc455d948fb3f7919b131eadb5ff3",
     "src/WIDGETS/AeroGrid/lib/yaml.lua": "ca43da83a622cd519466577f716b73a38bac587b04ef86e340db7ce97ce5c69a",
-    "src/WIDGETS/AeroGrid/main.lua": "439db2f1a597b93dd3e15d7e18465b9eeee1f23a7deaaf8e7426bf4ce0c6b713",
+    "src/WIDGETS/AeroGrid/main.lua": "e19dd86c40f9d7743cef320512e2ece21b09349e1215ba0f5be893688badf4f6",
     "src/WIDGETS/AeroGrid/panels/chart.lua": "dafbbc72915d0efd6db9262b44fad5bed1eabe196add6b70f6c720bfe9f59302",
     "src/WIDGETS/AeroGrid/panels/flight-counter.lua": "ba2f01d30b4a184ad9a362d61bba22cd3ecdfdddc52aa270a32aeb82e05c674d",
     "src/WIDGETS/AeroGrid/panels/flight-mode.lua": "5e1c903cbeb9445238924cf2b5c1f96f4317c0561c68fe386d29d1c8491ebd61",
