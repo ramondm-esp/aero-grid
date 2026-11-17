@@ -72,7 +72,11 @@ assertions.assertEqual(link.linkLabel.properties.color, battery.packLabel.proper
 radio.globals[8] = 40
 radio.globals[0] = 65
 fixture.pump(context, 40)
-assertions.assertEqual(fixture.instanceOf(context, "flight-count").text, "40")
+assertions.assertEqual(
+    fixture.instanceOf(context, "flight-count").text,
+    "39",
+    "internal counts ignore later GV changes"
+)
 assertions.assertEqual(fixture.instanceOf(context, "expo").text, "65")
 
 local corner = fixture.createLoaded(fixture.lvglMock.appZone(), { Layout = "Default", Theme = "modern-dark" })

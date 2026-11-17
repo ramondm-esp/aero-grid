@@ -112,12 +112,14 @@ local function fixture(cadence)
             assert(not radio.failControl, "control reader failed")
             return radio.arms[index]
         end,
-        getGlobalVariable = function()
+        getGlobalVariable = function(index)
+            if radio.external then
+                return radio.external[index]
+            end
             return radio.count
         end,
-        setGlobalVariable = function(_, _, value)
-            radio.count, radio.writes = value, radio.writes + 1
-            assert(not radio.failCount, "uncertain count persistence")
+        setGlobalVariable = function()
+            error("AeroGrid must never write a global variable")
         end,
         getGlobalVariableDetails = function()
             return { min = 0, max = 999, prec = 0 }
@@ -145,6 +147,7 @@ local function fixture(cadence)
             if radio.full then
                 return true
             end
+
             equal(index, 19)
             radio.commands[#radio.commands + 1] = value
             radio.sticky = value
@@ -152,6 +155,28 @@ local function fixture(cadence)
         end,
     }
     local owner = detector.newBroker(env, support, modules, config)
+    local publish = owner.setDocument
+    function owner:setDocument(document)
+        document.flightCount = document.flightCount or radio.count
+        return publish(self, document)
+    end
+    owner.store = {
+        counter = load("lib/flight_count.lua"),
+        prepareCount = function(_, _, previous, value)
+            return true, { baseRevision = owner.document.revision, value = value }
+        end,
+        commit = function(_, prepared)
+            radio.count, radio.writes = prepared.value, radio.writes + 1
+            assert(not radio.failCount, "uncertain count persistence")
+            return true,
+                {
+                    revision = owner.document.revision,
+                    flight = owner.document.flight,
+                    sessionReset = owner.document.sessionReset,
+                    flightCount = prepared.value,
+                }
+        end,
+    }
     owner:reset(radio.filename)
     local settings =
         config.resolve({ minFlightDuration = 1, disarmDuration = 1, announcements = true, flightSwitch = "L20" })
@@ -173,6 +198,41 @@ local function fixture(cadence)
         end
     end
     return owner, radio, step, first, second, participant
+end
+
+do
+    local owner, radio, step = fixture()
+    radio.external = { [7] = 2, [8] = 501 }
+    local values = config.resolve(owner.document.flight)
+    values.countSource = "gv9"
+    owner:setDocument({ revision = 2, flight = values })
+    step(3)
+    equal(owner.view.displayCount, 501)
+    radio.arms[1] = true
+    step(20)
+    equal(owner.view.count, 40)
+    equal(owner.view.displayCount, 501, "external display never stops internal counting")
+    local session = owner.session
+    values = config.resolve(values)
+    values.countSource = "gv8gv9"
+    owner:setDocument({ revision = 3, flight = values })
+    step(3)
+    equal(owner.session, session)
+    equal(owner.readyAfterDisarm, nil, "display changes do not inhibit the detector")
+    equal(owner.view.displayCount, 2501)
+    owner.env.getGlobalVariableDetails = function()
+        return { prec = 1 }
+    end
+    step(3)
+    equal(owner.view.countAvailable, false)
+    assert(owner.view.sourceError and not owner.view.countError)
+    radio.arms[1] = false
+    step(15)
+    radio.arms[1] = true
+    step(20)
+    equal(owner.view.count, 41, "invalid external data must not block internal counting")
+    equal(radio.external[8], 501)
+    equal(radio.external[7], 2)
 end
 
 do

@@ -151,8 +151,7 @@ step(0)
 detector.advance(context, 3000, support.MAX_SAMPLE_AGE)
 equal(context.phase, "ground", "old samples must not qualify a flight")
 context.feed.raw = -1
-local ok, err = pcall(step, 4000)
-assert(not ok and string.find(err, "GV9 FM0", 1, true))
+assert(pcall(step, 4000), "flight detection does not validate or depend on external GVs")
 for _, key in ipairs({ "minFlightDuration", "disarmDuration" }) do
     local settings = host.resolveSettings(panel, { [key] = 0 })
     equal(#panel.validateSettings(settings), 1)

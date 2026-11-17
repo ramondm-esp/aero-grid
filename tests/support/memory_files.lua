@@ -25,7 +25,7 @@ return function()
             return { filename = filename }
         end
         if files[filename] ~= nil then
-            return { filename = filename }
+            return { filename = filename, position = 1 }
         end
         return nil, "not found"
     end
@@ -35,7 +35,9 @@ return function()
         end
         local content = files[handle.filename]
         if content ~= nil then
-            return string.sub(content, 1, size)
+            local position = handle.position or 1
+            handle.position = position + size
+            return string.sub(content, position, position + size - 1)
         end
     end
     function operations.write(handle, content)

@@ -257,7 +257,7 @@ def load_recipe(path):
                 raise ValueError("sample.bitmap must be an existing PNG with a firmware-safe filename")
     elif recipe["panel"] == "flight-counter":
         fields(sample, ("count", "rssi"))
-        integer(sample["count"], 1, 999, "sample.count")
+        integer(sample["count"], 1, 16777215, "sample.count")
         number(sample["rssi"], 1, 100, "sample.rssi")
         if (config.get("armSwitch") != "SFv" or config.get("motorSource") != "ch3"
                 or config.get("motorReversed", False)):
@@ -383,9 +383,9 @@ def readiness(recipe):
             end
 """
     if recipe["panel"] == "flight-counter":
-        return f"""            local feed = entry.instance.feed
-            if not feed or not feed.available or feed.raw ~= {sample['count']}
-                or feed.precision ~= 0 or entry.instance.text ~= "{sample['count']}"
+        return f"""            local feed = entry.instance.flight
+            if not feed or not feed.countAvailable or feed.displayCount ~= {sample['count']}
+                or entry.instance.text ~= "{sample['count']}"
                 or not entry.instance.flight.active or entry.instance.stateName ~= "active"
                 or entry.instance.badgeText ~= "IN-FLIGHT" then return end
 """
@@ -501,8 +501,7 @@ def fixture_inputs(recipe):
             rows.append(f"    {{name = {json.dumps(name)}, id = {30000 + index}, "
                         f"unit = {source['unit']}, prec = {source['precision']}, "
                         f"value = {lua_value(source['value'])}}}")
-        return """model.setGlobalVariable(8, 0, 0)
-local started = getTime()
+        return """local started = getTime()
 local armIndex = assert(getSwitchIndex("SF" .. CHAR_DOWN))
 local function clock() return math.min(getTime() - started, 2200) end
 local sources = {
@@ -565,11 +564,8 @@ return {
 }
 """
     if recipe["panel"] == "flight-counter":
-        # All gallery instances share one qualification against the isolated GV9.
-        initial = recipe["sample"]["count"] - 1
-        return f"""model.setGlobalVariable(8, 0, {initial})
-assert(model.getGlobalVariable(8, 0) == {initial}, "capture could not initialize GV9")
-local armIndex = assert(getSwitchIndex("SF" .. CHAR_DOWN))
+        # All gallery instances share one qualification against the seeded internal count.
+        return f"""local armIndex = assert(getSwitchIndex("SF" .. CHAR_DOWN))
 return {{
     getSwitchValue = function(index)
         if index == armIndex then return true end

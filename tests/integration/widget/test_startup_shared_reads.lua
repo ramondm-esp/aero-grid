@@ -35,6 +35,7 @@ local function settings(name, revision)
             version = 1,
             revision = revision or 0,
             modelFilename = name,
+            flightCount = 0,
             armed = "SFv",
             flight = fixture.module("lib/flight_config.lua").resolve({}),
         }))

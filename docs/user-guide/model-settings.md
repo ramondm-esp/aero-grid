@@ -41,11 +41,8 @@ running through the end-detection window, and drives the optional
 [Flight status output](#flight-status-output) for your sounds or announcements.
 It runs across the model's dashboards even without a Flight counter panel.
 
-**Reserve GV9 for AeroGrid:** use flight mode 0, precision 0, and limits
-allowing 0-999. Configure other flight modes to inherit GV9 from flight mode 0.
-The existing total is kept. Do not also run EdgeTX Flights or another GV9
-counter. At the limit or if the total cannot be saved, AeroGrid reports an error
-rather than wrapping the count.
+AeroGrid saves its own flight total per model and never writes GV8 or GV9.
+It keeps counting even when you display an external total.
 
 ![Complete Model settings drawer](../assets/editor/model-settings.png)
 
@@ -58,6 +55,20 @@ rather than wrapping the count.
 | **Start detection window (s)** | 30 | How long the start conditions must hold continuously to confirm flight start. |
 | **End detection window (s)** | 10 | Continuous disarming required to confirm flight end. Rearming within this window keeps the flight open. |
 | **Smart detection** | off | Also allows supported altitude or GPS groundspeed readings to confirm takeoff earlier. See [Smart detection](#smart-detection). |
+| **Flight count source** | AeroGrid | Show AeroGrid's total, **GV9** in flight mode 0, or **GV8:GV9** (`GV8 × 1000 + GV9`) in flight mode 0. External GVs must have precision 0 and values from 0 to 999. |
+
+On first setup, AeroGrid imports the total from a recognized **Flights** widget
+configured on the model's saved screens or top bar. It also imports compatible
+arming and detection settings if AeroGrid has none; review Model settings,
+especially for non-plane detection modes. Existing AeroGrid users retain their
+previous GV9 total. Without an existing counter, the total starts at zero.
+This import happens only once.
+
+Changing **Flight count source** only changes the displayed number; it never
+copies or resets either total. AeroGrid's detector still supplies the active-flight
+indication, so external and internal totals can differ. If you remove Flights,
+select **AeroGrid** to show the total AeroGrid has continued maintaining.
+Unavailable external data is reported rather than replaced with the internal total.
 
 Flight detection does not arm the aircraft. With **Require receiver** off,
 bench tests can increment the real flight total and activate the Flight status switch.

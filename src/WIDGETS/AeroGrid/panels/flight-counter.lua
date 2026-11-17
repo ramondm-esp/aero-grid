@@ -49,26 +49,33 @@ function flightCounter.validateSettings(settings, _, _, modelArmed)
     return errors
 end
 
-function flightCounter.regionsFor(theme, builder, rect, fonts)
+function flightCounter.regionsFor(theme, builder, rect, fonts, digits)
     return builder.panel(theme, rect, fonts, {
         frame = builder.frame(theme, rect, fonts, nil, "IN-FLIGHT"),
-        forms = { "999" },
+        forms = { string.rep("9", digits or 3) },
         draws = { rows = false, visual = false },
     }, {})
 end
 
 function flightCounter.render(context, out)
-    out.text = context.feed.available and tostring(context.feed.raw) or "--"
-    if context.flight.active then
+    out.text = context.flight.countAvailable and tostring(context.flight.displayCount) or "--"
+    if not context.flight.countAvailable then
+        out.state = "unavailable"
+    elseif context.flight.active then
         out.state = "active"
     else
-        out.state = context.feed.available and "normal" or "unavailable"
+        out.state = "normal"
     end
 end
 
 function flightCounter.apply(context, drawn)
     local presentation = context.state(drawn.state, "green")
     context.stateName, context.text = drawn.state, drawn.text
+    local digits = math.max(3, #drawn.text)
+    if context.digits ~= digits then
+        context.digits = digits
+        flightCounter.update(context, context.rect)
+    end
     context.value:set({ text = drawn.text, color = presentation.value })
     context.primitives.centreReading(context, context.themeBuilder, context.area, context.area.value, drawn.text)
     context.label:set({ color = presentation.label })
@@ -91,7 +98,9 @@ function flightCounter.create(parent, rect, settings, services)
         services.control and services.flight and services.clock and services.armed,
         "flight counter services unavailable"
     )
-    local area = flightCounter.regionsFor(services.theme, services.themeBuilder, rect, services.fonts)
+    local shared = services.flight:state()
+    local digits = math.max(3, #tostring(shared.displayCount or 0))
+    local area = flightCounter.regionsFor(services.theme, services.themeBuilder, rect, services.fonts, digits)
     local presentation = services.state("unavailable", "green")
     local context = {
         settings = settings,
@@ -102,9 +111,10 @@ function flightCounter.create(parent, rect, settings, services)
         fonts = services.fonts,
         clock = services.clock,
         preview = services.preview == true,
-        feed = services.control:globalVariable(8, 0),
+        rect = rect,
+        digits = digits,
         arm = services.armed:state(settings.armSwitch),
-        flight = services.flight:state(),
+        flight = shared,
         area = area,
     }
     context.panel, context.label, context.badge = services.primitives.panelWithHeader(
@@ -146,9 +156,9 @@ flightCounter.refresh = tick
 flightCounter.background = tick
 
 function flightCounter.update(context, rect)
-    local area = flightCounter.regionsFor(context.theme, context.themeBuilder, rect, context.fonts)
+    local area = flightCounter.regionsFor(context.theme, context.themeBuilder, rect, context.fonts, context.digits)
     context.primitives.resizeHeader(context, rect, area.frame, context.settings.label)
-    context.area = area
+    context.area, context.rect = area, rect
     context.primitives.setFont(context.value, area.value)
     context.value:set({ x = area.valueX, y = area.valueY, w = area.valueWidth })
     context.readingAnchor, context.readingUnitAnchor = nil, nil

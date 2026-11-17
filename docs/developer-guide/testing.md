@@ -71,7 +71,7 @@ property polling. Callback mode includes scheduler/host work and rejects usage
 reaching 15,000 instructions. Neither mode establishes physical-radio timing
 or safety; mock regression envelopes remain separate from production grants.
 
-Both drawers use `lib/settings_ui.lua`. Model construction reserves 13 slots:
+Both drawers use `lib/settings_ui.lua`. Model construction reserves 14 slots:
 one per step except two for the logical-switch list. Panel rows reserve one slot
 and can share callbacks; lifecycle operations retain full grants and dialog
 opening/replacement/closing boundaries. The panel profiler covers every catalog

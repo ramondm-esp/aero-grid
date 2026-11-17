@@ -5,8 +5,7 @@
 --- Both are resolved by EdgeTX rather than by AeroGrid. A trim is read through
 --- a selectable trim source, so EdgeTX applies flight-mode trim inheritance,
 --- and a global variable is read for a flight mode so EdgeTX applies global
---- variable inheritance. Only the flight counter writes a reserved global
---- variable; ordinary control subscriptions remain read-only.
+--- variable inheritance. Control subscriptions remain read-only.
 ---
 --- Trim scaling is the awkward part. `getValue` on a trim source returns eight
 --- times the stored trim, so a standard trim spans -1000 to 1000 and an
@@ -588,26 +587,6 @@ function controlService:globalVariable(index, flightMode)
     self.variableEntries[key] = entry
     self.variables[key] = entry.view
     return entry.view
-end
-
---- Increment the reserved flight counter, reading FM0 again at commit time.
---- Verify the stored value so a configured GV limit cannot silently lose a flight.
-function controlService:incrementFlightCount()
-    local read, write = self.env.getGlobalVariable, self.env.setGlobalVariable
-    assert(read and write, "flight counter requires global-variable read/write APIs")
-    local current = read(8, 0)
-    assert(
-        type(current) == "number" and current >= 0 and current == math.floor(current) and current < 999,
-        "flight counter requires GV9 FM0 in the range 0..998; count is invalid or full"
-    )
-    local nextCount = current + 1
-    write(8, 0, nextCount)
-    assert(read(8, 0) == nextCount, "flight counter could not save GV9 FM0; check its configured limits")
-    local entry = self.variableEntries["8:0"]
-    if entry then
-        self:readVariable(entry)
-    end
-    return nextCount
 end
 
 --- Refresh a bounded slice of the subscriptions.

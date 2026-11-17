@@ -271,13 +271,13 @@ class CaptureRecipeTests(unittest.TestCase):
 
     def test_flight_counter_samples(self):
         recipe = load_recipe(RECIPE_DIR / "flight-counter.yaml")
-        self.assertIn("model.setGlobalVariable(8, 0, 41)", fixture_inputs(recipe))
-        self.assertIn("feed.raw ~= 42", readiness(recipe))
+        self.assertNotIn("setGlobalVariable", fixture_inputs(recipe))
+        self.assertIn("feed.displayCount ~= 42", readiness(recipe))
         self.assertIn('entry.instance.badgeText ~= "IN-FLIGHT"', readiness(recipe))
         recipe["sample"]["count"] = 72
-        self.assertIn("model.setGlobalVariable(8, 0, 71)", fixture_inputs(self.load(recipe)))
+        self.assertIn("feed.displayCount ~= 72", readiness(self.load(recipe)))
         for mutate in (
-            lambda r: r["sample"].update(count=1000),
+            lambda r: r["sample"].update(count=16777216),
             lambda r: r["sample"].update(count=0),
             lambda r: r["sample"].update(rssi=0),
             lambda r: r["config"].update(armSwitch="SAv"),
