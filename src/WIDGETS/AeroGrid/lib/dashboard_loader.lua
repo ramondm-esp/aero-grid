@@ -293,6 +293,14 @@ function module.new(dependencies)
             context.recoveryReason = nil
         end
         showErrors(context)
+        local retained = context.retainedPage
+        if retained then
+            lvgl.show(context.page)
+            lvgl.hide(retained.root or retained.page)
+            retained.published = true
+            context.stage = "retained-release"
+            return true
+        end
         return false
     end
 
@@ -308,6 +316,21 @@ function module.new(dependencies)
     ---@param hidden? boolean
     ---@return boolean busy True while more work remains.
     local function advanceLoad(context, hidden)
+        if context.stage == "retained-release" then
+            local retained = context.retainedPage
+            local entry = retained.panels[retained.index]
+            if entry then
+                local ok, message = context.panelHost.dispatch(entry, "destroy")
+                if not ok and message then
+                    addError(context, entry.placement.id .. ": destroy: " .. tostring(message))
+                end
+                retained.index = retained.index + 1
+                return true
+            end
+            (retained.root or retained.page):clear()
+            context.retainedPage = nil
+            return completeLoad(context)
+        end
         local stage = context.stage
 
         --- Abandon the load, reporting why.

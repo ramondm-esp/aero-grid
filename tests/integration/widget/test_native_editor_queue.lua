@@ -64,6 +64,71 @@ assert(
     maxRowsPerCallback > 1,
     "panel construction must batch rows like Model settings instead of yielding after each row"
 )
+local function nativeCalls()
+    local calls = {}
+    for _, row in ipairs(state.drawerControls) do
+        for _, object in ipairs({ row.row, row.object, row.errorLabel }) do
+            calls[object] = object.writes + object.visibilityCalls
+        end
+    end
+    return calls
+end
+local function assertUnchanged(calls, edited)
+    for object, before in pairs(calls) do
+        if object ~= edited then
+            assert(object.writes + object.visibilityCalls == before, "an edit must not refresh unchanged drawer rows")
+        end
+    end
+end
+local function assertActive()
+    for _, row in ipairs(state.drawerControls) do
+        if row.object.properties.active then
+            assert(row.object.properties.active(), "queued value edits must not disable every drawer control")
+        end
+    end
+end
+local function settleEdit()
+    untilState(function()
+        assertActive()
+        return not state.nativeInput and not state.drawerPending
+    end)
+end
+local numeric
+for _, row in ipairs(state.drawerControls) do
+    if row.kind == "numberEdit" then
+        numeric = row
+        break
+    end
+end
+assert(numeric)
+for _ = 1, 3 do
+    local calls = nativeCalls()
+    local nextValue = numeric.object.properties.get() + 1
+    numeric.object.properties.set(nextValue)
+    settleEdit()
+    assert(numeric.object.properties.get() == nextValue, "consecutive numeric edits must retain their values")
+    assert(state.session.draft.panels[1].config[numeric.field.key] == nextValue)
+    assertUnchanged(calls)
+end
+for _, edit in ipairs({
+    { key = "accent", value = 2, expected = "green" },
+    { key = "showCoordinates", value = 1, expected = true },
+    { key = "label", value = "Edited navigation", expected = "Edited navigation" },
+}) do
+    local control
+    for _, row in ipairs(state.drawerControls) do
+        if row.field.key == edit.key then
+            control = row.object
+            break
+        end
+    end
+    assert(control)
+    local calls = nativeCalls()
+    control.properties.set(edit.value)
+    settleEdit()
+    assert(state.session.draft.panels[1].config[edit.key] == edit.expected)
+    assertUnchanged(calls, control)
+end
 local source
 for _, row in ipairs(state.drawerControls) do
     if row.kind == "source" then
@@ -79,8 +144,10 @@ getFieldInfo = function(value)
 end
 local value = getSourceIndex("GPS")
 local before = lookups
+local sourceCalls = nativeCalls()
 source.properties.set(value)
 assert(lookups == before and state.nativeInput, "native setters cannot resolve sources before a grant")
+assertActive()
 source.properties.get()
 assert(lookups == before, "native getters return cached values")
 noGrant(context, fixture.lvglMock.objects, function()
@@ -88,10 +155,9 @@ noGrant(context, fixture.lvglMock.objects, function()
     definition.background(context)
     assert(state.nativeInput and lookups == before, "accepted source edits must wait for a grant")
 end)
-untilState(function()
-    return not state.nativeInput
-end)
+settleEdit()
 assert(lookups > before, "source resolution must run in a granted editor task")
+assertUnchanged(sourceCalls)
 getFieldInfo = originalFieldInfo
 local toggle
 for _, row in ipairs(state.drawerControls) do
@@ -101,6 +167,7 @@ for _, row in ipairs(state.drawerControls) do
 end
 assert(toggle)
 local properties = toggle.object.properties
+local toggleCalls = nativeCalls()
 assert(properties.get() == 0)
 properties.set(1)
 assert(state.nativeInput and properties.get() == 1, "panel toggles must acknowledge accepted input immediately")
@@ -110,6 +177,18 @@ untilState(function()
     return not state.nativeInput and not state.drawerPending
 end)
 assert(state.session.draft.panels[1].config.showTape and properties.get() == 1)
+for _, row in ipairs(state.drawerControls) do
+    assert(row.row.hidden == (row.field.key == "bearingFormat"), "toggle edits must still update dependent visibility")
+    if row.field.key == "showTape" then
+        assert(row.row.writes + row.row.visibilityCalls == toggleCalls[row.row])
+    end
+end
+local steadyToggleCalls = nativeCalls()
+properties.set(1)
+untilState(function()
+    return not state.nativeInput and not state.drawerPending
+end)
+assertUnchanged(steadyToggleCalls)
 local write, log = state.handlers.editor.setValue, state.handlers.logError
 local failure
 state.handlers.editor.setValue = function()

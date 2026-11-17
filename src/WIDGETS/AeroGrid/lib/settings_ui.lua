@@ -156,19 +156,33 @@ end
 
 local function position(view, entry, config, y)
     local visible = shown(view, entry.field, config)
-    local visibility = visible and lvgl.show or lvgl.hide
-    visibility(entry.row)
+    if entry.visible ~= visible then
+        local visibility = visible and lvgl.show or lvgl.hide
+        visibility(entry.row)
+        entry.visible = visible
+    end
     if visible then
-        entry.row:set({ y = y })
+        if entry.y ~= y then
+            entry.row:set({ y = y })
+            entry.y = y
+        end
         y = y + entry.height
     end
     if entry.errorLabel then
-        if entry.errorShown and visible then
-            entry.errorLabel:set({ y = y })
-            lvgl.show(entry.errorLabel)
+        local errorVisible = entry.errorShown == true and visible
+        if errorVisible then
+            if entry.errorY ~= y then
+                entry.errorLabel:set({ y = y })
+                entry.errorY = y
+            end
+        end
+        if entry.errorVisible ~= errorVisible then
+            local visibility = errorVisible and lvgl.show or lvgl.hide
+            visibility(entry.errorLabel)
+            entry.errorVisible = errorVisible
+        end
+        if errorVisible then
             y = y + view.errorHeight
-        else
-            lvgl.hide(entry.errorLabel)
         end
     end
     return y
@@ -186,9 +200,16 @@ function ui.relayout(view)
 end
 
 function ui.fieldError(view, entry, message)
+    if entry.errorMessage == message then
+        return
+    end
+    entry.errorMessage = message
     entry.errorLabel:set({ text = message or "" })
-    entry.errorShown = message ~= nil
-    ui.relayout(view)
+    local shown = message ~= nil
+    if (entry.errorShown == true) ~= shown then
+        entry.errorShown = shown
+        ui.relayout(view)
+    end
 end
 
 function ui.row(view, field)
@@ -238,6 +259,7 @@ function ui.row(view, field)
         row = row,
         field = field,
         height = rowHeight,
+        y = view.nextY,
     }, {
         x = controlX,
         y = 0,
@@ -505,6 +527,7 @@ function ui.add(view, entry, kind, properties)
             end,
             color = view.errorColor,
         })
+        entry.errorY = view.nextY + entry.height
     end
     view.controls[#view.controls + 1] = entry
     local config = entry.field.visibleWhen and view.config() or nil

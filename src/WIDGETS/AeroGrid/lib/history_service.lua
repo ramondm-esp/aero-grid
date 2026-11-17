@@ -153,6 +153,13 @@ function history:session(armSwitch)
     return sessionFor(self, armSwitch).view
 end
 
+function history:destroy()
+    if self.observing then
+        self.runtime.byId.telemetry:unobserve(self)
+        self.observing = nil
+    end
+end
+
 --- Reset one session or recording per step, preserving subscriptions.
 function history:resetSession(now, index)
     index = index or 1

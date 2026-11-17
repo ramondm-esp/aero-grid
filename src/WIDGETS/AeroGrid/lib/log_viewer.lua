@@ -10,6 +10,7 @@ function viewer.close(host)
     if host.logOverlay then
         host.logOverlay:clear()
         lvgl.hide(host.logOverlay)
+        host.logOverlay:set({ w = 0, h = 0 })
     end
     host.logViewer = nil
     host.touchTapHandled = true
@@ -92,7 +93,6 @@ function viewer.open(host)
     if not overlay then
         overlay = lvgl.box(host.page, { x = 0, y = 0, w = width, h = height })
         host.logOverlay = overlay
-        host.pageBuiltFullscreen = true
     end
     overlay:set({ w = width, h = height })
     lvgl.show(overlay)

@@ -90,8 +90,11 @@ local function hostedDialog(context, state, properties)
         active = function()
             return context.editorUi == state
                 and generation == state.drawerGeneration
-                and not state.drawerPending
-                and not state.nativeInput
+                and (
+                    not state.drawerPending
+                    or state.drawerPending.action == "write"
+                    or state.drawerPending.action == "error"
+                )
         end,
         enqueue = function(apply, value)
             return queueNative(context, state, generation, apply, value)

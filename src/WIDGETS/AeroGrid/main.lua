@@ -1185,6 +1185,7 @@ local function panelsHeld(context, hidden)
         or context.editorTransitionRequest ~= nil
         or context.reflowIndex ~= nil
         or context.appRebuild ~= nil
+        or context.editorRestore ~= nil
         or editorWorkNeeded(context.editorUi)
         or not hidden and (context.modelSettingsUi ~= nil or context.logViewer ~= nil)
 end
@@ -1201,6 +1202,7 @@ local function lifecycleHeld(context, hidden)
         context.modelArmingReload
         or sessionResetDue(context)
         or context.modelSettingsUi
+        or context.editorRestore and not (context.stage or context.reloadState)
         or context.editorUi and (hidden and context.editorUi.saving or not hidden)
     then
         return true
@@ -1925,6 +1927,9 @@ end
 
 -- Routing records intent only; native work still needs its own task grant.
 local function routeHost(context, hidden)
+    if context.editorRestore and not (context.stage or context.reloadState) then
+        return true
+    end
     if suspendArmingEditor(context) then
         return true
     end
@@ -1940,6 +1945,10 @@ local function routeHost(context, hidden)
         then
             context.uiRequest = "model settings"
         end
+        return true
+    end
+    if context.stage == "retained-release" then
+        context.lifecycleRequest = "load"
         return true
     end
     if hidden then
@@ -2380,7 +2389,9 @@ local function editorTransitionReady(task, _, hidden)
     local context = task.host
     local request, state = context.editorTransitionRequest, context.editorUi
     if request == "suspend" then
-        return context.modelArmingReload and not (state and state.saving)
+        return context.modelArmingReload
+            and not (context.editorRestore and not (context.stage or context.reloadState))
+            and not (state and state.saving)
     end
     if hidden or context.modelArmingReload or sessionResetDue(context) or context.modelSettingsUi then
         return false
@@ -2392,10 +2403,71 @@ local function editorTransitionReady(task, _, hidden)
         and not state
         and not context.stage
         and not context.reloadState
+        and not context.editorRestore
         and not context.logViewer
         and not context.locationDetails
         and context.document ~= nil
         and isFullScreen()
+end
+
+local ARMING_SERVICES = { "armed", "navigation", "history" }
+
+local function rebindArming(context)
+    if context.stage or context.reloadState or not context.serviceRuntime or #context.rejected > 0 then
+        context.retainForReload = true
+        context.reloadState = "clear"
+        context.modelArmingReload = nil
+        context.armingRebind = nil
+        return
+    end
+    local runtime = context.serviceRuntime
+    local job = context.armingRebind
+    if not job then
+        context.modelArmed = context.flightFactory.broker.document.armed
+        context.armGeneration = (context.armGeneration or 0) + 1
+        runtime.modelArmed, runtime.armGeneration = context.modelArmed, context.armGeneration
+        context.navigationHomes = {}
+        runtime.navigationHomes = context.navigationHomes
+        job = { service = 1, panel = 1 }
+        context.armingRebind = job
+    end
+    local id = ARMING_SERVICES[job.service]
+    if id then
+        local previous = runtime.byId[id]
+        if previous then
+            if previous.destroy then
+                previous:destroy()
+            end
+            local replacement = runtime.modules[id].new(runtime.env, context.servicesModule, runtime)
+            for index, instance in ipairs(runtime.order) do
+                if instance == previous then
+                    runtime.order[index] = replacement
+                    break
+                end
+            end
+            runtime.byId[id] = replacement
+        end
+        job.service = job.service + 1
+        return
+    end
+    local entry = context.panels[job.panel]
+    if entry then
+        if not entry.failed and rawget(entry.module, "rebindArming") then
+            local ok, message = context.panelHost.dispatch(entry, "rebindArming", runtime.byId)
+            if not ok then
+                addError(context, entry.placement.id .. ": rebindArming: " .. tostring(message))
+                showErrors(context)
+            end
+            entry.nextRefresh = 0
+        end
+        job.panel = job.panel + 1
+        return
+    end
+    context.armingRebind = nil
+    if context.modelArmed == context.flightFactory.broker.document.armed then
+        context.configureFlight(context)
+        context.modelArmingReload = nil
+    end
 end
 
 local function editorTransitionStep(task)
@@ -2412,13 +2484,24 @@ local function editorTransitionStep(task)
             context.editorUiModule.close(context, false)
             context.editorController.restorePreview(context)
             context.editorSession = nil
-            context.editorPreviewContainers = nil
             context.editorStash = keep and session or nil
         end
         if request == "suspend" then
-            context.modelArmingReload = nil
+            if not state then
+                rebindArming(context)
+            end
         end
     end
+end
+
+local function editorRestoreReady(task, _, hidden)
+    local context = task.host
+    -- Reused containers need a foreground paint between clear and construction.
+    return not hidden and context.editorRestore ~= nil and not (context.stage or context.reloadState)
+end
+
+local function editorRestoreStep(task)
+    task.host.editorController.advanceRestore(task.host)
 end
 
 local function uiField(kind)
@@ -2536,6 +2619,9 @@ local function lifecycleWanted(context, kind, hidden)
     elseif kind == "rebuild" then
         return context.reloadState == "rebuild" and not context.retireBoundary
     elseif kind == "load" then
+        if context.stage == "retained-release" then
+            return true
+        end
         local broker = context.flightFactory and context.flightFactory.broker
         if context.stage == "services" and broker and not broker.documentLoaded then
             return false
@@ -2837,6 +2923,9 @@ local function enrolHost(context, hidden)
                 { inputFirst = true }
             )
         )
+    end
+    if context.editorRestore then
+        add(hostTask(context, "editorRestoreTask", "editor restore", editorRestoreReady, editorRestoreStep))
     end
     if context.editorTransitionRequest then
         add(

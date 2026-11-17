@@ -78,9 +78,27 @@ pending = nil
 first.readNative()
 ui.relayout(view)
 assert(toggle.get() == 1 and not view.controls[2].row.hidden)
+local function unchangedLayout(action)
+    local calls = {}
+    for _, object in ipairs(mock.objects) do
+        calls[object] = object.writes + object.visibilityCalls
+    end
+    action()
+    for object, before in pairs(calls) do
+        assert(object.writes + object.visibilityCalls == before, "unchanged settings must not refresh native rows")
+    end
+end
+unchangedLayout(function()
+    ui.relayout(view)
+    ui.fieldError(view, first, nil)
+end)
 local y = view.controls[2].row.properties.y
 ui.fieldError(view, first, "Invalid setting")
 assert(not first.errorLabel.hidden and view.controls[2].row.properties.y == y + 18)
+unchangedLayout(function()
+    ui.relayout(view)
+    ui.fieldError(view, first, "Invalid setting")
+end)
 ui.fieldError(view, first, nil)
 assert(first.errorLabel.hidden and view.controls[2].row.properties.y == y)
 values.enabled = false

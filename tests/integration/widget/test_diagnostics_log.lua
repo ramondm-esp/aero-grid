@@ -43,6 +43,11 @@ local function create()
     )
 end
 local flight, diagnostics = create(), create()
+local originalPage, originalRuntime = diagnostics.page, diagnostics.serviceRuntime
+local originalPanels = {}
+for index, panel in ipairs(diagnostics.panels) do
+    originalPanels[index] = panel.instance
+end
 assert(#flight.errors == 0 and #diagnostics.errors == 0)
 assert(flight.diagnosticsLog == diagnostics.diagnosticsLog, "widget instances must share a script-owned log")
 local flightLog = fixture.entryById(flight, "log")
@@ -219,9 +224,23 @@ assert(
     fixture.pumpUntil(diagnostics, function()
         return not diagnostics.stage and not diagnostics.reloadState
     end, 200),
-    "dashboard must finish its queued reload"
+    "returning to App mode must settle without reloading"
 )
-assert(not diagnostics.logOverlay, "page retirement must drop the overlay")
+assert(diagnostics.logOverlay == overlay and overlay.hidden, "only the log overlay is retired")
+assert(overlay.properties.w == 0 and overlay.properties.h == 0, "a closed log cannot intercept App-mode touches")
+assert(diagnostics.page == originalPage and not originalPage.cleared, "the log must not force a dashboard reload")
+assert(diagnostics.serviceRuntime == originalRuntime, "the log preserves services and recordings")
+for index, instance in ipairs(originalPanels) do
+    assert(diagnostics.panels[index].instance == instance, "the log preserves native panel instances")
+end
+fixture.lvglMock.setFullScreen(true)
+fixture.pump(diagnostics, 20)
+tap()
+assert(diagnostics.logViewer)
+input(EVT_VIRTUAL_EXIT)
+fixture.lvglMock.setFullScreen(false)
+fixture.pump(diagnostics, 50)
+assert(diagnostics.page == originalPage, "closing the log before App mode must not reload the dashboard")
 assert(#diagnostics.errors == 0, table.concat(diagnostics.errors, "\n"))
 local count = log.count
 fixture.entryById(diagnostics, "log").failed = true

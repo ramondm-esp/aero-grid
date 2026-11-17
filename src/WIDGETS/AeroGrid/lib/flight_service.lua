@@ -250,7 +250,6 @@ function broker:setDocument(document)
             if host.modelFilename == nil or host.modelFilename == self.filename then
                 member.pending = true
                 host.modelArmingReload = true
-                host.reloadState = "clear"
             end
         end
     end

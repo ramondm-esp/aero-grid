@@ -177,6 +177,22 @@ end
 
 do
     local c, state, control, document = fixture()
+    local properties = state.controls.minFlightDuration.properties
+    local value = properties.get() + 1
+    properties.set(value)
+    properties.set(value + 1)
+    for _ = 1, 3 do
+        for _, object in pairs(state.controls) do
+            assert(object.properties.active(), "queued model edits must not disable every drawer control")
+        end
+        ui.advance(c)
+    end
+    assert(document().flight.minFlightDuration == value and control.attempts == 1, "pending edits still block input")
+    ui.close(c)
+end
+
+do
+    local c, state, control, document = fixture()
     local properties = state.controls.countSource.properties
     assert(properties.get() == 1)
     for index, value in ipairs({ "internal", "gv9", "gv8gv9" }) do
