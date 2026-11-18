@@ -246,7 +246,7 @@ panels:
             if path == "/RADIO/radio.yml" then
                 return { size = #radio }
             elseif path == "/THEMES/EdgeTX/background.png" then
-                return { size = 256, sec = revision }
+                return { size = 256, time = { year = 2026, mon = 11, day = 17, hour = 20, min = 0, sec = revision } }
             end
         end,
         dir = function()
@@ -279,8 +279,17 @@ panels:
     }
     local automatic = definition.create(fixture.lvglMock.appZone(), selected, widgetPath)
     automatic.glassModule = {
-        new = function(builder, yaml, cache)
-            return analyzer.new(builder, yaml, cache, env)
+        new = function(builder, yaml, cache, persistent)
+            return analyzer.new(builder, yaml, cache, persistent, env)
+        end,
+    }
+    local cacheModule = fixture.module("lib/background_cache.lua")
+    local disk, operations = assert(loadfile(root .. "/tests/support/memory_files.lua"))()()
+    local cachePath = widgetPath .. "AEROGRID/cache/backgrounds.yml"
+    automatic.backgroundCacheModule = {
+        new = function(yaml, writer, filename)
+            assertEqual(filename, cachePath, "background cache must live outside the installed widget")
+            return cacheModule.new(yaml, writer, filename, operations)
         end,
     }
     pump(automatic, 100)
@@ -311,6 +320,14 @@ panels:
     pump(automatic, 100)
     autoAppearance("modern-dark")
     assertEqual(decodes, 2, "a changed image must refresh both palette and opacity")
+    assert(disk[cachePath], "Glass loading must save the sample to the shared cache")
+    local nextInstance = definition.create(fixture.lvglMock.appZone(), selected, widgetPath)
+    nextInstance.glassModule = automatic.glassModule
+    nextInstance.backgroundCacheModule = automatic.backgroundCacheModule
+    pump(nextInstance, 100)
+    appearance(nextInstance, 0, automatic.panelOpacity)
+    assertEqual(nextInstance.theme.mode, "modern-dark")
+    assertEqual(decodes, 2, "new widget instances must load the sample without reopening the image")
 end
 
 testLayoutSelectsLightTheme()

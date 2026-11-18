@@ -31,7 +31,7 @@ local function field(env, filename, name)
     return parsed.value
 end
 
-function glass.new(builder, yaml, cache, env)
+function glass.new(builder, yaml, cache, persistent, env)
     env = env
         or {
             stat = fstat,
@@ -53,6 +53,7 @@ function glass.new(builder, yaml, cache, env)
         },
         builder = builder,
         cache = cache,
+        persistent = persistent,
         stage = "radio",
         opacity = 204,
     }, glass)
@@ -68,15 +69,7 @@ function glass:step()
     local env, stage = self.env, self.stage
     local api = env.bitmap
     if stage == "radio" then
-        if
-            type(env.stat) ~= "function"
-            or type(env.dir) ~= "function"
-            or type(api) ~= "table"
-            or type(api.open) ~= "function"
-            or type(api.getSize) ~= "function"
-            or type(api.resize) ~= "function"
-            or type(api.toMask) ~= "function"
-        then
+        if type(env.stat) ~= "function" or type(env.dir) ~= "function" then
             return fallback(self, "background image analysis is unavailable")
         end
         local name, message = field(env, "/RADIO/radio.yml", "selectedTheme")
@@ -116,17 +109,54 @@ function glass:step()
         if not info then
             return fallback(self, "radio background image is not available on the SD card")
         end
-        local key = filename
-        for _, name in ipairs({ "size", "year", "mon", "day", "hour", "min", "sec" }) do
-            key = key .. ":" .. tostring(info[name])
+        local key
+        if type(info.size) == "number" and type(info.time) == "table" then
+            key = filename .. ":" .. tostring(info.size)
+            for _, name in ipairs({ "year", "mon", "day", "hour", "min", "sec" }) do
+                if type(info.time[name]) ~= "number" then
+                    key = nil
+                    break
+                end
+                key = key .. ":" .. tostring(info.time[name])
+            end
+        end
+        if not key then
+            self.cacheReason, self.persistent = "background image modification time is unavailable", nil
         end
         self.filename, self.key = filename, key
-        if self.cache.key == key then
-            self.average, self.stage = self.cache.average, "palette"
+        if key and self.cache.key == key then
+            self.average = self.cache.average
+        end
+        if self.persistent then
+            self.persistent:lookup(filename, key)
+            self.stage = "cache-read"
         else
-            self.stage = "decode"
+            self.stage = self.average and "palette" or "decode"
+        end
+    elseif stage == "cache-read" then
+        if self.persistent:step() then
+            self.cacheReason = self.persistent.reason
+            if self.persistent.brightness ~= nil then
+                self.average = self.persistent.brightness * 65793
+                self.cache.key, self.cache.average = self.key, self.average
+                self.stage = "palette"
+            elseif self.average then
+                self.persistent:save(self.average // 65793)
+                self.stage = "cache-write"
+            else
+                self.stage = "decode"
+            end
         end
     elseif stage == "decode" then
+        if
+            type(api) ~= "table"
+            or type(api.open) ~= "function"
+            or type(api.getSize) ~= "function"
+            or type(api.resize) ~= "function"
+            or type(api.toMask) ~= "function"
+        then
+            return fallback(self, "background image analysis is unavailable")
+        end
         local ok, image = pcall(api.open, self.filename)
         if not ok or not image then
             return fallback(self, "cannot decode background image: " .. tostring(image))
@@ -168,7 +198,17 @@ function glass:step()
         local average = math.floor(sum / count + 0.5)
         self.average = average * 65793
         self.cache.key, self.cache.average = self.key, self.average
-        self.stage = "palette"
+        if self.persistent then
+            self.persistent:save(average)
+            self.stage = "cache-write"
+        else
+            self.stage = "palette"
+        end
+    elseif stage == "cache-write" then
+        if self.persistent:step() then
+            self.cacheReason = self.persistent.reason or self.cacheReason
+            self.stage = "palette"
+        end
     elseif stage == "palette" then
         local mode = self.average and self.average % 256 >= 128 and "modern-light" or "modern-dark"
         self.theme = self.builder.build(mode)

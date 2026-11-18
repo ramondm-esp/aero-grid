@@ -43,6 +43,10 @@ callbacks. Page retirement and replacement occur in separate callbacks.
 Keep these boundaries: a synchronous whole-dashboard operation can exceed the
 firmware budget or invalidate deferred native objects.
 
+Glass shares sampled background brightness through
+`/AEROGRID/cache/backgrounds.yml`. This generated cache survives widget updates
+and can be deleted to regenerate it.
+
 `lib/package.lua` declares package, runtime API, panel API, and layout versions.
 Runtime modules expose `RUNTIME_API`; panels expose `apiVersion`. Deploy the
 complete widget directory: these checks do not detect every mixed package.

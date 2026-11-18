@@ -630,9 +630,34 @@ function module.new(dependencies)
                         return fail("glass: " .. tostring(message))
                     end
                     context.glassModule = analyzer
+                    return true
                 end
+                if not context.backgroundCacheModule then
+                    local cache, message =
+                        loadModule(context.path, "lib/background_cache.lua", context.packageInfo.runtimeApi)
+                    if not cache then
+                        return fail("glass cache: " .. tostring(message))
+                    end
+                    context.backgroundCacheModule = cache
+                    return true
+                end
+                if not context.glassFile then
+                    local file, message =
+                        loadModule(context.path, "lib/verified_file.lua", context.packageInfo.runtimeApi)
+                    if not file then
+                        return fail("glass cache: " .. tostring(message))
+                    end
+                    context.glassFile = file
+                    return true
+                end
+                local persistent = context.backgroundCacheModule.new(
+                    context.yaml,
+                    context.glassFile,
+                    context.layoutStore.sdRoot(context.path) .. "AEROGRID/cache/backgrounds.yml"
+                )
                 context.glassCache = context.glassCache or {}
-                context.glassWork = context.glassModule.new(context.themeBuilder, context.yaml, context.glassCache)
+                context.glassWork =
+                    context.glassModule.new(context.themeBuilder, context.yaml, context.glassCache, persistent)
                 return true
             end
             local work = context.glassWork
@@ -640,6 +665,9 @@ function module.new(dependencies)
                 applyTheme(context, work.theme, work.opacity)
                 if work.reason and context.diagnosticsLog then
                     context.diagnosticsLog:append(context, "glass", work.reason, getTime())
+                end
+                if work.cacheReason and context.diagnosticsLog then
+                    context.diagnosticsLog:append(context, "glass cache", work.cacheReason, getTime())
                 end
                 context.glassWork = nil
                 context.stage = "services"

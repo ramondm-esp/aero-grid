@@ -55,7 +55,12 @@ local env = {
             return { size = #files[path] }
         end
         if images[path] then
-            return { size = 100, sec = images[path].modified or 1 }
+            return {
+                size = images[path].size or 100,
+                time = not images[path].noTime
+                        and { year = 2026, mon = 11, day = 17, hour = 20, min = 0, sec = images[path].modified or 1 }
+                    or nil,
+            }
         end
     end,
     dir = function(path)
@@ -106,8 +111,8 @@ local function mask(brightness)
     return string.char(16, 0, 16, 0) .. string.rep(string.char(255 - brightness), 256)
 end
 local worst = 0
-local function analyze(cache)
-    local work = glass.new(builder, yaml, cache or {}, env)
+local function analyze(cache, persistent)
+    local work = glass.new(builder, yaml, cache or {}, persistent, env)
     for _ = 1, 100 do
         local counted = 0
         debug.sethook(function()
@@ -194,5 +199,73 @@ local unsupported = analyze()
 equal(unsupported.opacity, 204, "firmware without bitmap analysis must use the fallback")
 equal(unsupported.theme.mode, "modern-dark")
 env.bitmap = bitmapApi
+
+local cacheModule = loadModule("lib/background_cache.lua")
+local writer = loadModule("lib/verified_file.lua")
+local disk, operations = assert(loadfile(root .. "/tests/support/memory_files.lua"))()()
+local cachePath = "/AEROGRID/cache/backgrounds.yml"
+local function persistent()
+    return cacheModule.new(yaml, writer, cachePath, operations)
+end
+files["/RADIO/radio.yml"] = 'selectedTheme: "Ocean # Blue"\n'
+local image = images["/THEMES/Ocean/background_480x272.png"]
+image.mask, image.modified = mask(136), 10
+decodes = calls.decode
+local cold = analyze({}, persistent())
+equal(cold.average, 0x888888)
+equal(cold.cacheReason, nil)
+equal(calls.decode, decodes + 1)
+assert(disk[cachePath], "sampling must persist brightness outside the widget")
+local warm = analyze({}, persistent())
+equal(warm.average, cold.average)
+equal(calls.decode, decodes + 1, "new widget lifetimes must not decode unchanged images")
+local resizes, masks = calls.resize, calls.mask
+env.bitmap = nil
+equal(analyze({}, persistent()).average, cold.average, "cached brightness must not require bitmap APIs")
+equal(calls.resize, resizes)
+equal(calls.mask, masks)
+env.bitmap = bitmapApi
+image.mask, image.modified = mask(85), 11
+equal(analyze({}, persistent()).theme.mode, "modern-dark")
+equal(calls.decode, decodes + 2, "modification time changes must resample")
+image.mask, image.size = mask(170), 101
+equal(analyze({}, persistent()).theme.mode, "modern-light")
+equal(calls.decode, decodes + 3, "size changes must resample even if the timestamp is preserved")
+
+files["/RADIO/radio.yml"] = "battWarn: 66\n"
+images["/THEMES/EdgeTX/background.png"] = { mask = mask(0) }
+equal(analyze({}, persistent()).average, 0)
+equal(calls.decode, decodes + 4)
+files["/RADIO/radio.yml"] = 'selectedTheme: "Ocean # Blue"\n'
+equal(analyze({}, persistent()).average, 0xAAAAAA)
+equal(calls.decode, decodes + 4, "switching back to a previously sampled image must reuse its stored result")
+
+disk[cachePath] = "broken"
+local recovered = analyze({}, persistent())
+equal(recovered.average, 0xAAAAAA)
+assert(recovered.cacheReason, "corrupt caches must report a diagnostic")
+equal(calls.decode, decodes + 5)
+equal(analyze({}, persistent()).cacheReason, nil)
+equal(calls.decode, decodes + 5, "a repaired cache must be reusable")
+local inMemory = {}
+analyze(inMemory, persistent())
+disk[cachePath] = nil
+equal(analyze(inMemory, persistent()).average, 0xAAAAAA)
+assert(disk[cachePath], "deleting the disk cache must recreate it using the in-memory sample")
+equal(calls.decode, decodes + 5, "recreating a missing cache must not resample a known image")
+
+image.modified = 12
+operations.inject("write")
+local failed = analyze({}, persistent())
+equal(failed.average, 0xAAAAAA, "cache write failures must not discard a valid image sample")
+assert(failed.cacheReason, "cache write failures must be reported for diagnostics")
+equal(failed.reason, nil, "cache write failures must not force 80% image fallback")
+image.noTime = true
+local before = calls.decode
+local unverified = analyze({}, persistent())
+equal(unverified.average, 0xAAAAAA)
+assert(unverified.cacheReason, "unavailable timestamps must be reported")
+analyze({}, persistent())
+equal(calls.decode, before + 2, "unverifiable image metadata must not reuse potentially stale samples")
 assert(worst < 12000, "background analysis must stay within a loader callback")
 print("Glass image averaging, automatic palette and opacity passed; worst step " .. worst .. " Lua instructions")
