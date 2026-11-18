@@ -11,8 +11,9 @@ Choose **Theme** in the widget settings.
 | **Glass** | Translucent panels over the radio theme background, with automatic light/dark colors and opacity. |
 
 Glass uses the background image's average brightness to choose panel colors
-and opacity. Text and status accents stay fully opaque. If the image cannot be
-read, Glass uses dark panels at 80% opacity.
+and opacity, starting at 70% opacity and increasing it if needed for readability.
+Text and status accents stay fully opaque. If the image cannot be read, Glass
+uses dark panels at 80% opacity.
 
 ![Theme showcase with token swatches, text levels, bars, a dial, and six dashboard panel states](../assets/theme/theme-modern.png)
 

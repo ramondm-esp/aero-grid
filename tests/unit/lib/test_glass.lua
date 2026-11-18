@@ -15,6 +15,8 @@ local builder = loadModule("lib/theme.lua")
 assert(builder.setCatalog(assert(loadfile(root .. "/tests/support/theme_catalog.lua"))()(root, yaml)))
 local glass = loadModule("lib/glass.lua")
 local dark, light = builder.build("modern-dark"), builder.build("modern-light")
+equal(builder.glassOpacity(dark, dark.rgb.surface), 179, "dark glass must start at 70% opacity")
+equal(builder.glassOpacity(light, light.rgb.surface), 179, "light glass must start at 70% opacity")
 local function blend(surface, background, opacity)
     local result = 0
     for _, shift in ipairs({ 65536, 256, 1 }) do
@@ -27,7 +29,7 @@ end
 for _, resolved in ipairs({ dark, light }) do
     for _, background in ipairs({ 0, 0x444444, 0x888888, 0xCCCCCC, 0xFFFFFF }) do
         local opacity = builder.glassOpacity(resolved, background)
-        assert(opacity >= 128 and opacity <= 255)
+        assert(opacity >= 179 and opacity <= 255)
         local function readable(alpha)
             local mixed = blend(resolved.rgb.surface, background, alpha)
             for name, minimum in pairs({ text = 4.5, textMuted = 3, textFaint = 1.8 }) do
@@ -40,7 +42,7 @@ for _, resolved in ipairs({ dark, light }) do
         end
         assert(readable(opacity), "automatic opacity must meet text contrast targets")
         assert(
-            opacity == 128 or not readable(opacity - 1),
+            opacity == 179 or not readable(opacity - 1),
             "automatic opacity must not hide more background than needed"
         )
     end

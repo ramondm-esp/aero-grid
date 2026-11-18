@@ -210,7 +210,7 @@ function theme.contrast(first, second)
     return (a + 0.05) / (b + 0.05)
 end
 
---- Keep at least half the panel tint, increasing opacity as needed for readable text.
+--- Start at 70% panel opacity, increasing it as needed for readable text.
 ---@param resolved AeroGridTheme
 ---@param background integer Average background in 24-bit RGB.
 ---@return integer opacity
@@ -223,7 +223,7 @@ function theme.glassOpacity(resolved, background)
     }
     local red, green, blue = channels(rgb.surface)
     local br, bg, bb = channels(background)
-    local low, high = 128, 255
+    local low, high = 179, 255
     while low < high do
         local middle = (low + high) // 2
         local alpha = middle / 255
