@@ -172,8 +172,8 @@ panels:
         assertEqual(panel.accent.properties.opacity, nil, "status accent must not be faded")
         assertEqual(#context.errors, 0, table.concat(context.errors, "\n"))
     end
-    local selected = { Layout = "Default", Theme = "modern-dark", Backdrop = 2, PanelFill = 3 }
-    local solid = createLoaded(nil, { Layout = "Default", Theme = "modern-dark", PanelFill = 1 }, widgetPath)
+    local selected = { Layout = "Default", Theme = "modern-dark", Backdrop = 2 }
+    local solid = createLoaded(nil, { Layout = "Default", Theme = "modern-dark" }, widgetPath)
     appearance(solid, 255, 255)
     for _, sentinel in ipairs({ 0, -1, 999, 4294967295 }) do
         local defaults = createLoaded(
@@ -181,21 +181,23 @@ panels:
             { Layout = "Default", Theme = "modern-dark", Backdrop = sentinel, PanelFill = sentinel },
             widgetPath
         )
-        appearance(defaults, 255, 204)
-        assertEqual(defaults.radioBackground, false, "missing background must select AeroGrid")
+        appearance(defaults, 255, 255)
+        assertEqual(defaults.radioBackground, false, "missing background must select Solid")
     end
-    appearance(createLoaded(nil, { Layout = "Default", Theme = "modern-dark" }, widgetPath), 255, 204)
-    assertEqual(definition.options[3][3], 1, "new widgets default to AeroGrid")
-    assertEqual(definition.options[4][3], 4, "new widgets default to 80%")
+    appearance(createLoaded(nil, { Layout = "Default", Theme = "modern-dark" }, widgetPath), 255, 255)
+    assertEqual(definition.options[3][3], 1, "new widgets default to Solid")
+    assertEqual(definition.options[3][4][1], "Solid")
+    assertEqual(definition.options[3][4][2], "Glass")
+    assertEqual(#definition.options, 3, "panel opacity must be automatic, not a separate setting")
     local context = definition.create(fixture.lvglMock.appZone(), selected, widgetPath)
     assertEqual(context.canvas.properties.opacity, 0, "startup must expose the radio background")
     pump(context, 100)
-    appearance(context, 0, 217)
+    appearance(context, 0, 204)
     appearance(solid, 255, 255)
     for _, state in ipairs({ "warning", "critical", "active", "normal" }) do
         local presentation = context.themeBuilder.state(context.theme, state)
         context.primitives.stylePanel(context.panels[1].instance.panel, presentation)
-        appearance(context, 0, 217)
+        appearance(context, 0, 204)
         assertEqual(
             context.panels[1].instance.panel.background.properties.color,
             presentation.surface or context.theme.color.surface,
@@ -206,35 +208,32 @@ panels:
     assertEqual(context.optionsRequest, nil, "unchanged appearance must not reload")
     fixture.lvglMock.setFullScreen(true)
     pump(context, 60)
-    appearance(context, 0, 217)
+    appearance(context, 0, 204)
     fixture.lvglMock.setFullScreen(false)
     context.zone.w, context.zone.h = 320, 240
     pump(context, 60)
-    appearance(context, 0, 217)
+    appearance(context, 0, 204)
     assertEqual(context.canvas.properties.w, 320, "transparent canvas must reflow")
 
     local oldPage = context.page
-    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 2, PanelFill = 3 })
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 2 })
     pump(context, 100)
     assert(context.page ~= oldPage, "theme reload must replace the page")
-    appearance(context, 0, 217)
-    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 1, PanelFill = 3 })
+    appearance(context, 0, 204)
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 1 })
     assert(context.optionsRequest, "background-only changes must be scheduled")
     assertEqual(context.canvas.properties.opacity, 0, "update must not draw outside the scheduler")
     pump(context, 100)
-    appearance(context, 255, 217)
-    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 1, PanelFill = 1 })
-    assert(context.optionsRequest, "opacity-only changes must be scheduled")
-    pump(context, 100)
     appearance(context, 255, 255)
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 1, PanelFill = 1 })
+    assertEqual(context.optionsRequest, nil, "obsolete opacity settings must not reload the dashboard")
     definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 0, PanelFill = 0 })
     pump(context, 100)
-    appearance(context, 255, 204)
+    appearance(context, 255, 255)
     definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = -1, PanelFill = -1 })
     assertEqual(context.optionsRequest, nil, "equivalent missing-value sentinels must not keep reloading")
     fixture.lvglMock.setAppMode(false)
     assertEqual(definition.translate("Backdrop"), "Background")
-    assertEqual(definition.translate("PanelFill"), "Panel opacity")
 end
 
 testLayoutSelectsLightTheme()

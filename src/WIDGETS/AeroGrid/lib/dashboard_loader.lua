@@ -339,6 +339,7 @@ function module.new(dependencies)
                 stage ~= "services"
                 and stage ~= "theme-read"
                 and stage ~= "theme-validate"
+                and stage ~= "glass"
                 and recoverLayout(context, tostring(message))
             then
                 return true
@@ -585,6 +586,7 @@ function module.new(dependencies)
 
             context.themeSource = "option"
             context.theme = context.themeBuilder.build(context.themeMode)
+            context.panelOpacity = context.radioBackground and 204 or 255
             context.theme.panelOpacity = context.panelOpacity
             for _, warning in ipairs(context.theme.warnings) do
                 addError(context, "theme: " .. warning)
@@ -610,7 +612,34 @@ function module.new(dependencies)
                         .. "."
                 )
             end
-            context.stage = "services"
+            context.glassWork = nil
+            context.stage = context.radioBackground and "glass" or "services"
+            return true
+        end
+
+        if stage == "glass" then
+            if not context.glassWork then
+                if not context.glassModule then
+                    local analyzer, message = loadModule(context.path, "lib/glass.lua", context.packageInfo.runtimeApi)
+                    if not analyzer then
+                        return fail("glass: " .. tostring(message))
+                    end
+                    context.glassModule = analyzer
+                end
+                context.glassCache = context.glassCache or {}
+                context.glassWork =
+                    context.glassModule.new(context.themeBuilder, context.theme, context.yaml, context.glassCache)
+                return true
+            end
+            local work = context.glassWork
+            if work:step() then
+                context.panelOpacity, context.theme.panelOpacity = work.opacity, work.opacity
+                if work.reason and context.diagnosticsLog then
+                    context.diagnosticsLog:append(context, "glass", work.reason, getTime())
+                end
+                context.glassWork = nil
+                context.stage = "services"
+            end
             return true
         end
 
@@ -806,6 +835,7 @@ function module.new(dependencies)
     --- Begin a staged load, discarding anything already on screen.
     ---@param context AeroGridContext
     local function beginLoad(context)
+        context.glassWork = nil
         context.themeCache, context.startupThemes = context.startupThemes, nil
         context.firstRefreshUntil = nil
         if context.flightFactory then

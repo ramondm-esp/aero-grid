@@ -17,18 +17,18 @@ Choose **Theme** in the widget settings.
 
 *Modern Light palette with dark text and light-background alarm tints.*
 
-## Background and panel opacity
+## Background
 
-In the widget settings, choose **Background → Radio theme** to show EdgeTX's
-background behind the panels. **Panel opacity** defaults to **80%** to let it
-show through the panel fills too. Text and status accents stay
-fully opaque.
+In the widget settings, choose **Background**:
 
-**Background** defaults to **AeroGrid**. Choose **Panel opacity → 100%** for
-solid panel fills. Lower opacity makes the background more visible but can make
-readings harder to see.
+- **Solid** (default) uses AeroGrid's background and opaque panels.
+- **Glass** shows the radio theme background and automatically adjusts panel
+  opacity using the image's average brightness to preserve readability.
 
-If an existing widget shows **-1** for either new setting, select its value once.
+Text and status accents stay fully opaque. If the background image cannot be
+read, Glass uses 80% panel opacity.
+
+If an existing widget shows **-1** for Background, select its value once.
 
 ## Theme files and previews
 

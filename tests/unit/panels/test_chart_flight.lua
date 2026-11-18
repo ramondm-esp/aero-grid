@@ -26,7 +26,7 @@ local function liveSamples(service)
     end
 end
 fixture.reset()
-local host = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark", PanelFill = 1 })
+local host = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
 local placement = { col = 0, row = 0, colSpan = 2, rowSpan = 1 }
 local services = host.dashboardLoader.buildServices(host, placement)
 local session = {
@@ -202,7 +202,7 @@ local unavailablePreview = chart.create(host.page, { x = 0, y = 0, w = 238, h = 
 chart.refresh(unavailablePreview)
 equal(unavailablePreview.status.properties.text, "HISTORY N/A", "a preview must not mask a missing history service")
 
-local lightHost = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-light", PanelFill = 1 })
+local lightHost = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-light" })
 local lightServices = lightHost.dashboardLoader.buildServices(lightHost, placement)
 lightServices.history = fake
 session.flightFirst, session.flightLast, session.flightRevision = 1, 2, session.flightRevision + 1

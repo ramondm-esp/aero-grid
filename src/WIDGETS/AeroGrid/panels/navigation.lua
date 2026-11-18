@@ -448,8 +448,8 @@ function navigation.regionsFor(theme, themeBuilder, rect, layout, fonts, sample)
 end
 
 local function tapeSurfaceColors(context, surface)
+    local opacity = context.theme.panelOpacity or 255
     local function shade(amount)
-        local opacity = context.theme.panelOpacity or 255
         if opacity < 255 then
             -- Shade the existing translucent surface, rather than painting a
             -- second copy of the panel color over the radio background.
@@ -466,12 +466,15 @@ local function tapeSurfaceColors(context, surface)
     for index, amount in ipairs(shading) do
         shading[index] = shade(amount)
     end
-    for index = 1, 7 do
+    for index = 1, 4 do
         local strength = 1 - math.abs(index - 4) * 0.1
         for edge = 1, 2 do
             rims[#rims + 1] =
                 shade(strength * (light and (edge == 1 and -0.18 or -0.12) or (edge == 1 and 0.48 or 0.3)))
         end
+    end
+    for index = 5, 1, -2 do
+        rims[#rims + 1], rims[#rims + 2] = rims[index], rims[index + 1]
     end
     return shading, rims
 end

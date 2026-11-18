@@ -14,8 +14,7 @@
 ---@class AeroGridWidgetOptions
 ---@field Layout integer|string Position in the layout registry, or a layout name.
 ---@field Theme integer|string Position in the theme catalog; or a theme name.
----@field Backdrop? integer 1 for the AeroGrid canvas, 2 for the radio theme.
----@field PanelFill? integer Position in the panel opacity choices.
+---@field Backdrop? integer 1 for Solid, 2 for Glass.
 
 ---@class AeroGridContext
 ---@field zone AeroGridZone Live zone table maintained by EdgeTX.
@@ -234,12 +233,10 @@ for _, name in ipairs(THEME_MODES) do
     themeLabels[#themeLabels + 1] = labels[name] or name
 end
 
-local panelOpacities = { 255, 230, 217, 204, 179, 153, 128 }
 local options = {
     { "Layout", CHOICE, 1, layoutNames },
     { "Theme", CHOICE, 1, themeLabels },
-    { "Backdrop", CHOICE, 1, { "AeroGrid", "Radio theme" } },
-    { "PanelFill", CHOICE, 4, { "100%", "90%", "85%", "80%", "70%", "60%", "50%" } },
+    { "Backdrop", CHOICE, 1, { "Solid", "Glass" } },
 }
 
 --- Resolve the Layout option to a name. A stale position selects Empty.
@@ -653,7 +650,7 @@ local function create(zone, widgetOptions, path)
         layoutName = layoutName(widgetOptions.Layout),
         themeMode = themeModeOf(widgetOptions.Theme),
         radioBackground = widgetOptions.Backdrop == 2,
-        panelOpacity = panelOpacities[widgetOptions.PanelFill or 4] or 204,
+        panelOpacity = widgetOptions.Backdrop == 2 and 204 or 255,
         legacyWidgetArmed = widgetOptions.Armed or 0,
         flightFactory = flightFactory,
         startupThemes = flightFactory.startupThemes,
@@ -992,7 +989,6 @@ local function update(context, widgetOptions)
     local name = layoutName(widgetOptions.Layout)
     local themeMode = themeModeOf(widgetOptions.Theme)
     local radioBackground = widgetOptions.Backdrop == 2
-    local panelOpacity = panelOpacities[widgetOptions.PanelFill or 4] or 204
 
     -- Without a runtime there is nothing to rebuild, and restaging would fail.
     if context.runtimeFailed then
@@ -1007,17 +1003,11 @@ local function update(context, widgetOptions)
         context.menuVisibleFullscreen = true
     end
 
-    if
-        name ~= context.layoutName
-        or themeMode ~= context.themeMode
-        or radioBackground ~= context.radioBackground
-        or panelOpacity ~= context.panelOpacity
-    then
+    if name ~= context.layoutName or themeMode ~= context.themeMode or radioBackground ~= context.radioBackground then
         context.optionsRequest = {
             layoutName = name,
             themeMode = themeMode,
             radioBackground = radioBackground,
-            panelOpacity = panelOpacity,
         }
     else
         context.optionsRequest = nil
@@ -1051,7 +1041,8 @@ local function optionsStep(task)
         context.editorSession = nil
     end
     context.layoutName, context.themeMode = request.layoutName, request.themeMode
-    context.radioBackground, context.panelOpacity = request.radioBackground, request.panelOpacity
+    context.radioBackground = request.radioBackground
+    context.panelOpacity = request.radioBackground and 204 or 255
     context.reloadState = "clear"
 end
 --- Translate compact native option keys into user-facing labels.
@@ -1066,9 +1057,6 @@ local function translate(name)
     end
     if name == "Backdrop" then
         return "Background"
-    end
-    if name == "PanelFill" then
-        return "Panel opacity"
     end
     return name
 end

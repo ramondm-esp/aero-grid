@@ -4,8 +4,7 @@ local root = (... and ... ~= "" and ...) or "."
 local fixture = assert(loadfile(root .. "/tests/support/widget_fixture.lua"))().new()
 fixture.reset()
 local definition = fixture.module("main.lua")
-local context =
-    fixture.createLoaded(nil, { Layout = "review-navigation", Theme = "modern-dark", Backdrop = 2, PanelFill = 3 })
+local context = fixture.createLoaded(nil, { Layout = "review-navigation", Theme = "modern-dark", Backdrop = 2 })
 fixture.pump(context, 40)
 local originalPage, originalRuntime = context.page, context.serviceRuntime
 local originalPanels = {}
@@ -61,7 +60,7 @@ assert(snapshot.code.properties.data == snapshot.url)
 assert(not context.locationOverlay.hidden)
 assert(not context.editorUi, "navigation tap must not open editing")
 assert(snapshot.panel.background.properties.color == context.theme.color.surface, "popup must use panel surface")
-assert(context.theme.panelOpacity == 217, "dashboard must use translucent panel fills")
+assert(context.theme.panelOpacity == 204, "dashboard must use translucent panel fills")
 assert(snapshot.panel.background.properties.opacity == 255, "location popup must stay opaque")
 assert(snapshot.closeButton == nil, "popup must not have a Close button")
 local function assertCentered(snapshot)

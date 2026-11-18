@@ -152,7 +152,7 @@ equal(scales.series[2].high, 30)
 
 fixture.reset()
 fixture.radio.values[300] = 0
-local context = fixture.createLoaded(nil, { Layout = "review-chart", Theme = "modern-dark", PanelFill = 1 })
+local context = fixture.createLoaded(nil, { Layout = "review-chart", Theme = "modern-dark" })
 fixture.pump(context, 120)
 equal(#context.errors, 0, table.concat(context.errors, "\n"))
 equal(#context.panels, 4)
