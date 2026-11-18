@@ -48,7 +48,7 @@
 ---@field errorLabel? any
 ---@field page any Container holding one generation of the dashboard.
 ---@field reloadState? "clear"|"rebuild"
----@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"header-migrate"|"header-finalize"|"services"|"panels"|"panel-migrate"|"panel-validate"|"panel-build"|"load-complete" Staged loader position.
+---@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"header-migrate"|"header-finalize"|"glass"|"services"|"panels"|"panel-migrate"|"panel-validate"|"panel-build"|"load-complete" Staged loader position.
 ---@field foreground? boolean Whether the latest callback was visible.
 ---@field firstRefreshUntil? integer Bounded foreground priority until a regular panel refresh.
 ---@field servicesModule? table Loaded lib/services.lua registry module.

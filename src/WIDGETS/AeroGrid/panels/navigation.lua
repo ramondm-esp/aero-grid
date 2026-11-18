@@ -461,9 +461,9 @@ local function tapeSurfaceColors(context, surface)
         return { color = lcd.RGB(context.themeBuilder.shade(surface, amount)), opacity = 255 }
     end
     local light = context.themeBuilder.contrast(surface, 0x000000) > context.themeBuilder.contrast(surface, 0xFFFFFF)
-    local shading = light and { -0.08, -0.02, 0, -0.06 } or { -0.45, -0.08, 0.04, -0.32 }
-    local rims = {}
-    for index, amount in ipairs(shading) do
+    local amounts = light and { -0.08, -0.02, 0, -0.06 } or { -0.45, -0.08, 0.04, -0.32 }
+    local shading, rims = {}, {}
+    for index, amount in ipairs(amounts) do
         shading[index] = shade(amount)
     end
     for index = 1, 4 do
