@@ -65,13 +65,6 @@ local function callbacks(count)
 end
 -- One sample per series and one chart refresh per simulated 50 ms callback.
 local swappedAt, overflowAt
-local function activeResumes()
-    local count = 0
-    for _, marker in pairs(panel.resumeMarkers.markers) do
-        count = count + (marker.active and 1 or 0)
-    end
-    return count
-end
 for at = 0, 9000, 5 do
     -- A one-second pause at 40 s, after the next window is already prepared.
     if at % 10 == 0 then
@@ -95,7 +88,7 @@ for at = 0, 9000, 5 do
     if not swappedAt and panel.window == 12000 then
         -- The swap can land in the same callback in which the plot fills.
         swappedAt, overflowAt = at, overflowAt or at
-        equal(activeResumes(), 1, "the swapped layer must already show pauses recorded before the swap")
+        equal(panel.gapRoot, nil, "the swapped layer must not cut flight bands at recording pauses")
         local band, area = panel.flightBands[1].properties, panel.area
         -- One pause gap lies before the current time.
         local reach = area.x

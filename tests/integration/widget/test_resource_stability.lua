@@ -86,13 +86,6 @@ local function chartCells()
         if entry.instance.columnRenderer then
             count = count + chartAssertions.nativeColumns(entry.instance.columnRenderer)
         end
-        -- Gap markers are also lazy data objects; their arrival depends on the
-        -- simulated clock, not the geometry change being measured.
-        for _, object in ipairs(fixture.lvglMock.objects) do
-            if entry.instance.gapRoot and object.parent == entry.instance.gapRoot then
-                count = count + 1
-            end
-        end
         -- Auto charts prepare their next window in a lazily built hidden layer.
         local hidden = entry.instance.auto and entry.instance.auto.hidden
         local host = hidden and rawget(hidden, "layerHost")

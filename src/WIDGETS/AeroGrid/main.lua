@@ -37,6 +37,8 @@
 ---@field primitives table
 ---@field theme AeroGridTheme Active resolved theme passed to every panel.
 ---@field themeMode string Name selected in native widget settings.
+---@field radioBackground boolean Whether the radio theme shows through the canvas.
+---@field panelOpacity integer Panel fill opacity, from 0 to 255.
 ---@field services table Shared objects handed to panels.
 ---@field rejected table[] Placements that would not build, with the reason.
 ---@field layoutPath? string
@@ -46,7 +48,7 @@
 ---@field errorLabel? any
 ---@field page any Container holding one generation of the dashboard.
 ---@field reloadState? "clear"|"rebuild"
----@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"header-migrate"|"header-finalize"|"services"|"panels"|"panel-migrate"|"panel-validate"|"panel-build"|"load-complete" Staged loader position.
+---@field stage? "theme-read"|"theme-validate"|"read"|"tokenize"|"header"|"header-migrate"|"header-finalize"|"glass"|"services"|"panels"|"panel-migrate"|"panel-validate"|"panel-build"|"load-complete" Staged loader position.
 ---@field foreground? boolean Whether the latest callback was visible.
 ---@field firstRefreshUntil? integer Bounded foreground priority until a regular panel refresh.
 ---@field servicesModule? table Loaded lib/services.lua registry module.
@@ -218,17 +220,20 @@ end
 
 --- Theme names and labels behind the native CHOICE option.
 local THEME_MODES, themeLabels = themeModes, {}
+-- Keep the virtual mode outside the custom theme filename namespace.
+local GLASS_THEME = "@glass"
 local labels = {}
 for _, definition in ipairs(startupThemeCatalog and startupThemeCatalog.themes or {}) do
     if type(definition.name) == "string" then
         labels[definition.name] = definition.label
     end
 end
-labels["modern-dark"] = labels["modern-dark"] or "Modern Dark"
-labels["modern-light"] = labels["modern-light"] or "Modern Light"
+labels["modern-dark"] = "Dark"
+labels["modern-light"] = "Light"
 for _, name in ipairs(THEME_MODES) do
     themeLabels[#themeLabels + 1] = labels[name] or name
 end
+THEME_MODES[#THEME_MODES + 1], themeLabels[#themeLabels + 1] = GLASS_THEME, "Glass"
 
 local options = {
     { "Layout", CHOICE, 1, layoutNames },
@@ -624,6 +629,7 @@ local function ensureShell(context)
             h = zone.h,
             color = lcd.RGB(0x101316),
             filled = true,
+            opacity = context.radioBackground and 0 or 255,
         })
     end
 end
@@ -634,6 +640,7 @@ end
 ---@param path string Absolute widget directory supplied by EdgeTX.
 ---@return AeroGridContext
 local function create(zone, widgetOptions, path)
+    local themeMode = themeModeOf(widgetOptions.Theme)
     local flightFactory = flightFactories[path or WIDGET_PATH]
     if not flightFactory then
         flightFactory = { members = setmetatable({}, { __mode = "k" }), startupThemes = {} }
@@ -643,7 +650,9 @@ local function create(zone, widgetOptions, path)
         zone = zone,
         path = path,
         layoutName = layoutName(widgetOptions.Layout),
-        themeMode = themeModeOf(widgetOptions.Theme),
+        themeMode = themeMode,
+        radioBackground = themeMode == GLASS_THEME,
+        panelOpacity = themeMode == GLASS_THEME and 204 or 255,
         legacyWidgetArmed = widgetOptions.Armed or 0,
         flightFactory = flightFactory,
         startupThemes = flightFactory.startupThemes,
@@ -692,6 +701,7 @@ local function create(zone, widgetOptions, path)
                     h = zone.h,
                     color = lcd.RGB(0x101316),
                     filled = true,
+                    opacity = context.radioBackground and 0 or 255,
                 })
             end,
         })
@@ -936,8 +946,8 @@ initialize = function(context)
     }
     flightFactory.revision = (flightFactory.revision or 0) + 1
 
-    -- The canvas must be a filled rectangle. A box ignores `color`, leaving the
-    -- radio's own screen background, including its logo, visible behind us.
+    -- A rectangle supplies the solid canvas; zero opacity exposes the radio
+    -- theme instead. A box ignores `color` and cannot provide the solid mode.
     -- Everything the dashboard draws lives inside a page, so a reload can
     -- discard the page wholesale and build the next one somewhere the discarded
     -- one's deferred cleanup cannot reach. The root is normally retained.
@@ -974,7 +984,7 @@ initialize = function(context)
     end
 end
 
---- Apply native host options; changing Layout or Theme rebuilds safely.
+--- Apply native host options; changing layout or appearance rebuilds safely.
 ---@param context AeroGridContext
 ---@param widgetOptions AeroGridWidgetOptions
 local function update(context, widgetOptions)
@@ -995,7 +1005,10 @@ local function update(context, widgetOptions)
     end
 
     if name ~= context.layoutName or themeMode ~= context.themeMode then
-        context.optionsRequest = { layoutName = name, themeMode = themeMode }
+        context.optionsRequest = {
+            layoutName = name,
+            themeMode = themeMode,
+        }
     else
         context.optionsRequest = nil
     end
@@ -1028,6 +1041,8 @@ local function optionsStep(task)
         context.editorSession = nil
     end
     context.layoutName, context.themeMode = request.layoutName, request.themeMode
+    context.radioBackground = request.themeMode == GLASS_THEME
+    context.panelOpacity = context.radioBackground and 204 or 255
     context.reloadState = "clear"
 end
 --- Translate compact native option keys into user-facing labels.

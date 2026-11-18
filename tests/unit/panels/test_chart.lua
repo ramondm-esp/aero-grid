@@ -382,7 +382,7 @@ assert(fixture.pumpUntil(context, function()
 end, 500))
 local paused = power.session.elapsed
 assert(paused >= elapsed)
-equal(#power.resumeMarkers.markerKeys, 0, "pausing must not add a band or an axis break")
+equal(power.resumeMarkers, nil, "pausing must not add a band or an axis break")
 equal(power.status.properties.text, "", "pausing must not print a status")
 local disarmColumn = math.floor((paused - power.start) / power.window * power.area.w + 0.5) + 1
 local disarmMarker = power.armMarkers.markers[-disarmColumn]
@@ -412,14 +412,8 @@ assert(#power.series[1].connectors > 0, "rearm adds a faint connector between se
 assert(power.series[1].connectors[1].connector)
 equal(power.status.properties.text, "")
 equal(#power.series[1].markerKeys, 0, "a recording pause must not add a full-height telemetry-gap marker")
-local seam = power.resumeMarkers.markers[power.resumeMarkers.markerKeys[#power.resumeMarkers.markerKeys]]
-assert(seam and seam.active, "resuming must mark the inserted gap")
-assert(not seam.object.hidden)
-equal(seam.object.properties.w, 24, "the inserted gap must retain the wider spacing")
-equal(seam.object.properties.color, power.theme.color.surface, "the gap must not darken the chart")
-equal(seam.object.parent, power.gapRoot, "the gap only masks flight shading, below grid and telemetry")
-equal(seam.object.kind, "rectangle")
-equal(seam.slashes, nil, "there must be no pause icon")
+equal(power.axis.map:pixel(paused) - power.axis.map:pixel(paused, true), 24, "resuming must retain trace spacing")
+equal(power.gapRoot, nil, "recording pauses must not mask flight shading")
 for _, size in ipairs({ { 320, 240 }, { 800, 480 }, { 480, 272 } }) do
     context.zone.w, context.zone.h = size[1], size[2]
     fixture.pump(context, 60)

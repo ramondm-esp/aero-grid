@@ -13,6 +13,21 @@ function module.new(dependencies)
     local isFullScreen = dependencies.isFullScreen
     local readThemeDefinition = dependencies.readThemeDefinition
 
+    local function applyTheme(context, resolved, opacity)
+        context.theme, context.panelOpacity = resolved, opacity
+        resolved.panelOpacity = opacity
+        for _, warning in ipairs(resolved.warnings) do
+            addError(context, "theme: " .. warning)
+        end
+        for _, notice in ipairs(resolved.notices) do
+            addNotice(context, notice.severity, "theme: " .. notice.text)
+        end
+        context.canvas:set({
+            color = resolved.color.canvas,
+            opacity = context.radioBackground and 0 or 255,
+        })
+    end
+
     --- Advance to the next layout candidate after a read or parse failure.
     ---@param context AeroGridContext
     ---@param reason string
@@ -339,6 +354,7 @@ function module.new(dependencies)
                 stage ~= "services"
                 and stage ~= "theme-read"
                 and stage ~= "theme-validate"
+                and stage ~= "glass"
                 and recoverLayout(context, tostring(message))
             then
                 return true
@@ -584,14 +600,9 @@ function module.new(dependencies)
             end
 
             context.themeSource = "option"
-            context.theme = context.themeBuilder.build(context.themeMode)
-            for _, warning in ipairs(context.theme.warnings) do
-                addError(context, "theme: " .. warning)
+            if not context.radioBackground then
+                applyTheme(context, context.themeBuilder.build(context.themeMode), 255)
             end
-            for _, notice in ipairs(context.theme.notices) do
-                addNotice(context, notice.severity, "theme: " .. notice.text)
-            end
-            context.canvas:set({ color = context.theme.color.canvas })
 
             context.session = validated.session or {}
             context.document = validated
@@ -606,7 +617,61 @@ function module.new(dependencies)
                         .. "."
                 )
             end
-            context.stage = "services"
+            context.glassWork = nil
+            context.stage = context.radioBackground and "glass" or "services"
+            return true
+        end
+
+        if stage == "glass" then
+            if not context.glassWork then
+                if not context.glassModule then
+                    local analyzer, message = loadModule(context.path, "lib/glass.lua", context.packageInfo.runtimeApi)
+                    if not analyzer then
+                        return fail("glass: " .. tostring(message))
+                    end
+                    context.glassModule = analyzer
+                    return true
+                end
+                if not context.backgroundCacheModule then
+                    local cache, message =
+                        loadModule(context.path, "lib/background_cache.lua", context.packageInfo.runtimeApi)
+                    if not cache then
+                        return fail("glass cache: " .. tostring(message))
+                    end
+                    context.backgroundCacheModule = cache
+                    return true
+                end
+                if not context.glassFile then
+                    local file, message =
+                        loadModule(context.path, "lib/verified_file.lua", context.packageInfo.runtimeApi)
+                    if not file then
+                        return fail("glass cache: " .. tostring(message))
+                    end
+                    context.glassFile = file
+                    return true
+                end
+                local persistent = context.backgroundCacheModule.new(
+                    context.yaml,
+                    context.glassFile,
+                    context.layoutStore.sdRoot(context.path) .. "AEROGRID/cache/backgrounds.yml"
+                )
+                context.glassCache = context.glassCache or {}
+                context.glassWork =
+                    context.glassModule.new(context.themeBuilder, context.yaml, context.glassCache, persistent)
+                return true
+            end
+            local work = context.glassWork
+            if work:step() then
+                applyTheme(context, work.theme, work.opacity)
+                if work.reason and context.diagnosticsLog then
+                    context.diagnosticsLog:append(context, "glass", work.reason, getTime())
+                end
+                if work.cacheReason and context.diagnosticsLog then
+                    context.diagnosticsLog:append(context, "glass cache", work.cacheReason, getTime())
+                end
+                context.glassWork = nil
+                context.stage = "services"
+            end
             return true
         end
 
@@ -802,6 +867,7 @@ function module.new(dependencies)
     --- Begin a staged load, discarding anything already on screen.
     ---@param context AeroGridContext
     local function beginLoad(context)
+        context.glassWork = nil
         context.themeCache, context.startupThemes = context.startupThemes, nil
         context.firstRefreshUntil = nil
         if context.flightFactory then
@@ -837,7 +903,9 @@ function module.new(dependencies)
         context.serviceRuntime = nil
         context.serviceIndex = nil
         context.themeNames = { "modern-dark" }
-        if context.themeMode ~= "modern-dark" then
+        if context.radioBackground then
+            context.themeNames[#context.themeNames + 1] = "modern-light"
+        elseif context.themeMode ~= "modern-dark" then
             context.themeNames[#context.themeNames + 1] = context.themeMode
         end
         context.themeDefinitions = {}

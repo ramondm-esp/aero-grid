@@ -33,6 +33,7 @@
 ---@field spacing table
 ---@field accent string Default semantic accent token name.
 ---@field light boolean Whether the theme uses a light palette.
+---@field panelOpacity? integer Panel fill opacity, from 0 to 255; defaults to opaque.
 ---@field warnings string[] Things the layout asked for that cannot be honoured.
 ---@field notices table[] `{severity, text}` records of the host adapting.
 
@@ -207,6 +208,40 @@ function theme.contrast(first, second)
         a, b = b, a
     end
     return (a + 0.05) / (b + 0.05)
+end
+
+--- Keep at least half the panel tint, increasing opacity as needed for readable text.
+---@param resolved AeroGridTheme
+---@param background integer Average background in 24-bit RGB.
+---@return integer opacity
+function theme.glassOpacity(resolved, background)
+    local rgb = resolved.rgb
+    local targets = {
+        math.min(MIN_TEXT_CONTRAST, theme.contrast(rgb.surface, rgb.text)),
+        math.min(MIN_MUTED_CONTRAST, theme.contrast(rgb.surface, rgb.textMuted)),
+        math.min(MIN_FAINT_CONTRAST, theme.contrast(rgb.surface, rgb.textFaint)),
+    }
+    local red, green, blue = channels(rgb.surface)
+    local br, bg, bb = channels(background)
+    local low, high = 128, 255
+    while low < high do
+        local middle = (low + high) // 2
+        local alpha = middle / 255
+        local blended = pack(br + (red - br) * alpha, bg + (green - bg) * alpha, bb + (blue - bb) * alpha)
+        local readable = true
+        for index, name in ipairs({ "text", "textMuted", "textFaint" }) do
+            if theme.contrast(blended, rgb[name]) + 0.00001 < targets[index] then
+                readable = false
+                break
+            end
+        end
+        if readable then
+            high = middle
+        else
+            low = middle + 1
+        end
+    end
+    return high
 end
 
 --- Move a color toward white or black by a fraction.

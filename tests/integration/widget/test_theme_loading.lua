@@ -140,7 +140,198 @@ local function testUserThemeOverridesShippedTheme()
     assertEqual(#context.errors, 0, table.concat(context.errors, "\n"))
 end
 
+local function testThemeAppearance()
+    local widgetPath = makeWidget(
+        "panel-opacity",
+        [[
+version: 4
+grid:
+  columns: 4
+  rows: 4
+panels:
+  - id: only
+    type: metric
+    col: 0
+    row: 0
+    colSpan: 2
+    rowSpan: 2
+    config:
+      metrics:
+        - source: Alt
+          label: Altitude
+]]
+    )
+    local function appearance(context, canvasOpacity, panelOpacity)
+        assertEqual(context.canvas.properties.opacity, canvasOpacity, "canvas opacity")
+        assertEqual(context.theme.panelOpacity, panelOpacity, "resolved theme opacity")
+        local instance = context.panels[1].instance
+        local panel = instance.panel
+        assertEqual(panel.background.properties.opacity, panelOpacity, "panel fill opacity")
+        assertEqual(panel.root.properties.opacity, nil, "panel children must not be faded")
+        assertEqual(instance.label.properties.opacity, nil, "heading must not be faded")
+        assertEqual(panel.accent.properties.opacity, nil, "status accent must not be faded")
+        assertEqual(#context.errors, 0, table.concat(context.errors, "\n"))
+    end
+    local selected = { Layout = "Default", Theme = 3 }
+    local solid = createLoaded(nil, { Layout = "Default", Theme = "modern-dark" }, widgetPath)
+    appearance(solid, 255, 255)
+    for _, sentinel in ipairs({ 0, -1, 999, 4294967295 }) do
+        local defaults =
+            createLoaded(nil, { Layout = "Default", Theme = sentinel, Backdrop = 2, PanelFill = sentinel }, widgetPath)
+        appearance(defaults, 255, 255)
+        assertEqual(defaults.radioBackground, false, "missing themes must select opaque Dark")
+    end
+    appearance(createLoaded(nil, { Layout = "Default", Theme = "modern-dark" }, widgetPath), 255, 255)
+    assertEqual(definition.options[2][3], 1, "new widgets retain the Dark default")
+    assertEqual(table.concat(definition.options[2][4], ","), "Dark,Light,Glass")
+    assertEqual(#definition.options, 2, "appearance must use a single Theme setting")
+    local context = definition.create(fixture.lvglMock.appZone(), selected, widgetPath)
+    assertEqual(context.canvas.properties.opacity, 0, "startup must expose the radio background")
+    pump(context, 100)
+    appearance(context, 0, 204)
+    assertEqual(context.theme.mode, "modern-dark", "unavailable images use dark glass")
+    appearance(solid, 255, 255)
+    for _, state in ipairs({ "warning", "critical", "active", "normal" }) do
+        local presentation = context.themeBuilder.state(context.theme, state)
+        context.primitives.stylePanel(context.panels[1].instance.panel, presentation)
+        appearance(context, 0, 204)
+        assertEqual(
+            context.panels[1].instance.panel.background.properties.color,
+            presentation.surface or context.theme.color.surface,
+            state .. " must retain its surface tint"
+        )
+    end
+    definition.update(context, selected)
+    assertEqual(context.optionsRequest, nil, "unchanged appearance must not reload")
+    fixture.lvglMock.setFullScreen(true)
+    pump(context, 60)
+    appearance(context, 0, 204)
+    fixture.lvglMock.setFullScreen(false)
+    context.zone.w, context.zone.h = 320, 240
+    pump(context, 60)
+    appearance(context, 0, 204)
+    assertEqual(context.canvas.properties.w, 320, "transparent canvas must reflow")
+
+    local oldPage = context.page
+    definition.update(context, { Layout = "Default", Theme = 2 })
+    pump(context, 100)
+    assert(context.page ~= oldPage, "theme reload must replace the page")
+    appearance(context, 255, 255)
+    assertEqual(context.theme.mode, "modern-light")
+    definition.update(context, selected)
+    assert(context.optionsRequest, "Glass selection must be scheduled")
+    assertEqual(context.canvas.properties.opacity, 255, "update must not draw outside the scheduler")
+    pump(context, 100)
+    appearance(context, 0, 204)
+    definition.update(context, { Layout = "Default", Theme = 1 })
+    pump(context, 100)
+    appearance(context, 255, 255)
+    definition.update(context, { Layout = "Default", Theme = 1, Backdrop = 2, PanelFill = 1 })
+    assertEqual(context.optionsRequest, nil, "obsolete background settings must not reload the dashboard")
+    definition.update(context, { Layout = "Default", Theme = 0 })
+    pump(context, 100)
+    appearance(context, 255, 255)
+    definition.update(context, { Layout = "Default", Theme = -1 })
+    assertEqual(context.optionsRequest, nil, "equivalent missing-value sentinels must not keep reloading")
+    fixture.lvglMock.setAppMode(false)
+    assertEqual(definition.translate("Theme"), "Theme")
+
+    local analyzer = fixture.module("lib/glass.lua")
+    local brightness, revision, decodes = 255, 1, 0
+    local radio = "selectedTheme: EdgeTX Default\n"
+    local env = {
+        width = 480,
+        height = 272,
+        stat = function(path)
+            if path == "/RADIO/radio.yml" then
+                return { size = #radio }
+            elseif path == "/THEMES/EdgeTX/background.png" then
+                return { size = 256, time = { year = 2026, mon = 11, day = 17, hour = 20, min = 0, sec = revision } }
+            end
+        end,
+        dir = function()
+            error("the default theme does not require directory scanning")
+        end,
+        io = {
+            open = function()
+                return {}
+            end,
+            read = function()
+                return radio
+            end,
+            close = function() end,
+        },
+        bitmap = {
+            open = function()
+                decodes = decodes + 1
+                return {}
+            end,
+            getSize = function()
+                return 16, 16
+            end,
+            resize = function(image)
+                return image
+            end,
+            toMask = function()
+                return string.char(16, 0, 16, 0) .. string.rep(string.char(255 - brightness), 256)
+            end,
+        },
+    }
+    local automatic = definition.create(fixture.lvglMock.appZone(), selected, widgetPath)
+    automatic.glassModule = {
+        new = function(builder, yaml, cache, persistent)
+            return analyzer.new(builder, yaml, cache, persistent, env)
+        end,
+    }
+    local cacheModule = fixture.module("lib/background_cache.lua")
+    local disk, operations = assert(loadfile(root .. "/tests/support/memory_files.lua"))()()
+    local cachePath = widgetPath .. "AEROGRID/cache/backgrounds.yml"
+    automatic.backgroundCacheModule = {
+        new = function(yaml, writer, filename)
+            assertEqual(filename, cachePath, "background cache must live outside the installed widget")
+            return cacheModule.new(yaml, writer, filename, operations)
+        end,
+    }
+    pump(automatic, 100)
+    local function autoAppearance(mode)
+        assertEqual(automatic.theme.mode, mode)
+        appearance(automatic, 0, automatic.themeBuilder.glassOpacity(automatic.theme, brightness * 65793))
+        assertEqual(
+            automatic.panels[1].instance.panel.background.properties.color,
+            automatic.theme.color.surface,
+            "panels must be constructed with the automatically selected palette"
+        )
+        definition.update(automatic, selected)
+        assertEqual(automatic.optionsRequest, nil, "resolved Glass palettes must not change the selected option")
+    end
+    autoAppearance("modern-light")
+    assertEqual(decodes, 1)
+    definition.update(automatic, { Layout = "Default", Theme = 2 })
+    pump(automatic, 100)
+    appearance(automatic, 255, 255)
+    definition.update(automatic, selected)
+    pump(automatic, 100)
+    autoAppearance("modern-light")
+    assertEqual(decodes, 1, "switching away and back to Glass must reuse the sampled image")
+    brightness, revision = 0, 2
+    definition.update(automatic, { Layout = "Default", Theme = 1 })
+    pump(automatic, 100)
+    definition.update(automatic, selected)
+    pump(automatic, 100)
+    autoAppearance("modern-dark")
+    assertEqual(decodes, 2, "a changed image must refresh both palette and opacity")
+    assert(disk[cachePath], "Glass loading must save the sample to the shared cache")
+    local nextInstance = definition.create(fixture.lvglMock.appZone(), selected, widgetPath)
+    nextInstance.glassModule = automatic.glassModule
+    nextInstance.backgroundCacheModule = automatic.backgroundCacheModule
+    pump(nextInstance, 100)
+    appearance(nextInstance, 0, automatic.panelOpacity)
+    assertEqual(nextInstance.theme.mode, "modern-dark")
+    assertEqual(decodes, 2, "new widget instances must load the sample without reopening the image")
+end
+
 testLayoutSelectsLightTheme()
 testCustomTheme()
 testChangingToNewTheme()
 testUserThemeOverridesShippedTheme()
+testThemeAppearance()

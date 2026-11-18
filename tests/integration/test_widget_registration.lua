@@ -61,5 +61,8 @@ assert(
 )
 assert(definition.name == "AeroGrid")
 local themeOptions = definition.options[2][4]
-assert(#themeOptions == 3, "registration discovers additional themes")
+assert(#definition.options == 2, "Theme must replace the separate Background option")
+assert(#themeOptions == 4, "registration discovers additional themes and adds Glass")
+assert(themeOptions[1] == "Dark" and themeOptions[2] == "Light", "built-in choices have short labels")
 assert(themeOptions[3] == "Test #3: Dark", "picker labels retain YAML quoting and embedded punctuation")
+assert(themeOptions[4] == "Glass", "Glass must not shift saved custom theme positions")

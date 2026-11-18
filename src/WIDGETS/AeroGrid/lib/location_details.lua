@@ -57,6 +57,7 @@ function details.open(context, view, accent)
     fonts.label, fonts.badge = 0, 0
     local state = not snapshot.valid and "unavailable" or snapshot.stale and "stale" or "normal"
     local presentation = builder.state(theme, state, accent)
+    presentation.opacity = 255
     local frame = builder.frame(theme, rect, fonts)
     local card, _, badge =
         primitives.panelWithHeader(overlay, rect, theme, presentation, frame, fonts, "GPS LOCATION", builder)

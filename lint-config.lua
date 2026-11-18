@@ -5,6 +5,8 @@ return {
             "inject-field",
         },
         globals = {
+            "Bitmap",
+            "bitmap",
             "CHAR_UP",
             "CHAR_DOWN",
             "CHAR_DELTA",
@@ -48,6 +50,8 @@ return {
             "getTime",
             "getValue",
             "lcd",
+            "LCD_W",
+            "LCD_H",
             "loadScript",
             "lvgl",
             "model",

@@ -33,7 +33,7 @@ Choose **AeroGrid** in **Select widget**.
 
 In the AeroGrid settings, choose **Layout**. Select **Empty** to build your
 own dashboard, or **Default** to start with the bundled aircraft dashboard.
-Choose **Modern Dark** or **Modern Light** for **Theme**.
+Choose **Dark**, **Light**, or **Glass** for **Theme**.
 
 ![AeroGrid widget settings with Layout and Theme pickers](../assets/editor/widget-options.png)
 
