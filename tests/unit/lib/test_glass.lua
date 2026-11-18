@@ -106,8 +106,8 @@ local function mask(brightness)
     return string.char(16, 0, 16, 0) .. string.rep(string.char(255 - brightness), 256)
 end
 local worst = 0
-local function analyze(resolved, cache)
-    local work = glass.new(builder, resolved or dark, yaml, cache or {}, env)
+local function analyze(cache)
+    local work = glass.new(builder, yaml, cache or {}, env)
     for _ = 1, 100 do
         local counted = 0
         debug.sethook(function()
@@ -130,7 +130,8 @@ files["/THEMES/Ocean/theme.yml"] = 'summary:\n  name: "Ocean # Blue"\n'
 images["/THEMES/Ocean/background.png"] = { mask = mask(255) }
 local white = analyze()
 equal(white.average, 0xFFFFFF)
-equal(white.opacity, builder.glassOpacity(dark, 0xFFFFFF))
+equal(white.theme.mode, "modern-light")
+equal(white.opacity, builder.glassOpacity(white.theme, 0xFFFFFF))
 equal(white.reason, nil)
 equal(white.filename, "/THEMES/Ocean/background.png")
 images["/THEMES/Ocean/background.png"].mask = string.char(16, 0, 16, 0)
@@ -142,24 +143,30 @@ equal(analyze().average, 0xFFFFFF, "aspect-preserving resize padding must not da
 images["/THEMES/Ocean/background_480x272.png"] = { mask = mask(0) }
 local black = analyze()
 equal(black.average, 0)
+equal(black.theme.mode, "modern-dark")
 equal(black.filename, "/THEMES/Ocean/background_480x272.png", "screen-specific backgrounds take precedence")
-assert(white.opacity > black.opacity, "dark panels on bright images need more opacity")
-assert(builder.glassOpacity(light, 0) > builder.glassOpacity(light, 0xFFFFFF))
+for _, brightness in ipairs({ 0, 85, 127, 128, 170, 255 }) do
+    images["/THEMES/Ocean/background_480x272.png"].mask = mask(brightness)
+    local automatic = analyze()
+    equal(automatic.theme.mode, brightness < 128 and "modern-dark" or "modern-light")
+    equal(automatic.opacity, builder.glassOpacity(automatic.theme, automatic.average))
+end
 
 images["/THEMES/Ocean/background_480x272.png"].mask = string.char(16, 0, 16, 0) .. string.rep(string.char(0, 255), 128)
 local cache = {}
-local mixed = analyze(dark, cache)
+local mixed = analyze(cache)
 equal(mixed.average, 0x808080, "average must include all samples, not a single pixel")
 local decodes = calls.decode
-equal(analyze(light, cache).opacity, builder.glassOpacity(light, 0x808080))
-equal(calls.decode, decodes, "palette changes reuse the sampled image")
+equal(analyze(cache).opacity, builder.glassOpacity(light, 0x808080))
+equal(calls.decode, decodes, "dashboard reloads reuse the sampled image")
 images["/THEMES/Ocean/background_480x272.png"].modified = 2
-analyze(dark, cache)
+analyze(cache)
 equal(calls.decode, decodes + 1, "changed background files must be sampled again")
 
 images["/THEMES/Ocean/background_480x272.png"].invalid = true
 local invalid = analyze()
 equal(invalid.opacity, 204)
+equal(invalid.theme.mode, "modern-dark")
 assert(invalid.reason)
 images["/THEMES/Ocean/background_480x272.png"].invalid = nil
 images["/THEMES/Ocean/background_480x272.png"].width = 1
@@ -183,7 +190,9 @@ files["/RADIO/radio.yml"] = nil
 equal(analyze().opacity, 204)
 local bitmapApi = env.bitmap
 env.bitmap = nil
-equal(analyze().opacity, 204, "firmware without bitmap analysis must use the fallback")
+local unsupported = analyze()
+equal(unsupported.opacity, 204, "firmware without bitmap analysis must use the fallback")
+equal(unsupported.theme.mode, "modern-dark")
 env.bitmap = bitmapApi
 assert(worst < 12000, "background analysis must stay within a loader callback")
-print("Glass image averaging and automatic opacity passed; worst step " .. worst .. " Lua instructions")
+print("Glass image averaging, automatic palette and opacity passed; worst step " .. worst .. " Lua instructions")

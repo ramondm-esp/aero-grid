@@ -6,8 +6,13 @@ Choose **Theme** in the widget settings.
 
 | Theme | Description |
 | --- | --- |
-| **Modern Dark** | AeroGrid's dark instrument palette. |
-| **Modern Light** | Pale instrument panels, dark text, and light-background accents and alarm tints. |
+| **Dark** (default) | Dark, opaque panels on AeroGrid's dark background. |
+| **Light** | Light, opaque panels on AeroGrid's light background. |
+| **Glass** | Translucent panels over the radio theme background, with automatic light/dark colors and opacity. |
+
+Glass uses the background image's average brightness to choose panel colors
+and opacity. Text and status accents stay fully opaque. If the image cannot be
+read, Glass uses dark panels at 80% opacity.
 
 ![Theme showcase with token swatches, text levels, bars, a dial, and six dashboard panel states](../assets/theme/theme-modern.png)
 
@@ -16,19 +21,6 @@ Choose **Theme** in the widget settings.
 ![Modern Light theme showcase with pale panels, dark text, and pastel alarm tints](../assets/theme/theme-modern-light.png)
 
 *Modern Light palette with dark text and light-background alarm tints.*
-
-## Background
-
-In the widget settings, choose **Background**:
-
-- **Solid** (default) uses AeroGrid's background and opaque panels.
-- **Glass** shows the radio theme background and automatically adjusts panel
-  opacity using the image's average brightness to preserve readability.
-
-Text and status accents stay fully opaque. If the background image cannot be
-read, Glass uses 80% panel opacity.
-
-If an existing widget shows **-1** for Background, select its value once.
 
 ## Theme files and previews
 
@@ -40,7 +32,7 @@ name. Restart the radio after adding a theme so it appears in the Theme picker.
 Select **Palette** as the layout on a separate App-mode screen. It shows the
 theme with fixed sample data, without
 a receiver or telemetry setup. Switch the widget's **Theme** option between
-Modern Dark and Modern Light to compare the same samples. Normal, active,
+Dark, Light, and Glass to compare the same samples. Normal, active,
 warning, critical, stale, and unavailable cards are shown together.
 
 ## Create a custom theme

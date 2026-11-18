@@ -399,12 +399,11 @@ local function testOptionReload()
     assertEqual(context.optionsRequest.themeMode, "custom")
     assertEqual(context.reloadState, nil, "native options must wait for a scheduler grant")
 
-    -- The radio stores Theme as a position: 1 is Modern Dark, 2 Modern Light,
-    -- and a position from the retired longer list falls back to Modern Dark.
+    -- Preserve the stored dark/light positions and offer Glass as the next choice.
     local options = definition.options[2]
     assertEqual(options[1], "Theme")
-    assertEqual(table.concat(options[4], ","), "Modern Dark,Modern Light")
-    for position, mode in pairs({ [1] = "modern-dark", [2] = "modern-light", [3] = "modern-dark", [9] = "modern-dark" }) do
+    assertEqual(table.concat(options[4], ","), "Dark,Light,Glass")
+    for position, mode in pairs({ [1] = "modern-dark", [2] = "modern-light", [3] = "@glass", [9] = "modern-dark" }) do
         local selected = createLoaded(
             { x = 0, y = 0, w = 480, h = 272 },
             { Layout = "main", Theme = position },

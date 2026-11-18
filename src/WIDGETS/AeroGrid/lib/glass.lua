@@ -31,7 +31,7 @@ local function field(env, filename, name)
     return parsed.value
 end
 
-function glass.new(builder, resolved, yaml, cache, env)
+function glass.new(builder, yaml, cache, env)
     env = env
         or {
             stat = fstat,
@@ -52,7 +52,6 @@ function glass.new(builder, resolved, yaml, cache, env)
             yaml = yaml,
         },
         builder = builder,
-        theme = resolved,
         cache = cache,
         stage = "radio",
         opacity = 204,
@@ -60,8 +59,8 @@ function glass.new(builder, resolved, yaml, cache, env)
 end
 
 local function fallback(self, reason)
-    self.reason, self.stage, self.image, self.iterator = reason, nil, nil, nil
-    return true
+    self.reason, self.stage, self.image, self.iterator = reason, "palette", nil, nil
+    return false
 end
 
 --- Each call reads one metadata file, decodes/resizes one image, or averages up to 256 samples.
@@ -123,7 +122,7 @@ function glass:step()
         end
         self.filename, self.key = filename, key
         if self.cache.key == key then
-            self.average, self.stage = self.cache.average, "opacity"
+            self.average, self.stage = self.cache.average, "palette"
         else
             self.stage = "decode"
         end
@@ -169,9 +168,15 @@ function glass:step()
         local average = math.floor(sum / count + 0.5)
         self.average = average * 65793
         self.cache.key, self.cache.average = self.key, self.average
+        self.stage = "palette"
+    elseif stage == "palette" then
+        local mode = self.average and self.average % 256 >= 128 and "modern-light" or "modern-dark"
+        self.theme = self.builder.build(mode)
         self.stage = "opacity"
     elseif stage == "opacity" then
-        self.opacity = self.builder.glassOpacity(self.theme, self.average)
+        if self.average then
+            self.opacity = self.builder.glassOpacity(self.theme, self.average)
+        end
         self.stage = nil
         return true
     else

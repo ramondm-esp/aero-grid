@@ -13,6 +13,21 @@ function module.new(dependencies)
     local isFullScreen = dependencies.isFullScreen
     local readThemeDefinition = dependencies.readThemeDefinition
 
+    local function applyTheme(context, resolved, opacity)
+        context.theme, context.panelOpacity = resolved, opacity
+        resolved.panelOpacity = opacity
+        for _, warning in ipairs(resolved.warnings) do
+            addError(context, "theme: " .. warning)
+        end
+        for _, notice in ipairs(resolved.notices) do
+            addNotice(context, notice.severity, "theme: " .. notice.text)
+        end
+        context.canvas:set({
+            color = resolved.color.canvas,
+            opacity = context.radioBackground and 0 or 255,
+        })
+    end
+
     --- Advance to the next layout candidate after a read or parse failure.
     ---@param context AeroGridContext
     ---@param reason string
@@ -585,19 +600,9 @@ function module.new(dependencies)
             end
 
             context.themeSource = "option"
-            context.theme = context.themeBuilder.build(context.themeMode)
-            context.panelOpacity = context.radioBackground and 204 or 255
-            context.theme.panelOpacity = context.panelOpacity
-            for _, warning in ipairs(context.theme.warnings) do
-                addError(context, "theme: " .. warning)
+            if not context.radioBackground then
+                applyTheme(context, context.themeBuilder.build(context.themeMode), 255)
             end
-            for _, notice in ipairs(context.theme.notices) do
-                addNotice(context, notice.severity, "theme: " .. notice.text)
-            end
-            context.canvas:set({
-                color = context.theme.color.canvas,
-                opacity = context.radioBackground and 0 or 255,
-            })
 
             context.session = validated.session or {}
             context.document = validated
@@ -627,13 +632,12 @@ function module.new(dependencies)
                     context.glassModule = analyzer
                 end
                 context.glassCache = context.glassCache or {}
-                context.glassWork =
-                    context.glassModule.new(context.themeBuilder, context.theme, context.yaml, context.glassCache)
+                context.glassWork = context.glassModule.new(context.themeBuilder, context.yaml, context.glassCache)
                 return true
             end
             local work = context.glassWork
             if work:step() then
-                context.panelOpacity, context.theme.panelOpacity = work.opacity, work.opacity
+                applyTheme(context, work.theme, work.opacity)
                 if work.reason and context.diagnosticsLog then
                     context.diagnosticsLog:append(context, "glass", work.reason, getTime())
                 end
@@ -871,7 +875,9 @@ function module.new(dependencies)
         context.serviceRuntime = nil
         context.serviceIndex = nil
         context.themeNames = { "modern-dark" }
-        if context.themeMode ~= "modern-dark" then
+        if context.radioBackground then
+            context.themeNames[#context.themeNames + 1] = "modern-light"
+        elseif context.themeMode ~= "modern-dark" then
             context.themeNames[#context.themeNames + 1] = context.themeMode
         end
         context.themeDefinitions = {}

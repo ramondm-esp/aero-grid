@@ -6,7 +6,7 @@ local chart = fixture.module("panels/chart.lua")
 assert(loadfile(root .. "/tests/support/chart_turns.lua"))().install(chart)
 local view = assert(loadfile(root .. "/tests/support/chart_assertions.lua"))()
 local equal = assert(loadfile(root .. "/tests/support/assertions.lua"))().assertEqual
-local host = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark", Backdrop = 2 })
+local host = fixture.createLoaded(nil, { Layout = "Empty", Theme = 3 })
 local services = host.dashboardLoader.buildServices(host, { col = 0, row = 0, colSpan = 2, rowSpan = 2 })
 local session = {
     configured = true,

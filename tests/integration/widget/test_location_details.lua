@@ -4,7 +4,7 @@ local root = (... and ... ~= "" and ...) or "."
 local fixture = assert(loadfile(root .. "/tests/support/widget_fixture.lua"))().new()
 fixture.reset()
 local definition = fixture.module("main.lua")
-local context = fixture.createLoaded(nil, { Layout = "review-navigation", Theme = "modern-dark", Backdrop = 2 })
+local context = fixture.createLoaded(nil, { Layout = "review-navigation", Theme = 3 })
 fixture.pump(context, 40)
 local originalPage, originalRuntime = context.page, context.serviceRuntime
 local originalPanels = {}

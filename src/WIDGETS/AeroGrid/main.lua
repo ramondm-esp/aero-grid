@@ -14,7 +14,6 @@
 ---@class AeroGridWidgetOptions
 ---@field Layout integer|string Position in the layout registry, or a layout name.
 ---@field Theme integer|string Position in the theme catalog; or a theme name.
----@field Backdrop? integer 1 for Solid, 2 for Glass.
 
 ---@class AeroGridContext
 ---@field zone AeroGridZone Live zone table maintained by EdgeTX.
@@ -221,22 +220,24 @@ end
 
 --- Theme names and labels behind the native CHOICE option.
 local THEME_MODES, themeLabels = themeModes, {}
+-- Keep the virtual mode outside the custom theme filename namespace.
+local GLASS_THEME = "@glass"
 local labels = {}
 for _, definition in ipairs(startupThemeCatalog and startupThemeCatalog.themes or {}) do
     if type(definition.name) == "string" then
         labels[definition.name] = definition.label
     end
 end
-labels["modern-dark"] = labels["modern-dark"] or "Modern Dark"
-labels["modern-light"] = labels["modern-light"] or "Modern Light"
+labels["modern-dark"] = "Dark"
+labels["modern-light"] = "Light"
 for _, name in ipairs(THEME_MODES) do
     themeLabels[#themeLabels + 1] = labels[name] or name
 end
+THEME_MODES[#THEME_MODES + 1], themeLabels[#themeLabels + 1] = GLASS_THEME, "Glass"
 
 local options = {
     { "Layout", CHOICE, 1, layoutNames },
     { "Theme", CHOICE, 1, themeLabels },
-    { "Backdrop", CHOICE, 1, { "Solid", "Glass" } },
 }
 
 --- Resolve the Layout option to a name. A stale position selects Empty.
@@ -639,6 +640,7 @@ end
 ---@param path string Absolute widget directory supplied by EdgeTX.
 ---@return AeroGridContext
 local function create(zone, widgetOptions, path)
+    local themeMode = themeModeOf(widgetOptions.Theme)
     local flightFactory = flightFactories[path or WIDGET_PATH]
     if not flightFactory then
         flightFactory = { members = setmetatable({}, { __mode = "k" }), startupThemes = {} }
@@ -648,9 +650,9 @@ local function create(zone, widgetOptions, path)
         zone = zone,
         path = path,
         layoutName = layoutName(widgetOptions.Layout),
-        themeMode = themeModeOf(widgetOptions.Theme),
-        radioBackground = widgetOptions.Backdrop == 2,
-        panelOpacity = widgetOptions.Backdrop == 2 and 204 or 255,
+        themeMode = themeMode,
+        radioBackground = themeMode == GLASS_THEME,
+        panelOpacity = themeMode == GLASS_THEME and 204 or 255,
         legacyWidgetArmed = widgetOptions.Armed or 0,
         flightFactory = flightFactory,
         startupThemes = flightFactory.startupThemes,
@@ -988,7 +990,6 @@ end
 local function update(context, widgetOptions)
     local name = layoutName(widgetOptions.Layout)
     local themeMode = themeModeOf(widgetOptions.Theme)
-    local radioBackground = widgetOptions.Backdrop == 2
 
     -- Without a runtime there is nothing to rebuild, and restaging would fail.
     if context.runtimeFailed then
@@ -1003,11 +1004,10 @@ local function update(context, widgetOptions)
         context.menuVisibleFullscreen = true
     end
 
-    if name ~= context.layoutName or themeMode ~= context.themeMode or radioBackground ~= context.radioBackground then
+    if name ~= context.layoutName or themeMode ~= context.themeMode then
         context.optionsRequest = {
             layoutName = name,
             themeMode = themeMode,
-            radioBackground = radioBackground,
         }
     else
         context.optionsRequest = nil
@@ -1041,8 +1041,8 @@ local function optionsStep(task)
         context.editorSession = nil
     end
     context.layoutName, context.themeMode = request.layoutName, request.themeMode
-    context.radioBackground = request.radioBackground
-    context.panelOpacity = request.radioBackground and 204 or 255
+    context.radioBackground = request.themeMode == GLASS_THEME
+    context.panelOpacity = context.radioBackground and 204 or 255
     context.reloadState = "clear"
 end
 --- Translate compact native option keys into user-facing labels.
@@ -1054,9 +1054,6 @@ local function translate(name)
     end
     if name == "Theme" then
         return "Theme"
-    end
-    if name == "Backdrop" then
-        return "Background"
     end
     return name
 end
