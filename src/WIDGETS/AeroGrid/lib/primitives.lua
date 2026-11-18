@@ -398,6 +398,7 @@ function primitives.panel(parent, rect, theme, presentation)
         color = theme.color.surface,
         filled = true,
         rounded = radius,
+        opacity = presentation.opacity or theme.panelOpacity or 255,
     })
 
     local border = lvgl.rectangle(root, {

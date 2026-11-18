@@ -140,7 +140,105 @@ local function testUserThemeOverridesShippedTheme()
     assertEqual(#context.errors, 0, table.concat(context.errors, "\n"))
 end
 
+local function testBackgroundAndPanelOpacity()
+    local widgetPath = makeWidget(
+        "panel-opacity",
+        [[
+version: 4
+grid:
+  columns: 4
+  rows: 4
+panels:
+  - id: only
+    type: metric
+    col: 0
+    row: 0
+    colSpan: 2
+    rowSpan: 2
+    config:
+      metrics:
+        - source: Alt
+          label: Altitude
+]]
+    )
+    local function appearance(context, canvasOpacity, panelOpacity)
+        assertEqual(context.canvas.properties.opacity, canvasOpacity, "canvas opacity")
+        assertEqual(context.theme.panelOpacity, panelOpacity, "resolved theme opacity")
+        local instance = context.panels[1].instance
+        local panel = instance.panel
+        assertEqual(panel.background.properties.opacity, panelOpacity, "panel fill opacity")
+        assertEqual(panel.root.properties.opacity, nil, "panel children must not be faded")
+        assertEqual(instance.label.properties.opacity, nil, "heading must not be faded")
+        assertEqual(panel.accent.properties.opacity, nil, "status accent must not be faded")
+        assertEqual(#context.errors, 0, table.concat(context.errors, "\n"))
+    end
+    local selected = { Layout = "Default", Theme = "modern-dark", Backdrop = 2, PanelFill = 3 }
+    local solid = createLoaded(nil, { Layout = "Default", Theme = "modern-dark", PanelFill = 1 }, widgetPath)
+    appearance(solid, 255, 255)
+    for _, sentinel in ipairs({ 0, -1, 999, 4294967295 }) do
+        local defaults = createLoaded(
+            nil,
+            { Layout = "Default", Theme = "modern-dark", Backdrop = sentinel, PanelFill = sentinel },
+            widgetPath
+        )
+        appearance(defaults, 255, 204)
+        assertEqual(defaults.radioBackground, false, "missing background must select AeroGrid")
+    end
+    appearance(createLoaded(nil, { Layout = "Default", Theme = "modern-dark" }, widgetPath), 255, 204)
+    assertEqual(definition.options[3][3], 1, "new widgets default to AeroGrid")
+    assertEqual(definition.options[4][3], 4, "new widgets default to 80%")
+    local context = definition.create(fixture.lvglMock.appZone(), selected, widgetPath)
+    assertEqual(context.canvas.properties.opacity, 0, "startup must expose the radio background")
+    pump(context, 100)
+    appearance(context, 0, 217)
+    appearance(solid, 255, 255)
+    for _, state in ipairs({ "warning", "critical", "active", "normal" }) do
+        local presentation = context.themeBuilder.state(context.theme, state)
+        context.primitives.stylePanel(context.panels[1].instance.panel, presentation)
+        appearance(context, 0, 217)
+        assertEqual(
+            context.panels[1].instance.panel.background.properties.color,
+            presentation.surface or context.theme.color.surface,
+            state .. " must retain its surface tint"
+        )
+    end
+    definition.update(context, selected)
+    assertEqual(context.optionsRequest, nil, "unchanged appearance must not reload")
+    fixture.lvglMock.setFullScreen(true)
+    pump(context, 60)
+    appearance(context, 0, 217)
+    fixture.lvglMock.setFullScreen(false)
+    context.zone.w, context.zone.h = 320, 240
+    pump(context, 60)
+    appearance(context, 0, 217)
+    assertEqual(context.canvas.properties.w, 320, "transparent canvas must reflow")
+
+    local oldPage = context.page
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 2, PanelFill = 3 })
+    pump(context, 100)
+    assert(context.page ~= oldPage, "theme reload must replace the page")
+    appearance(context, 0, 217)
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 1, PanelFill = 3 })
+    assert(context.optionsRequest, "background-only changes must be scheduled")
+    assertEqual(context.canvas.properties.opacity, 0, "update must not draw outside the scheduler")
+    pump(context, 100)
+    appearance(context, 255, 217)
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 1, PanelFill = 1 })
+    assert(context.optionsRequest, "opacity-only changes must be scheduled")
+    pump(context, 100)
+    appearance(context, 255, 255)
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = 0, PanelFill = 0 })
+    pump(context, 100)
+    appearance(context, 255, 204)
+    definition.update(context, { Layout = "Default", Theme = "modern-light", Backdrop = -1, PanelFill = -1 })
+    assertEqual(context.optionsRequest, nil, "equivalent missing-value sentinels must not keep reloading")
+    fixture.lvglMock.setAppMode(false)
+    assertEqual(definition.translate("Backdrop"), "Background")
+    assertEqual(definition.translate("PanelFill"), "Panel opacity")
+end
+
 testLayoutSelectsLightTheme()
 testCustomTheme()
 testChangingToNewTheme()
 testUserThemeOverridesShippedTheme()
+testBackgroundAndPanelOpacity()

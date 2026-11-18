@@ -53,6 +53,7 @@ Flight counter. Detection also supplies Chart flight shading, keeps recording
 running through the end-detection window, and drives the optional
 [Flight status output](#flight-status-output) for your sounds or announcements.
 It runs across the model's dashboards even without a Flight counter panel.
+Chart flight shading stays continuous if recording pauses during a flight.
 
 AeroGrid saves its own flight total per model and never writes GV8 or GV9.
 It keeps counting even when you display an external total.

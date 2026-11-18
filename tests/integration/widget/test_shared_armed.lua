@@ -16,7 +16,9 @@ EVT_VIRTUAL_EXIT = 9106
 
 equal(definition.options[1][1], "Layout")
 equal(definition.options[2][1], "Theme")
-equal(#definition.options, 2, "Armed belongs only in Model settings")
+for _, option in ipairs(definition.options) do
+    assert(option[1] ~= "Armed", "Armed belongs only in Model settings")
+end
 
 local function placement(id, kind, col, row, height, config)
     return { id = id, type = kind, col = col, row = row, colSpan = 2, rowSpan = height, config = config }

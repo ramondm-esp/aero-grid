@@ -585,13 +585,17 @@ function module.new(dependencies)
 
             context.themeSource = "option"
             context.theme = context.themeBuilder.build(context.themeMode)
+            context.theme.panelOpacity = context.panelOpacity
             for _, warning in ipairs(context.theme.warnings) do
                 addError(context, "theme: " .. warning)
             end
             for _, notice in ipairs(context.theme.notices) do
                 addNotice(context, notice.severity, "theme: " .. notice.text)
             end
-            context.canvas:set({ color = context.theme.color.canvas })
+            context.canvas:set({
+                color = context.theme.color.canvas,
+                opacity = context.radioBackground and 0 or 255,
+            })
 
             context.session = validated.session or {}
             context.document = validated

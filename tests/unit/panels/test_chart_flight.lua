@@ -26,7 +26,7 @@ local function liveSamples(service)
     end
 end
 fixture.reset()
-local host = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })
+local host = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark", PanelFill = 1 })
 local placement = { col = 0, row = 0, colSpan = 2, rowSpan = 1 }
 local services = host.dashboardLoader.buildServices(host, placement)
 local session = {
@@ -76,12 +76,11 @@ equal(band.y, area.y)
 equal(band.h, area.h, "flight shading must span the full plot height")
 equal(band.filled, true)
 equal(band.thickness, 0, "flight shading has no outline or boundary ticks")
-equal(band.opacity, 48, "flight shading must be visible without obscuring telemetry")
+equal(band.opacity, 24, "flight shading must be subtle without obscuring telemetry")
 equal(band.color, lcd.RGB(0xFFFFFF), "dark themes lighten the panel background without an accent tint")
 equal(panel.flightBands[1].parent, panel.flightRoot)
 equal(panel.plotRoot.children[1], panel.flightRoot, "bands must sit behind grid and telemetry objects")
-equal(panel.plotRoot.children[2], panel.gapRoot)
-equal(panel.plotRoot.children[3], panel.gridRoot, "flight shading and gap masks must stay behind the grid")
+equal(panel.plotRoot.children[2], panel.gridRoot, "flight shading must stay behind the grid")
 local active = panel.flightBands[2].properties
 equal(active.x + active.w, area.x + math.floor(session.elapsed / panel.window * area.w + 0.5))
 local previousWidth = active.w
@@ -203,7 +202,7 @@ local unavailablePreview = chart.create(host.page, { x = 0, y = 0, w = 238, h = 
 chart.refresh(unavailablePreview)
 equal(unavailablePreview.status.properties.text, "HISTORY N/A", "a preview must not mask a missing history service")
 
-local lightHost = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-light" })
+local lightHost = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-light", PanelFill = 1 })
 local lightServices = lightHost.dashboardLoader.buildServices(lightHost, placement)
 lightServices.history = fake
 session.flightFirst, session.flightLast, session.flightRevision = 1, 2, session.flightRevision + 1
@@ -214,9 +213,15 @@ for _ = 1, 150 do
 end
 local lightBand = light.flightBands[2].properties
 equal(lightBand.color, lcd.RGB(0x000000), "light themes darken the panel background without an accent tint")
-equal(lightBand.opacity, 48, "light and dark themes must use the same flight shading contrast")
+equal(lightBand.opacity, 24, "light and dark themes must use the same subtle flight shading opacity")
 equal(lightBand.y, light.area.y)
 equal(lightBand.h, light.area.h)
+lightHost.theme.panelOpacity = 204
+local lightTranslucent = chart.create(lightHost.page, { x = 0, y = 0, w = 238, h = 65 }, settings, lightServices)
+for _ = 1, 150 do
+    chart.refresh(lightTranslucent)
+end
+equal(lightTranslucent.flightBands[2].properties.opacity, 24, "translucent light panels must use the softer band too")
 
 -- Keep the previous complete plot on screen while the next three traces are
 -- projected, even if both telemetry and the live flight clock keep changing.
@@ -371,7 +376,7 @@ confirmedEnd = 1200
 finishFrame(confirmation)
 checkDisarmBoundary()
 equal(confirmation.status.properties.text, "")
-equal(#confirmation.resumeMarkers.markerKeys, 0, "recording stop must not add any decoration")
+equal(confirmation.resumeMarkers, nil, "recording stop must not add any decoration")
 local completedBand = confirmation.flightBands[1].properties
 equal(
     completedBand.x + completedBand.w,
@@ -438,13 +443,13 @@ do
     emitPaused(0, 3)
     emitPaused(1000, 5)
     finishFrame(pausedPanel)
-    equal(#pausedPanel.resumeMarkers.markerKeys, 0)
+    equal(pausedPanel.resumeMarkers, nil)
     recording.recording, recording.elapsed = false, 1000
     recording.stoppedAt = 1000
     recording.armLast, recording.armRevision, arms[1] = 1, 1, { 1000, false }
     finishFrame(pausedPanel)
     equal(pausedPanel.status.properties.text, "")
-    equal(#pausedPanel.resumeMarkers.markerKeys, 0, "a pause alone must not add anything")
+    equal(pausedPanel.resumeMarkers, nil, "a pause alone must not add anything")
     equal(#pausedPanel.armMarkers.markerKeys, 1, "disarm remains a distinct axis event")
     local disarmed = pausedPanel.armMarkers.markers[pausedPanel.armMarkers.markerKeys[1]]
     equal(disarmed.object.kind, "triangle")
@@ -464,20 +469,13 @@ do
     finishFrame(pausedPanel)
     equal(pausedPanel.status.properties.text, "")
     local column = math.floor(1000 * pausedPanel.axis.scale + 0.5) + 1
-    local seam = pausedPanel.resumeMarkers.markers[column]
-    assert(seam and seam.active, "resume is visible even before another telemetry sample arrives")
-    assert(not seam.object.hidden)
-    equal(seam.object.parent, pausedPanel.gapRoot, "gap backgrounds must belong to the staged plot")
-    equal(seam.object.properties.x, pausedPanel.area.x + column - 1)
-    equal(seam.object.properties.w, 24)
-    equal(seam.object.properties.color, pausedPanel.theme.color.surface)
-    equal(seam.object.kind, "rectangle")
-    equal(seam.slashes, nil, "recording pauses must not add an axis icon")
-    equal(#pausedPanel.resumeMarkers.markerKeys, 1, "all metrics share one recording seam")
+    local seamLeft = pausedPanel.area.x + column - 1
+    equal(pausedPanel.axis.map:pixel(1000) - pausedPanel.axis.map:pixel(1000, true), 24)
+    equal(pausedPanel.gapRoot, nil, "recording pauses must not mask flight shading")
     local _, beforeSample = chartView.bounds(pausedPanel, 1)
     equal(
         beforeSample,
-        seam.object.properties.x,
+        seamLeft,
         "a sample at the exact stop timestamp must stay to the left until a resumed sample exists"
     )
     local up = pausedPanel.armMarkers.markers[column + 24]
@@ -505,8 +503,8 @@ do
         local connector = item.connectors[1]
         assert(connector.connector and not connector.connector.hidden)
         equal(connector.pts[2][1] - connector.pts[1][1], 24, "equal recording timestamps must be separated by the gap")
-        equal(connector.pts[1][1], seam.object.properties.x)
-        equal(connector.pts[2][1], seam.object.properties.x + seam.object.properties.w)
+        equal(connector.pts[1][1], seamLeft)
+        equal(connector.pts[2][1], seamLeft + 24)
         local line = connector.connector
         equal(line.kind, "line", "a pause connector is one native line")
         equal(line.properties.color, item.color)
@@ -521,7 +519,7 @@ do
     emitPaused(1800, 8, true)
     emitPaused(2000, 7)
     finishFrame(pausedPanel)
-    equal(#pausedPanel.resumeMarkers.markerKeys, 1, "telemetry gaps must not create recording seams")
+    equal(pausedPanel.resumeMarkers, nil, "telemetry gaps must not create recording masks")
     for _, item in ipairs(pausedPanel.series) do
         equal(#item.connectors, 1, "telemetry loss must not add a recording connector")
         local gap = item.markers[item.markerKeys[1]]
@@ -537,96 +535,50 @@ do
     emitPaused(2300, 11, true, true)
     emitPaused(2400, 10)
     finishFrame(pausedPanel)
-    local function activeSeams(target)
-        local result = {}
-        for _, marker in pairs(target.resumeMarkers.markers) do
-            if marker.active then
-                result[#result + 1] = marker
-            end
-        end
-        return result
-    end
-    equal(#activeSeams(pausedPanel), 2, "identical resume timestamps share one gap")
+    equal(pausedPanel.resumeMarkers, nil, "repeated recording pauses must not allocate masks")
     recording.resumeFirst, recording.resumeRevision = 2, 4
     finishFrame(pausedPanel)
-    equal(#activeSeams(pausedPanel), 1, "expired journal boundaries must be hidden")
+    equal(pausedPanel.resumeMarkers, nil, "expired journal boundaries must not allocate masks")
     pauseSettings.timeRange, pauseSettings.duration = "rolling", 1
     recording.elapsed = 4000
     chart.destroy(pausedPanel)
     pausedPanel = chart.create(host.page, { x = 0, y = 0, w = 472, h = 196 }, pauseSettings, services)
     finishFrame(pausedPanel)
     equal(pausedPanel.start, 0)
-    equal(#activeSeams(pausedPanel), 1, "a new fixed window shows earlier recording seams within it")
+    assert(pausedPanel.axis.map:pixel(2200) > pausedPanel.axis.map:pixel(2200, true))
     recording.elapsed = 3500
     finishFrame(pausedPanel)
     chart.update(pausedPanel, { x = 0, y = 0, w = 238, h = 65 })
     finishFrame(pausedPanel)
-    local active = 0
-    for _, marker in pairs(pausedPanel.resumeMarkers.markers) do
-        if marker.active then
-            active = active + 1
-            local geometry = marker.object.properties
-            assert(geometry.x >= pausedPanel.area.x)
-            assert(geometry.x + geometry.w <= pausedPanel.area.x + pausedPanel.area.w)
-            equal(geometry.y, pausedPanel.area.y)
-            equal(geometry.h, pausedPanel.area.h)
-            assert(geometry.y + geometry.h <= pausedPanel.rect.h)
-        end
-    end
-    equal(active, 1, "resize must reproject and reuse the retained seam")
+    equal(pausedPanel.gapRoot, nil, "resize must not create recording masks")
+    assert(math.abs(pausedPanel.axis.map:pixel(2200) - pausedPanel.axis.map:pixel(2200, true) - 48) < 0.001)
     recording.recording = false
     lightServices.history = pausedHistory
     local lightPause = chart.create(lightHost.page, { x = 0, y = 0, w = 238, h = 65 }, pauseSettings, lightServices)
     finishFrame(lightPause)
     equal(lightPause.status.properties.text, "")
-    for _, marker in pairs(lightPause.resumeMarkers.markers) do
-        equal(marker.object.properties.color, lightPause.theme.color.surface, "gaps match either theme")
-        equal(marker.slashes, nil)
-    end
+    equal(lightPause.gapRoot, nil, "light themes must not mask flight shading either")
     lightServices.preview = true
     local pausePreview = chart.create(lightHost.page, { x = 0, y = 0, w = 238, h = 65 }, pauseSettings, lightServices)
     finishFrame(pausePreview)
     equal(pausePreview.status.properties.text, "PREVIEW", "preview status must remain distinct from live pause status")
-    local previewSeams = 0
-    for _, marker in pairs(pausePreview.resumeMarkers.markers) do
-        if marker.active then
-            previewSeams = previewSeams + 1
-        end
-    end
-    equal(previewSeams, 1, "previews show retained recording seams")
+    equal(pausePreview.gapRoot, nil, "previews must not mask flight shading")
 
     recording.resumeLast, recording.resumeRevision, resumes[4] = 4, 5, 3499
     finishFrame(pausedPanel)
-    local edgeColumn = math.floor(3499 * pausedPanel.axis.scale + 72 + 0.5) + 1
-    local edge = pausedPanel.resumeMarkers.markers[edgeColumn]
-    assert(not edge or not edge.active, "seams beyond the right edge must not move existing data")
+    assert(pausedPanel.axis.map:pixel(3499, true) >= pausedPanel.area.w)
     for index = 5, 65 do
         resumes[index] = 3499 + index
     end
     recording.resumeLast, recording.resumeRevision, recording.elapsed = 65, 6, resumes[65]
     finishFrame(pausedPanel)
-    local crowded = activeSeams(pausedPanel)
-    assert(#crowded > 0 and #crowded <= pausedPanel.area.w // 24 + 1)
+    equal(pausedPanel.gapRoot, nil, "crowded breaks must not allocate recording masks")
     assert(pausedPanel.start == 0, "crowded breaks must not scroll or compress existing data")
-    table.sort(crowded, function(a, b)
-        return a.object.properties.x < b.object.properties.x
-    end)
-    for index, marker in ipairs(crowded) do
-        local geometry = marker.object.properties
-        assert(geometry.w > 0 and geometry.w <= 24, "only viewport edges may clip a fixed-width gap")
-        if geometry.x > pausedPanel.area.x and geometry.x + geometry.w < pausedPanel.area.x + pausedPanel.area.w then
-            equal(geometry.w, 24)
-        end
-        if index > 1 then
-            local previous = crowded[index - 1].object.properties
-            assert(previous.x + previous.w <= geometry.x)
-        end
-    end
     chart.update(pausedPanel, { x = 0, y = 0, w = 40, h = 30 })
     finishFrame(pausedPanel)
     equal(pausedPanel.area.w, 1)
     equal(pausedPanel.axis.gap, 0, "an unusably narrow plot must not divide by zero or create zero-width glyphs")
-    equal(#activeSeams(pausedPanel), 0)
+    equal(pausedPanel.gapRoot, nil)
 end
 
 local scheduler = fixture.createLoaded(nil, { Layout = "Empty", Theme = "modern-dark" })

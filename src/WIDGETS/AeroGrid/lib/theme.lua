@@ -33,6 +33,7 @@
 ---@field spacing table
 ---@field accent string Default semantic accent token name.
 ---@field light boolean Whether the theme uses a light palette.
+---@field panelOpacity? integer Panel fill opacity, from 0 to 255; defaults to opaque.
 ---@field warnings string[] Things the layout asked for that cannot be honoured.
 ---@field notices table[] `{severity, text}` records of the host adapting.
 

@@ -322,6 +322,7 @@ function module.new(dependencies)
             h = context.zone.h,
             color = context.theme and context.theme.color.canvas or lcd.RGB(0x101316),
             filled = true,
+            opacity = context.radioBackground and 0 or 255,
         })
         context.reloadState = nil
     end

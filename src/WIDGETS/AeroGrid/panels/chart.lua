@@ -234,7 +234,6 @@ local LAYER_KEYS = {
     "layerHost",
     "plotRoot",
     "flightRoot",
-    "gapRoot",
     "gridRoot",
     "columnConsumers",
     "columnRenderer",
@@ -259,14 +258,15 @@ local LAYER_KEYS = {
     "flightSlots",
     "flightPassRevision",
     "flightPassVersion",
+    "flightPassResumeRevision",
     "flightDrawnRevision",
     "flightDrawnVersion",
     "flightDrawnElapsed",
+    "flightDrawnResumeRevision",
     "flightOpenIndex",
     "flightOpenLeft",
     "flightOpenRight",
     "armMarkers",
-    "resumeMarkers",
     "paintedVersion",
     "paintedArmRevision",
     "paintedResumeRevision",
@@ -545,7 +545,7 @@ local function drawFlight(context, slot, index, remaining)
                 w = 1,
                 h = area.h,
                 color = context.theme.chartColor.flightBand,
-                opacity = 48,
+                opacity = 24,
                 filled = true,
                 thickness = 0,
             })
@@ -583,7 +583,11 @@ local function updateFlights(context, allowance)
     end
     local elapsed = session.flightActive and (context.frameThrough or session.elapsed) or 0
     local first, last = session.flightFirst, session.flightLast
-    if context.flightDrawnRevision == session.flightRevision and context.flightDrawnVersion == context.version then
+    if
+        context.flightDrawnRevision == session.flightRevision
+        and context.flightDrawnVersion == context.version
+        and context.flightDrawnResumeRevision == session.resumeRevision
+    then
         if context.flightDrawnElapsed == elapsed then
             return true, 0
         end
@@ -612,9 +616,14 @@ local function updateFlights(context, allowance)
         return true, cost
     end
     context.flightBands = context.flightBands or {}
-    if context.flightPassRevision ~= session.flightRevision or context.flightPassVersion ~= context.version then
+    if
+        context.flightPassRevision ~= session.flightRevision
+        or context.flightPassVersion ~= context.version
+        or context.flightPassResumeRevision ~= session.resumeRevision
+    then
         context.flightCursor = 1
         context.flightPassRevision, context.flightPassVersion = session.flightRevision, context.version
+        context.flightPassResumeRevision = session.resumeRevision
     end
     local remaining, used = allowance, 0
     while true do
@@ -625,6 +634,7 @@ local function updateFlights(context, allowance)
             context.flightDrawnRevision = session.flightRevision
             context.flightDrawnVersion = context.version
             context.flightDrawnElapsed = elapsed
+            context.flightDrawnResumeRevision = session.resumeRevision
             return true, used
         end
         local index = first + (slot - 1 - (first - 1) % historyService.FLIGHT_CAPACITY) % historyService.FLIGHT_CAPACITY
@@ -644,9 +654,6 @@ local function markerPool(style)
 end
 
 local function markBoundary(context, item, pass, at, armed)
-    if item.style == "resume" and context.axis.gap == 0 then
-        return
-    end
     local fixed = context.axis and context.axis.map
     if
         not at
@@ -655,15 +662,8 @@ local function markBoundary(context, item, pass, at, armed)
     then
         return
     end
-    local x = timeX(context, at, item.style == "resume" or item.style == "arm" and not armed)
-    if
-        fixed
-        and (
-            x >= context.area.x + context.area.w
-            or x + (item.style == "resume" and context.axis.gap or 0) < context.area.x
-            or item.style == "resume" and x + context.axis.gap == context.area.x
-        )
-    then
+    local x = timeX(context, at, item.style == "arm" and not armed)
+    if fixed and (x >= context.area.x + context.area.w or x < context.area.x) then
         return
     end
     local column = x - context.area.x + 1
@@ -965,7 +965,10 @@ function chart.geometry(context, rect)
     if frame.reserved and not frame.reserved.side then
         top = math.max(top, frame.reserved.h)
     end
-    local bottom = math.max(top + 1, rect.h - 3)
+    -- Transparent plots leave room for the duration instead of erasing data
+    -- behind it with an opaque surface-colored rectangle.
+    local footer = (context.theme.panelOpacity or 255) < 255 and builder.fontAscent(TINSIZE) + 2 or 0
+    local bottom = math.max(top + 1, rect.h - 3 - footer)
     local area = {
         frame = frame,
         x = frame.pad,
@@ -1175,24 +1178,6 @@ local function rangeTargets(context, consumers)
     return targets
 end
 
-local function positionBreak(context, marker, job, column)
-    local area = job.area
-    local width = context.axis.gap
-    local x = math.max(area.x, math.min(area.x + area.w - width, area.x + column - 1))
-    if context.axis.map then
-        x = math.max(area.x, area.x + column - 1)
-        width = math.min(area.x + area.w, area.x + column - 1 + width) - x
-    end
-    local options = { x = x, y = area.y, w = width, h = area.h }
-    if marker then
-        marker.object:set(options)
-    else
-        options.color, options.filled, options.thickness = context.theme.color.surface, true, 0
-        marker = { object = lvgl.rectangle(context.gapRoot, options) }
-    end
-    return marker
-end
-
 local function showMarker(marker)
     lvgl.show(marker.object)
     marker.active = true
@@ -1239,14 +1224,7 @@ applyMarkers = function(context, item, allowance)
                 or marker.geometryVersion ~= job.geometryVersion
                 or item.style == "arm" and marker.footerLeft ~= context.durationLeft
             then
-                if item.style == "resume" then
-                    local existing = marker ~= nil
-                    marker = positionBreak(context, marker, job, column)
-                    if not existing then
-                        item.markers[key] = marker
-                        item.markerKeys[#item.markerKeys + 1] = key
-                    end
-                elseif item.style == "arm" then
+                if item.style == "arm" then
                     local half = math.min(3, job.area.w // 2)
                     local x =
                         math.max(job.area.x + half, math.min(job.area.x + job.area.w - half, job.area.x + column - 1))
@@ -1500,7 +1478,6 @@ local function resetPresentation(context, allowance)
         end
         reset.groups[#reset.groups + 1] = { kind = "flights", keys = context.flightBands or {} }
         markers(context.armMarkers)
-        markers(context.resumeMarkers)
         for _, item in ipairs(context.series) do
             reset.groups[#reset.groups + 1] = { kind = "connectors", keys = item.connectors }
         end
@@ -1663,22 +1640,7 @@ local function finishColumns(context, allowance)
             end
         end
     end
-    if context.axis then
-        context.resumeMarkers = context.resumeMarkers or markerPool("resume")
-        complete, stageUsed = updateSessionMarkers(
-            context,
-            context.resumeMarkers,
-            context.session.resumeFirst,
-            context.session.resumeLast,
-            context.session.resumeRevision,
-            context.history.recordingBreak,
-            remaining
-        )
-        remaining, used = remaining - stageUsed, used + stageUsed
-        if not complete then
-            return 1, true, used
-        end
-    else
+    if not context.axis then
         if remaining < 250 then
             return 1, true, used
         end
@@ -1766,13 +1728,11 @@ local function newLayer(context)
         layerHost = layerHost,
         plotRoot = root,
         flightRoot = lvgl.box(root, { x = 0, y = 0, w = rect.w, h = rect.h }),
-        gapRoot = lvgl.box(root, { x = 0, y = 0, w = rect.w, h = rect.h }),
         gridRoot = lvgl.box(root, { x = 0, y = 0, w = rect.w, h = rect.h }),
         grid = {},
         gridCursor = 1,
         flightKeys = {},
         armMarkers = markerPool("arm"),
-        resumeMarkers = markerPool("resume"),
         version = 0,
     })
 end
@@ -2047,7 +2007,6 @@ local function background(context, allowance)
         if hidden.recycle then
             if hidden.recycle == true then
                 forgetMarkers(hidden.armMarkers and hidden.armMarkers.markers)
-                forgetMarkers(hidden.resumeMarkers and hidden.resumeMarkers.markers)
                 for _, item in ipairs(hidden.series) do
                     forgetMarkers(item.markers)
                 end
@@ -2648,7 +2607,6 @@ function chart.create(parent, rect, settings, services)
         gridCursor = 1,
         flightKeys = {},
         armMarkers = markerPool("arm"),
-        resumeMarkers = markerPool("resume"),
     }
     local presentation = services.state("normal", settings.accent or "cyan")
     context.panel = context.primitives.panel(parent, rect, context.theme, presentation)
@@ -2658,7 +2616,6 @@ function chart.create(parent, rect, settings, services)
     context.layerHost = lvgl.box(context.plotHost, { x = 0, y = 0, w = rect.w, h = rect.h })
     context.plotRoot = lvgl.box(context.layerHost, { x = 0, y = 0, w = rect.w, h = rect.h })
     context.flightRoot = lvgl.box(context.plotRoot, { x = 0, y = 0, w = rect.w, h = rect.h })
-    context.gapRoot = lvgl.box(context.plotRoot, { x = 0, y = 0, w = rect.w, h = rect.h })
     context.gridRoot = lvgl.box(context.plotRoot, { x = 0, y = 0, w = rect.w, h = rect.h })
     context.session = context.history and context.history:session(settings.armSwitch)
         or { elapsed = 0, configured = false, available = false, recording = false }
@@ -2704,6 +2661,7 @@ function chart.create(parent, rect, settings, services)
         h = 1,
         color = context.theme.color.surface,
         filled = true,
+        opacity = (context.theme.panelOpacity or 255) < 255 and 0 or 255,
     })
     context.title, context.duration, context.status = label(context), label(context), label(context)
     context.window, context.start, context.pixelStart = timeWindow(settings), 0, 0
@@ -2752,13 +2710,12 @@ function chart.update(context, rect)
     context.layerHost:set({ w = rect.w, h = rect.h })
     context.plotRoot:set({ w = rect.w, h = rect.h })
     context.flightRoot:set({ w = rect.w, h = rect.h })
-    context.gapRoot:set({ w = rect.w, h = rect.h })
     context.gridRoot:set({ w = rect.w, h = rect.h })
     chart.geometry(context, rect)
     local hidden = context.auto and context.auto.hidden
     if resized and hidden then
         -- Resizing clears the chart; the next auto window is prepared again.
-        for _, key in ipairs({ "layerHost", "plotRoot", "flightRoot", "gapRoot", "gridRoot" }) do
+        for _, key in ipairs({ "layerHost", "plotRoot", "flightRoot", "gridRoot" }) do
             hidden[key]:set({ w = rect.w, h = rect.h })
         end
         if hidden.columnRenderer then
@@ -2784,9 +2741,6 @@ function chart.update(context, rect)
     context.connectorWork = nil
     if context.armMarkers then
         context.armMarkers.job = nil
-    end
-    if context.resumeMarkers then
-        context.resumeMarkers.job = nil
     end
     if not resized then
         chart.refresh(context)

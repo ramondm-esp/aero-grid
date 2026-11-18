@@ -79,6 +79,23 @@ for _, mode in ipairs({ "modern-dark", "modern-light" }) do
         )
         assertions.assertEqual(tape.rims[7].properties.color, lcd.RGB(theme.shade(surface, isLight and -0.18 or 0.48)))
     end
+    resolved.panelOpacity = 204
+    panel.tape = navigation.createTape(lvgl.box({ x = 0, y = 0, w = 200, h = 50 }), panel, panel.area)
+    for _, state in ipairs({ "normal", "warning", "critical", "normal" }) do
+        panel.stateName = state
+        navigation.setTape(panel, 0, resolved.color.text)
+        for _, objects in ipairs({ panel.tape.shading, panel.tape.rims }) do
+            for _, object in ipairs(objects) do
+                local properties = object.properties
+                assert(properties.opacity < 204, "tape shading must not add another panel-colored fill")
+                assert(
+                    properties.color == lcd.RGB(0x000000) or properties.color == lcd.RGB(0xFFFFFF),
+                    "translucent tape shading must tint the existing surface"
+                )
+            end
+        end
+        assertions.assertEqual(panel.tape.labels[1].properties.opacity, nil, "tape labels must stay opaque")
+    end
 end
 local function instance(cols, rows, rect, settings)
     local host = fixture.module("lib/panel_host.lua")

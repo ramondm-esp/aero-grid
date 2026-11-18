@@ -292,11 +292,19 @@ if withFlights then
         revision = revision + entry.state.revision
     end
     setArmed(0)
-    pump(6, true)
-    assert(session.recording and context.flightBroker.state.active, "hidden charts must record during grace")
     local after = 0
-    for _, entry in ipairs(history.entries) do
-        after = after + entry.state.revision
+    -- Reach the next poll within the three-second grace, independent of the
+    -- round-robin phase when the charts were hidden.
+    for _ = 1, 20 do
+        pump(1, true)
+        assert(session.recording and context.flightBroker.state.active, "hidden charts must record during grace")
+        after = 0
+        for _, entry in ipairs(history.entries) do
+            after = after + entry.state.revision
+        end
+        if after > revision then
+            break
+        end
     end
     assert(after > revision, "hidden grace must contain fresh samples")
     setArmed(1024)
@@ -385,10 +393,7 @@ assert(settled, "retained multi-flight histories must finish their bounded stage
 pump(40)
 for _, entry in ipairs(context.panels) do
     assert(entry.instance.status.properties.text == "", "stopped recordings must not show a pause label")
-    assert(
-        #entry.instance.resumeMarkers.markerKeys <= entry.instance.rect.w + 1,
-        "recording seams must share a bounded chart-wide screen-column pool"
-    )
+    assert(entry.instance.gapRoot == nil, "recording pauses must not allocate flight-shading masks")
     for _, item in ipairs(entry.instance.series) do
         assert(
             item.drawnRevision == item.feed.plotRevision and not entry.instance.pending,

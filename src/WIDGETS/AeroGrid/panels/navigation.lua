@@ -449,7 +449,16 @@ end
 
 local function tapeSurfaceColors(context, surface)
     local function shade(amount)
-        return lcd.RGB(context.themeBuilder.shade(surface, amount))
+        local opacity = context.theme.panelOpacity or 255
+        if opacity < 255 then
+            -- Shade the existing translucent surface, rather than painting a
+            -- second copy of the panel color over the radio background.
+            return {
+                color = lcd.RGB(amount < 0 and 0x000000 or 0xFFFFFF),
+                opacity = math.floor(math.abs(amount) * opacity + 0.5),
+            }
+        end
+        return { color = lcd.RGB(context.themeBuilder.shade(surface, amount)), opacity = 255 }
     end
     local light = context.themeBuilder.contrast(surface, 0x000000) > context.themeBuilder.contrast(surface, 0xFFFFFF)
     local shading = light and { -0.08, -0.02, 0, -0.06 } or { -0.45, -0.08, 0.04, -0.32 }
@@ -474,23 +483,25 @@ function navigation.createTape(parent, context, area)
     local shading, rims = tapeSurfaceColors(context, tape.surface)
     tape.tickColors = { context.theme.color.textFaint, context.theme.color.textMuted, context.theme.color.text }
     tape.root = lvgl.box(parent, { x = area.tapeX, y = area.tapeY, w = area.tapeWidth, h = area.tapeHeight })
-    for index, color in ipairs(shading) do
+    for index, style in ipairs(shading) do
         tape.shading[index] = lvgl.rectangle(tape.root, {
             x = 0,
             y = 10,
             w = 1,
             h = 1,
-            color = color,
+            color = style.color,
+            opacity = style.opacity,
             filled = true,
         })
     end
-    for index, color in ipairs(rims) do
+    for index, style in ipairs(rims) do
         tape.rims[index] = lvgl.rectangle(tape.root, {
             x = 0,
             y = 0,
             w = 1,
             h = 2,
-            color = color,
+            color = style.color,
+            opacity = style.opacity,
             filled = true,
         })
     end
@@ -553,10 +564,10 @@ function navigation.setTape(context, bearing, color, status)
         tape.surface = surface
         local shading, rims = tapeSurfaceColors(context, surface)
         for index, strip in ipairs(tape.shading) do
-            strip:set({ color = shading[index] })
+            strip:set(shading[index])
         end
         for index, rim in ipairs(tape.rims) do
-            rim:set({ color = rims[index] })
+            rim:set(rims[index])
         end
     end
     if tape.width ~= area.tapeWidth or tape.height ~= area.tapeHeight then

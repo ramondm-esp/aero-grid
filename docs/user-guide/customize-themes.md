@@ -17,6 +17,19 @@ Choose **Theme** in the widget settings.
 
 *Modern Light palette with dark text and light-background alarm tints.*
 
+## Background and panel opacity
+
+In the widget settings, choose **Background → Radio theme** to show EdgeTX's
+background behind the panels. **Panel opacity** defaults to **80%** to let it
+show through the panel fills too. Text and status accents stay
+fully opaque.
+
+**Background** defaults to **AeroGrid**. Choose **Panel opacity → 100%** for
+solid panel fills. Lower opacity makes the background more visible but can make
+readings harder to see.
+
+If an existing widget shows **-1** for either new setting, select its value once.
+
 ## Theme files and previews
 
 Themes are stored as individual `.yml` files. Shipped themes live in
